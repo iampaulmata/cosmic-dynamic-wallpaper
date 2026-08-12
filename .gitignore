@@ -1,0 +1,9 @@
+# Rust
+/target/
+
+# Claude Code local machine state (permissions, etc.) — not shared project config
+.claude/settings.local.json
+
+# Editor/OS cruft
+.DS_Store
+*.swp
