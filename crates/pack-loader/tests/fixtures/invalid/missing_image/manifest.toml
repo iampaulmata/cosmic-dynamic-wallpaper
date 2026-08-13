@@ -1,0 +1,8 @@
+schema_version = 1
+name = "Missing Image Pack"
+default_scaling = "Fill"
+fallback_color = "#000000"
+
+[[images]]
+file = "ghost.png"
+anchor = "sunrise"

@@ -1,0 +1,8 @@
+schema_version = 1
+name = "Unreadable Image Pack"
+default_scaling = "Fill"
+fallback_color = "#000000"
+
+[[images]]
+file = "broken.png"
+anchor = "sunrise"

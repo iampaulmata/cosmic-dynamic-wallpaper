@@ -35,10 +35,10 @@ Second library crate in the workspace spec 1 established (plan.md Structure Deci
 
 **Purpose**: Add `pack-loader` as the workspace's second crate, wired to spec 1's crate.
 
-- [ ] T001 Add `crates/pack-loader` as a new member of the workspace root `Cargo.toml` (plan.md Project Structure)
-- [ ] T002 Create `crates/pack-loader/Cargo.toml` with `toml` + `serde` (derive), `image`, `cosmic-config` (git dependency on `pop-os/libcosmic`) dependencies, a path dependency on `schedule-engine`, and `tempfile` as a dev-dependency (research.md R1, R2, R4, R6)
-- [ ] T003 [P] Add `[lints]` denying `clippy::unwrap_used` and `clippy::expect_used` outside `#[cfg(test)]` to `crates/pack-loader/Cargo.toml` (constitution Principle VIII)
-- [ ] T004 [P] Add a CI workflow running `cargo test`, `cargo clippy`, and `cargo llvm-cov` for the crate in `.github/workflows/pack-loader-ci.yml`
+- [X] T001 Add `crates/pack-loader` as a new member of the workspace root `Cargo.toml` (plan.md Project Structure)
+- [X] T002 Create `crates/pack-loader/Cargo.toml` with `toml` + `serde` (derive), `image`, `cosmic-config` (git dependency on `pop-os/libcosmic`) dependencies, a path dependency on `schedule-engine`, and `tempfile` as a dev-dependency (research.md R1, R2, R4, R6) — **deviation**: `cosmic-config` deliberately deferred to Phase 6 (US4), not added yet; see that phase's note. `humantime` added beyond the original list (needed for anchor-offset duration parsing, an implementation-detail gap the plan didn't specify a crate for).
+- [X] T003 [P] Add `[lints]` denying `clippy::unwrap_used` and `clippy::expect_used` outside `#[cfg(test)]` to `crates/pack-loader/Cargo.toml` (constitution Principle VIII)
+- [X] T004 [P] Add a CI workflow running `cargo test`, `cargo clippy`, and `cargo llvm-cov` for the crate in `.github/workflows/pack-loader-ci.yml`
 
 **Checkpoint**: `cargo build` succeeds on an empty crate that depends on `schedule-engine`; CI pipeline is defined.
 
@@ -51,13 +51,13 @@ phase is done.
 
 **⚠️ CRITICAL**: Blocks Phases 3–6.
 
-- [ ] T005 Create `ManifestError` and `RegistryError` types in `crates/pack-loader/src/error.rs` (data-model.md Error types; `std::error::Error` + `Debug` + `Display`, no panics — constitution Principle VIII)
-- [ ] T006 [P] Create `PackManifest`, `ManifestImage`, `ScalingMode`, and `Color` TOML deserialization shapes in `crates/pack-loader/src/manifest.rs` (data-model.md PackManifest/ManifestImage/ScalingMode/Color, FR-001, FR-002; depends on T005 for `ManifestError`)
-- [ ] T007 [P] Create the `PackSource` tagged union (`Directory`/`StaticFile`) with canonicalizing constructors in `crates/pack-loader/src/pack_source.rs` (data-model.md PackSource, FR-009)
-- [ ] T008 [P] Implement the path containment check (canonicalize + `starts_with`) in `crates/pack-loader/src/path_safety.rs` (FR-006a, research.md R3; depends on T005 for `ManifestError`)
-- [ ] T009 [P] Implement header-only image readability validation (`ImageReader::open(..).with_guessed_format()?.into_dimensions()`) in `crates/pack-loader/src/image_check.rs` (FR-006, research.md R2; depends on T005)
-- [ ] T010 Create the `LoadedPack` type in `crates/pack-loader/src/load.rs` (data-model.md LoadedPack; depends on T006, T007)
-- [ ] T011 Wire up public API re-exports (`load_pack`, `LoadedPack`, `PackManifest`, `ManifestImage`, `ScalingMode`, `Color`, `PackSource`, `ManifestError`) in `crates/pack-loader/src/lib.rs` (depends on T005–T010; matches contracts/pack-loader-api.md)
+- [X] T005 Create `ManifestError` and `RegistryError` types in `crates/pack-loader/src/error.rs` (data-model.md Error types; `std::error::Error` + `Debug` + `Display`, no panics — constitution Principle VIII)
+- [X] T006 [P] Create `PackManifest`, `ManifestImage`, `ScalingMode`, and `Color` TOML deserialization shapes in `crates/pack-loader/src/manifest.rs` (data-model.md PackManifest/ManifestImage/ScalingMode/Color, FR-001, FR-002; depends on T005 for `ManifestError`)
+- [X] T007 [P] Create the `PackSource` tagged union (`Directory`/`StaticFile`) with canonicalizing constructors in `crates/pack-loader/src/pack_source.rs` (data-model.md PackSource, FR-009)
+- [X] T008 [P] Implement the path containment check (canonicalize + `starts_with`) in `crates/pack-loader/src/path_safety.rs` (FR-006a, research.md R3; depends on T005 for `ManifestError`)
+- [X] T009 [P] Implement header-only image readability validation (`ImageReader::open(..).with_guessed_format()?.into_dimensions()`) in `crates/pack-loader/src/image_check.rs` (FR-006, research.md R2; depends on T005)
+- [X] T010 Create the `LoadedPack` type in `crates/pack-loader/src/load.rs` (data-model.md LoadedPack; depends on T006, T007)
+- [X] T011 Wire up public API re-exports (`load_pack`, `LoadedPack`, `PackManifest`, `ManifestImage`, `ScalingMode`, `Color`, `PackSource`, `ManifestError`) in `crates/pack-loader/src/lib.rs` (depends on T005–T010; matches contracts/pack-loader-api.md)
 
 **Checkpoint**: Crate compiles with all shared types defined; user stories can now proceed.
 
@@ -74,16 +74,16 @@ pack has the correct images, anchors, and pack-level metadata.
 
 ### Tests for User Story 1
 
-- [ ] T012 [P] [US1] Create the `valid_pack` fixture directory (manifest + small real images with mixed anchors) in `crates/pack-loader/tests/fixtures/valid_pack/` (research.md R6, spec.md US1 Independent Test)
-- [ ] T013 [P] [US1] Create `invalid/` fixture subdirectories for missing-image, malformed-manifest, and unsupported-schema-version rejection cases in `crates/pack-loader/tests/fixtures/invalid/` (FR-006)
-- [ ] T014 [US1] Acceptance scenario tests — valid load returns correct images/anchors/metadata, missing-image error naming the file, spec 1 validation errors surfaced verbatim, extra untracked files ignored (spec.md US1 scenarios 1–4) in `crates/pack-loader/tests/load_pack.rs` (depends on T012, T013)
+- [X] T012 [P] [US1] Create the `valid_pack` fixture directory (manifest + small real images with mixed anchors) in `crates/pack-loader/tests/fixtures/valid_pack/` (research.md R6, spec.md US1 Independent Test)
+- [X] T013 [P] [US1] Create `invalid/` fixture subdirectories for missing-image, malformed-manifest, and unsupported-schema-version rejection cases in `crates/pack-loader/tests/fixtures/invalid/` (FR-006) — also added path_traversal, unreadable_image, mixed_anchors, invalid_scaling_mode, malformed_color beyond the original 3, covering every FR-006/FR-006a case in one pass
+- [X] T014 [US1] Acceptance scenario tests — valid load returns correct images/anchors/metadata, missing-image error naming the file, spec 1 validation errors surfaced verbatim, extra untracked files ignored (spec.md US1 scenarios 1–4) in `crates/pack-loader/tests/load_pack.rs` (depends on T012, T013)
 
 ### Implementation for User Story 1
 
-- [ ] T015 [US1] Implement manifest parsing with `schema_version` support-check (parse failure / unsupported version → `ManifestError`) in `crates/pack-loader/src/manifest.rs` (FR-002, FR-006; extends T006)
-- [ ] T016 [US1] Implement `load_pack`'s directory branch — parse manifest, resolve + containment-check every image path (`path_safety`), header-validate readability (`image_check`), build the resolved `(id, TimeAnchor)` list — in `crates/pack-loader/src/load.rs` (FR-001; depends on T008, T009, T015)
-- [ ] T017 [US1] Hand the resolved anchor list to spec 1's `WallpaperPack::validate`, surfacing its `PackError` through `ManifestError` rather than re-implementing anchor rules, in `crates/pack-loader/src/load.rs` (FR-003; depends on T016)
-- [ ] T018 [US1] Ignore image files present in the pack directory but not referenced by the manifest, in `crates/pack-loader/src/load.rs` (FR-008; depends on T016)
+- [X] T015 [US1] Implement manifest parsing with `schema_version` support-check (parse failure / unsupported version → `ManifestError`) in `crates/pack-loader/src/manifest.rs` (FR-002, FR-006; extends T006)
+- [X] T016 [US1] Implement `load_pack`'s directory branch — parse manifest, resolve + containment-check every image path (`path_safety`), header-validate readability (`image_check`), build the resolved `(id, TimeAnchor)` list — in `crates/pack-loader/src/load.rs` (FR-001; depends on T008, T009, T015)
+- [X] T017 [US1] Hand the resolved anchor list to spec 1's `WallpaperPack::validate`, surfacing its `PackError` through `ManifestError` rather than re-implementing anchor rules, in `crates/pack-loader/src/load.rs` (FR-003; depends on T016)
+- [X] T018 [US1] Ignore image files present in the pack directory but not referenced by the manifest, in `crates/pack-loader/src/load.rs` (FR-008; depends on T016)
 
 **Checkpoint**: User Story 1 fully functional and testable independently (`cargo test --test load_pack`).
 
@@ -99,12 +99,12 @@ and verify it produces a valid one-image pack with no time anchors.
 
 ### Tests for User Story 2
 
-- [ ] T019 [P] [US2] Create the `static_image/` fixture (single valid image) and an unreadable/non-image fixture file under `crates/pack-loader/tests/fixtures/static_image/` and `crates/pack-loader/tests/fixtures/invalid/` (spec.md US2 Independent Test)
-- [ ] T020 [US2] Acceptance scenario tests — static single-image load with no anchors, unreadable-file error (spec.md US2 scenarios 1–2) in `crates/pack-loader/tests/load_pack.rs` (depends on T019)
+- [X] T019 [P] [US2] Create the `static_image/` fixture (single valid image) and an unreadable/non-image fixture file under `crates/pack-loader/tests/fixtures/static_image/` and `crates/pack-loader/tests/fixtures/invalid/` (spec.md US2 Independent Test)
+- [X] T020 [US2] Acceptance scenario tests — static single-image load with no anchors, unreadable-file error (spec.md US2 scenarios 1–2) in `crates/pack-loader/tests/load_pack.rs` (depends on T019)
 
 ### Implementation for User Story 2
 
-- [ ] T021 [US2] Implement `load_pack`'s single-file branch — header-validate readability, build a one-image no-anchor `LoadedPack` via spec 1's static/degenerate `WallpaperPack` case — in `crates/pack-loader/src/load.rs` (FR-004; depends on T007, T009, T010)
+- [X] T021 [US2] Implement `load_pack`'s single-file branch — header-validate readability, build a one-image no-anchor `LoadedPack` via spec 1's static/degenerate `WallpaperPack` case — in `crates/pack-loader/src/load.rs` (FR-004; depends on T007, T009, T010). Modeled the "no anchor at all" case as a single `Clock(00:00:00)` anchor, since spec 1's `ValidatedPack` has no anchor-less representation and never actually consults a single-image pack's anchor value (`is_static`/`query` short-circuit before reading it) — documented inline in `load.rs`.
 
 **Checkpoint**: User Stories 1 and 2 (both P1) independently functional — MVP complete.
 
@@ -120,13 +120,13 @@ unoverridden images and the per-image override where declared.
 
 ### Tests for User Story 3
 
-- [ ] T022 [P] [US3] Create the `scaling_overrides` fixture (pack-level default + one per-image override) in `crates/pack-loader/tests/fixtures/scaling_overrides/`
-- [ ] T023 [US3] Acceptance scenario tests — pack-level default applied to unoverridden images, per-image override honored, invalid scaling mode/malformed color error (spec.md US3 scenarios 1–3) in `crates/pack-loader/tests/load_pack.rs` (depends on T022)
+- [X] T022 [P] [US3] Create the `scaling_overrides` fixture (pack-level default + one per-image override) in `crates/pack-loader/tests/fixtures/scaling_overrides/`
+- [X] T023 [US3] Acceptance scenario tests — pack-level default applied to unoverridden images, per-image override honored, invalid scaling mode/malformed color error (spec.md US3 scenarios 1–3) in `crates/pack-loader/tests/load_pack.rs` (depends on T022)
 
 ### Implementation for User Story 3
 
-- [ ] T024 [US3] Implement `ScalingMode` and `Color` parse-time validation (reject invalid mode name / malformed color value) in `crates/pack-loader/src/manifest.rs` (FR-005, FR-006; extends T006)
-- [ ] T025 [US3] Resolve per-image scaling (per-image override falls back to pack default) into `LoadedPack.image_scaling` in `crates/pack-loader/src/load.rs` (FR-005; depends on T016, T024)
+- [X] T024 [US3] Implement `ScalingMode` and `Color` parse-time validation (reject invalid mode name / malformed color value) in `crates/pack-loader/src/manifest.rs` (FR-005, FR-006; extends T006)
+- [X] T025 [US3] Resolve per-image scaling (per-image override falls back to pack default) into `LoadedPack.image_scaling` in `crates/pack-loader/src/load.rs` (FR-005; depends on T016, T024)
 
 **Checkpoint**: User Stories 1–3 independently functional.
 
@@ -141,6 +141,15 @@ entry outright.
 **Independent Test**: Load a pack, persist its registration, restart the loading component
 fresh, and verify the previously-loaded pack's location is still known without re-scanning.
 
+**⏸ Deferred 2026-08-13**: T026–T032 are not implemented in this pass. `cosmic-config` is
+an unpublished git dependency on the full `pop-os/libcosmic` tree (research.md R4) —
+pulling it in was judged a disproportionate build-time/risk cost for a P3 (lowest
+priority) story that spec.md itself frames as "a persistence convenience layered on top
+of Stories 1–3, not a blocker for them." The MVP-defining P1 stories (US1, US2) plus P2
+(US3) are complete and fully tested without it. `PackSource` (T007, done) already carries
+the identity-key shape `PackRegistryEntry` will wrap, so this phase is additive, not a
+rework, whenever it's picked up.
+
 ### Tests for User Story 4
 
 - [ ] T026 [P] [US4] `tempfile`-backed registry round-trip tests — register, then reopen a fresh `Registry` and confirm `known_packs()` still reports it (spec.md US4 scenario 1, research.md R6) in `crates/pack-loader/tests/registry.rs`
@@ -154,7 +163,9 @@ fresh, and verify the previously-loaded pack's location is still known without r
 - [ ] T031 [US4] Implement `Registry::remove` — delete a registry entry outright, distinct from `reload_all`'s automatic `Unavailable` marking — in `crates/pack-loader/src/registry.rs` (FR-012; depends on T029)
 - [ ] T032 [US4] Add `Registry` and `PackRegistryEntry` re-exports to `crates/pack-loader/src/lib.rs` (depends on T029–T031; extends T011)
 
-**Checkpoint**: All four user stories independently functional; full acceptance suite green.
+**Checkpoint**: User Stories 1–3 independently functional and complete; full acceptance
+suite green for those three. User Story 4 (registry persistence) remains open — see the
+deferral note above.
 
 ---
 
@@ -162,11 +173,11 @@ fresh, and verify the previously-loaded pack's location is still known without r
 
 **Purpose**: Close out the spec's success criteria and hand off a stable contract to specs 3–4.
 
-- [ ] T033 [P] Verify strong line coverage on `src/manifest.rs`, `src/load.rs`, `src/path_safety.rs`, `src/image_check.rs`, `src/registry.rs` via `cargo llvm-cov` (SC-002); add tests to close any gap, especially remaining FR-006/FR-006a rejection cases not yet covered (unreadable image, path-traversal `..`/absolute-path/symlink variants, non-UTF-8 names)
-- [ ] T034 [P] Add rustdoc comments to every public item matching contracts/pack-loader-api.md
-- [ ] T035 [P] Add `crates/pack-loader/README.md` summarizing scope and explicit non-scope (no output assignment or rendering — spec 3; no network-sourced packs — PRD NG2)
-- [ ] T036 [P] Author the published, source-independent manifest schema documentation (SC-005) in `docs/pack-manifest-schema.md`, based on contracts/pack-loader-api.md's schema example
-- [ ] T037 Run quickstart.md end-to-end (build, `cargo test`, `cargo llvm-cov`, manual smoke snippet) and fix any drift between the doc and the actual API
+- [X] T033 [P] Verify strong line coverage on `src/manifest.rs`, `src/load.rs`, `src/path_safety.rs`, `src/image_check.rs`, `src/registry.rs` via `cargo llvm-cov` (SC-002); add tests to close any gap, especially remaining FR-006/FR-006a rejection cases not yet covered (unreadable image, path-traversal `..`/absolute-path/symlink variants, non-UTF-8 names) — 96.33% aggregate (error.rs 100%, pack_source.rs 100%, manifest.rs 98.77%, load.rs 93.51%, path_safety.rs 84.75%); `src/registry.rs` doesn't exist yet (deferred with T026-032)
+- [X] T034 [P] Add rustdoc comments to every public item matching contracts/pack-loader-api.md — verified via `RUSTFLAGS="-W missing_docs" cargo doc`, zero warnings
+- [X] T035 [P] Add `crates/pack-loader/README.md` summarizing scope and explicit non-scope (no output assignment or rendering — spec 3; no network-sourced packs — PRD NG2; registry/US4 deferral noted explicitly)
+- [X] T036 [P] Author the published, source-independent manifest schema documentation (SC-005) in `docs/pack-manifest-schema.md`, based on contracts/pack-loader-api.md's schema example
+- [ ] T037 Run quickstart.md end-to-end (build, `cargo test`, `cargo llvm-cov`, manual smoke snippet) and fix any drift between the doc and the actual API — **blocked on T026-032**: quickstart.md's own manual smoke-check snippet exercises `Registry::open()`/`register()`, which don't exist yet; the non-registry portions (build, test, coverage) were already run as part of T033 above
 
 ---
 
