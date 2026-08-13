@@ -118,13 +118,13 @@ timestamps are real and consistent.
 
 ### Tests for User Story 3
 
-- [ ] T021 [P] [US3] Determinism and monotonic-progress property tests — identical inputs → identical outputs; progress fraction is monotonic and stays within [0.0, 1.0) (SC-003) — in `crates/schedule-engine/tests/determinism.rs` using `proptest`
-- [ ] T022 [P] [US3] Edge case tests — single-image/static-mode pack always active with no transition (FR-3 degenerate case), and overlapping crossfade windows produce a well-defined monotonic fraction — in `crates/schedule-engine/tests/schedule_resolution.rs`
+- [X] T021 [P] [US3] Determinism and monotonic-progress property tests — identical inputs → identical outputs; progress fraction is monotonic and stays within [0.0, 1.0) (SC-003) — in `crates/schedule-engine/tests/determinism.rs` using `proptest`
+- [X] T022 [P] [US3] Edge case tests — single-image/static-mode pack always active with no transition (FR-3 degenerate case), and overlapping crossfade windows produce a well-defined monotonic fraction — in `crates/schedule-engine/tests/schedule_resolution.rs`
 
 ### Implementation for User Story 3
 
-- [ ] T023 [US3] Handle the degenerate single-image/static-mode pack in `ValidatedPack::query` and `next_transition_after` (always active, `transition: None`, `next_transition_at: None`) in `crates/schedule-engine/src/query.rs` (depends on T015, T018)
-- [ ] T024 [US3] Audit `query.rs` and `solar.rs` to confirm no hidden state or implicit clock reads remain — `at` must be the only source of "now" (SC-003) — in `crates/schedule-engine/src/query.rs` and `crates/schedule-engine/src/solar.rs`
+- [X] T023 [US3] Handle the degenerate single-image/static-mode pack in `ValidatedPack::query` and `next_transition_after` (always active, `transition: None`, `next_transition_at: None`) in `crates/schedule-engine/src/query.rs` (depends on T015, T018) — guard landed in `resolve()` back in T015, since it was needed for correctness/safety from the start; confirmed by T022's dedicated test
+- [X] T024 [US3] Audit `query.rs` and `solar.rs` to confirm no hidden state or implicit clock reads remain — `at` must be the only source of "now" (SC-003) — in `crates/schedule-engine/src/query.rs` and `crates/schedule-engine/src/solar.rs` (grepped for `now()`/static/interior-mutability — none found)
 
 **Checkpoint**: All three user stories independently functional; full acceptance suite green.
 
@@ -134,10 +134,10 @@ timestamps are real and consistent.
 
 **Purpose**: Close out the spec's success criteria and hand off a stable contract to specs 2–4.
 
-- [ ] T025 [P] Verify ≥90% line coverage on `src/solar.rs`, `src/pack.rs`, `src/location.rs`, `src/query.rs` via `cargo llvm-cov` (SC-005); add tests to close any gap
-- [ ] T026 [P] Add rustdoc comments to every public item matching contracts/schedule-engine-api.md
-- [ ] T027 [P] Add `crates/schedule-engine/README.md` summarizing scope and explicit non-scope (rendering/persistence/portal-location are later specs, per spec.md Assumptions)
-- [ ] T028 Run `quickstart.md` end-to-end (build, `cargo test`, `cargo llvm-cov`, manual smoke snippet) and fix any drift between the doc and the actual API
+- [X] T025 [P] Verify ≥90% line coverage on `src/solar.rs`, `src/pack.rs`, `src/location.rs`, `src/query.rs` via `cargo llvm-cov` (SC-005); add tests to close any gap — 97.74% aggregate (error.rs 100%, location.rs 98.39%, pack.rs 98.18%, query.rs 96.74%, solar.rs 95.38%); remaining gaps are defensive branches unreachable given `validate`'s own invariants
+- [X] T026 [P] Add rustdoc comments to every public item matching contracts/schedule-engine-api.md — verified via `RUSTFLAGS="-W missing_docs" cargo doc`, zero warnings
+- [X] T027 [P] Add `crates/schedule-engine/README.md` summarizing scope and explicit non-scope (rendering/persistence/portal-location are later specs, per spec.md Assumptions)
+- [X] T028 Run `quickstart.md` end-to-end (build, `cargo test`, `cargo llvm-cov`, manual smoke snippet) and fix any drift between the doc and the actual API — found and fixed real drift: quickstart's snippet used a `TimeAnchor::solar(..)` constructor that didn't exist yet (added it + a `TimeAnchor::clock(..)` counterpart) and `chrono::Duration` (renamed to the `TimeDelta` name used throughout the rest of the crate). The corrected snippet is now a real passing doctest in `src/lib.rs`, not just prose.
 
 ---
 

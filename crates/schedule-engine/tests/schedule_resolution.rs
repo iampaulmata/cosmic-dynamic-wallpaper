@@ -240,3 +240,68 @@ fn fr006a_clock_pack_duplicate_instant_is_rejected_at_validate_time() {
     ];
     assert_eq!(WallpaperPack::validate(images), Err(PackError::DuplicateInstant));
 }
+
+// ---------------------------------------------------------------------------------
+// User Story 3 — Deterministic State Query for Downstream Consumers: edge cases
+// (property-based determinism/monotonicity coverage lives in tests/determinism.rs)
+// ---------------------------------------------------------------------------------
+
+/// Edge Cases: a single-image (degenerate static-mode) pack is always active, with no
+/// transition ever reported and no meaningful next-transition instant.
+#[test]
+fn single_image_pack_is_always_active_with_no_transition() {
+    let images = vec![PackImage::new(
+        "only",
+        TimeAnchor::Clock(chrono::NaiveTime::from_hms_opt(6, 0, 0).unwrap()),
+    )];
+    let pack = WallpaperPack::validate(images).unwrap();
+
+    for hh in [0, 6, 12, 18, 23] {
+        let at = local_at(jan1_2016(), hh, 0);
+        let result = pack.query(None, at, TimeDelta::minutes(5));
+        assert_eq!(result.active_before.as_str(), "only");
+        assert!(result.transition.is_none());
+        assert!(result.next_transition_at.is_none());
+    }
+    assert!(pack.next_transition_after(None, local_at(jan1_2016(), 6, 0)).is_none());
+}
+
+/// Edge Cases: when two consecutive anchors are closer together than the configured
+/// crossfade duration, progress must still be well-defined — always in `[0.0, 1.0)`,
+/// monotonic *within* whichever window is currently active — rather than a
+/// discontinuity or out-of-range fraction. (Each anchor always owns its own single
+/// current window in this engine's model — see query.rs's module doc — so an
+/// overlapping predecessor window never produces two simultaneously "active"
+/// transitions to reconcile.)
+#[test]
+fn overlapping_crossfade_windows_produce_well_defined_progress() {
+    let images = vec![
+        PackImage::new("a", TimeAnchor::Clock(chrono::NaiveTime::from_hms_opt(10, 0, 0).unwrap())),
+        PackImage::new("b", TimeAnchor::Clock(chrono::NaiveTime::from_hms_opt(10, 10, 0).unwrap())),
+    ];
+    let pack = WallpaperPack::validate(images).unwrap();
+    let crossfade = TimeDelta::minutes(20); // wider than the 10-minute gap: windows overlap
+
+    let date = jan1_2016();
+    let anchor_a = local_at(date, 10, 0);
+    let anchor_b = local_at(date, 10, 10);
+
+    // Inside A's window, before B starts: outgoing is yesterday's "b", incoming "a".
+    let mid_a = pack.query(None, anchor_a + TimeDelta::minutes(5), crossfade);
+    let t = mid_a.transition.expect("inside a's window");
+    assert!((0.0..1.0).contains(&t.progress));
+
+    // Exactly at B: a fresh window starts (progress resets to 0), even though A's own
+    // window hadn't finished yet — well-defined, not a panic or out-of-range value.
+    let at_b = pack.query(None, anchor_b, crossfade);
+    let t = at_b.transition.expect("b's window begins exactly at its own anchor");
+    assert_eq!(t.outgoing.as_str(), "a");
+    assert_eq!(t.incoming.as_str(), "b");
+    assert!(t.progress.abs() < 1e-9);
+
+    // Partway through B's (overlapping) window: still well-defined and in range.
+    let mid_b = pack.query(None, anchor_b + TimeDelta::minutes(10), crossfade);
+    let t = mid_b.transition.expect("inside b's window");
+    assert!((0.0..1.0).contains(&t.progress));
+    assert!((t.progress - 0.5).abs() < 0.01);
+}

@@ -268,4 +268,34 @@ mod tests {
         let pack = WallpaperPack::validate(vec![solar_image("only")]).expect("valid pack");
         assert!(pack.is_static());
     }
+
+    #[test]
+    fn image_id_wraps_and_displays_a_string() {
+        let id = ImageId::new("sunset-01");
+        assert_eq!(id.as_str(), "sunset-01");
+        assert_eq!(id.to_string(), "sunset-01");
+    }
+
+    #[test]
+    fn check_solar_duplicate_instant_is_a_noop_for_clock_packs() {
+        let pack = WallpaperPack::validate(vec![clock_image("a", 6, 0)]).expect("valid pack");
+        let loc = crate::Location::new(43.6532, -79.3832).unwrap();
+        let date = chrono::NaiveDate::from_ymd_opt(2016, 1, 1).unwrap();
+        assert_eq!(pack.check_solar_duplicate_instant(&loc, date), Ok(()));
+    }
+
+    #[test]
+    fn check_solar_duplicate_instant_is_ok_when_no_collision() {
+        let pack = WallpaperPack::validate(vec![solar_image("a"), solar_image_sunset("b")])
+            .expect("valid pack");
+        let loc = crate::Location::new(43.6532, -79.3832).unwrap();
+        let date = chrono::NaiveDate::from_ymd_opt(2016, 1, 1).unwrap();
+        assert_eq!(pack.check_solar_duplicate_instant(&loc, date), Ok(()));
+    }
+
+    /// A solar-anchored image tied to a different event than `solar_image` (which is
+    /// always `Sunrise`), so the two never collide.
+    fn solar_image_sunset(id: &str) -> PackImage {
+        PackImage::new(id, TimeAnchor::Solar { event: SolarEventKind::Sunset, offset: None })
+    }
 }

@@ -46,6 +46,16 @@ pub enum TimeAnchor {
 }
 
 impl TimeAnchor {
+    /// Convenience constructor for [`TimeAnchor::Solar`].
+    pub fn solar(event: SolarEventKind, offset: Option<TimeDelta>) -> Self {
+        TimeAnchor::Solar { event, offset }
+    }
+
+    /// Convenience constructor for [`TimeAnchor::Clock`].
+    pub fn clock(time: NaiveTime) -> Self {
+        TimeAnchor::Clock(time)
+    }
+
     /// `true` if this is a [`TimeAnchor::Solar`] anchor.
     pub fn is_solar(&self) -> bool {
         matches!(self, TimeAnchor::Solar { .. })

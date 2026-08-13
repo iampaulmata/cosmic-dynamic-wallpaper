@@ -5,6 +5,24 @@
 //! pack (with a manually-entered [`Location`]) or a fully location-free clock-anchored
 //! pack. No I/O, no rendering, no persistence: see `README.md` for full scope and
 //! non-scope, and `contracts/schedule-engine-api.md` for the committed public API shape.
+//!
+//! ```
+//! use schedule_engine::{Location, WallpaperPack, PackImage, TimeAnchor, SolarEventKind};
+//! use chrono::{Local, TimeDelta};
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let loc = Location::new(51.5072, -0.1276)?; // London
+//! let pack = WallpaperPack::validate(vec![
+//!     PackImage::new("dawn.jpg", TimeAnchor::solar(SolarEventKind::Sunrise, None)),
+//!     PackImage::new("noon.jpg", TimeAnchor::solar(SolarEventKind::SolarNoon, None)),
+//!     PackImage::new("dusk.jpg", TimeAnchor::solar(SolarEventKind::Sunset, None)),
+//! ])?;
+//!
+//! let result = pack.query(Some(&loc), Local::now(), TimeDelta::seconds(60));
+//! println!("{result:?}");
+//! # Ok(())
+//! # }
+//! ```
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 mod anchor;
