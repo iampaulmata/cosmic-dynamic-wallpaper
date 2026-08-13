@@ -1,0 +1,13 @@
+schema_version = 1
+name = "Scaling Overrides Pack"
+default_scaling = "Fill"
+fallback_color = "#202020"
+
+[[images]]
+file = "wide.png"
+anchor = "06:00"
+
+[[images]]
+file = "tall.png"
+anchor = "18:00"
+scaling = "Fit"

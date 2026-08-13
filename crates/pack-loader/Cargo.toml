@@ -1,0 +1,24 @@
+[package]
+name = "pack-loader"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Pack manifest parsing and loading for the dynamic wallpaper daemon"
+rust-version = "1.97"
+
+[dependencies]
+schedule-engine = { path = "../schedule-engine" }
+toml = "1.1"
+serde = { version = "1.0", features = ["derive"] }
+image = { version = "0.25", default-features = false, features = [
+    "jpeg", "png", "gif", "webp", "bmp", "tiff",
+] }
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+humantime = "2.4"
+
+[dev-dependencies]
+tempfile = "3.27"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"

@@ -1,0 +1,8 @@
+schema_version = 99
+name = "From The Future"
+default_scaling = "Fill"
+fallback_color = "#000000"
+
+[[images]]
+file = "whatever.png"
+anchor = "sunrise"

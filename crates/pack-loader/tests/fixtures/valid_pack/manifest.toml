@@ -1,0 +1,17 @@
+schema_version = 1
+name = "Valid Test Pack"
+author = "Test Fixture <fixture@example.com> - CC0"
+default_scaling = "Fill"
+fallback_color = "#101820"
+
+[[images]]
+file = "dawn.jpg"
+anchor = "sunrise"
+
+[[images]]
+file = "noon.png"
+anchor = "solar_noon"
+
+[[images]]
+file = "dusk.png"
+anchor = "sunset-30m"

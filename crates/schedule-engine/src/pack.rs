@@ -149,6 +149,19 @@ impl ValidatedPack {
         &self.images
     }
 
+    /// How many images this pack contains (`1..=`[`MAX_ANCHORS`]).
+    pub fn len(&self) -> usize {
+        self.images.len()
+    }
+
+    /// A pack always contains at least one image ([`WallpaperPack::validate`]'s
+    /// [`PackError::Empty`] rejects the zero-image case), so this is never `true` — it
+    /// exists to satisfy `clippy::len_without_is_empty` and callers who reach for it out
+    /// of habit alongside [`ValidatedPack::len`].
+    pub fn is_empty(&self) -> bool {
+        self.images.is_empty()
+    }
+
     /// Whether this pack is solar- or clock-anchored (FR-6).
     pub fn anchor_kind(&self) -> AnchorKind {
         self.anchor_kind
