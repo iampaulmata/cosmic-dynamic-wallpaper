@@ -32,6 +32,33 @@ SC-002's 1-minute tolerance for all but extreme-latitude edge cases already cove
 polar-day/night fallback (FR-007). Verify against reference values (R4) during
 implementation.
 
+**Correction found during implementation (2026-08-13)**: the published `sunrise` 3.0.0 API
+is narrower than assumed above. `SolarEvent` has only `Sunrise`, `Sunset`, `Dawn(DawnType)`,
+`Dusk(DawnType)`, and `Elevation { .. }` — there is no `SolarNoon` variant, and `SolarDay`'s
+internal solar-transit instant (`solar_transit: f64`) is a private field with no accessor.
+So `SolarNoon` cannot be requested directly from the crate at all, which also blocks the
+`solar_noon ± 12h` derivation for `SolarMidnight` above as originally phrased.
+
+Resolution, still with zero hand-rolled trigonometry (constitution Principle V): the crate's
+own `hour_angle` function (`src/solar_equation/hourangle.rs`) is provably symmetric for
+`Sunrise`/`Sunset` — both share the same `event.angle()` and `altitude` term, differing only
+by the outer sign (`sign = if event.is_morning() { -1. } else { 1. }` applied to the same
+`acos(..)` magnitude). That means, exactly (not approximately) under this crate's own model:
+`solar_transit == (sunrise_instant + sunset_instant) / 2` whenever both occur. So
+`SolarEventKind::SolarNoon` is computed as the midpoint of `event_time(Sunrise)` and
+`event_time(Sunset)` — two calls into the vetted crate, then one average, no reimplemented
+solar math. `SolarEventKind::SolarMidnight` remains `solar_noon ± 12h` as before, just built
+on this derived noon instead of a crate-native one.
+
+**Consequence for FR-007 (polar day/night)**: since the derived noon/midnight require both
+`Sunrise` and `Sunset` to resolve (`Option<DateTime<Utc>>` is `None` in polar day/night),
+`SolarNoon`/`SolarMidnight` are treated as "does not occur for this date" whenever either
+underlying event is `None` — even though the sun's true daily min/max elevation always
+technically exists in that regime. This falls out of the derivation method, not a special
+case; it's absorbed by the same FR-007 hold-adjacent-image fallback already designed for
+missing solar events, so no new fallback path is needed. Documented here rather than silently
+diverging from the plan.
+
 ## R2. Date/time handling
 
 **Decision**: [`chrono`](https://github.com/chronotope/chrono) (0.4.x, MIT/Apache-2.0).
