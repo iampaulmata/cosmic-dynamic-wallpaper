@@ -3,11 +3,14 @@
 
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
+
 use crate::error::ManifestError;
 
 /// Where a pack's content lives on disk — the identity key for a loaded or registered
-/// pack (FR-009, data-model.md `PackSource`).
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// pack (FR-009, data-model.md `PackSource`). `Serialize`/`Deserialize` so it can be
+/// persisted as-is in a [`crate::registry::PackRegistryEntry`] (FR-010).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PackSource {
     /// A manifest-based pack: the canonicalized pack directory.
     Directory(PathBuf),

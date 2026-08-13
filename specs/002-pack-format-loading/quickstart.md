@@ -49,7 +49,8 @@ println!("Loaded {:?} with {} images", loaded.name, loaded.pack.len());
 let static_pack = load_pack(Path::new("./sunset.jpg"))?;
 assert!(static_pack.pack.is_static());
 
-// Registry round-trip
+// Registry round-trip — Registry::open() uses the real cosmic-config XDG location;
+// see Registry::open_at(path) for a scratch-directory variant used by tests/doctests.
 let mut registry = Registry::open()?;
 registry.register(loaded.source.clone())?;
 assert!(registry.known_packs().iter().any(|e| e.source == loaded.source));
@@ -57,6 +58,11 @@ assert!(registry.known_packs().iter().any(|e| e.source == loaded.source));
 
 Expected outcome: the multi-image pack loads with its declared images; the static pack loads
 as a one-image, no-anchor pack; the registered pack shows up in `known_packs()`.
+
+This snippet's shape (adapted to use a scratch directory instead of real paths/config so
+it can run unattended) is a real, passing doctest in `crates/pack-loader/src/lib.rs` —
+verified passing 2026-08-13 (T037). No drift found between this doc and the actual API
+this time (contrast spec 1's quickstart, which did have drift caught at this same step).
 
 ## What "done" looks like for this spec
 

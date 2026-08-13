@@ -19,13 +19,6 @@ pack-validation contract every loaded pack must satisfy.
 
 ## Explicitly not in scope
 
-- **Persisting the set of known pack locations** (FR-010–FR-012, User Story 4). This is
-  designed for (see `PackSource`, `data-model.md`'s `PackRegistryEntry`) but not yet
-  implemented in this pass — it depends on `cosmic-config`, an unpublished git
-  dependency on `pop-os/libcosmic`, deferred to keep this crate's build fast and
-  reliable while the P1 (US1+US2) and P2 (US3) stories — the actual MVP-blocking scope —
-  landed first. Tracked as the remaining work in
-  `specs/002-pack-format-loading/tasks.md` Phase 6.
 - **Assigning a loaded pack to a specific output, or rendering it** — spec 3.
 - **Full pixel decode** — this crate only header-validates that an image is readable
   (`image::ImageReader::into_dimensions`); actual decode is the renderer's job.
@@ -62,6 +55,24 @@ rejects a mix). The loader looks for a manifest file literally named `manifest.t
 inside the pack directory (`MANIFEST_FILE_NAME`) — not itself spec'd by name anywhere in
 spec.md, an implementation choice.
 
+## Registry (User Story 4)
+
+`Registry` persists the set of known pack locations via `cosmic-config` (FR-010), so
+they survive a daemon restart. A pack whose source vanishes out from under it is marked
+`Unavailable` on the next `reload_all` — retained, just flagged — while explicit
+`Registry::remove` deletes an entry outright (FR-011 vs. FR-012).
+
+```rust,ignore
+let mut registry = Registry::open()?;
+registry.register(loaded.source.clone())?;
+assert!(registry.known_packs().iter().any(|e| e.source == loaded.source));
+```
+
+`cosmic-config` is a git dependency on `pop-os/libcosmic` (not published to crates.io) —
+building this crate the first time needs network access once to fetch it. Pulled in with
+`default-features = false, features = ["macro"]`, which avoids the default
+`subscription`/`iced_futures` pull-in this crate has no use for.
+
 ## Testing
 
 ```sh
@@ -73,4 +84,7 @@ cargo llvm-cov --package pack-loader --summary-only
 fixture directories under `tests/fixtures/` — a valid multi-image pack, a zero-config
 static image, pack/per-image scaling overrides, and one fixture per FR-006/FR-006a
 rejection case (malformed TOML, missing image, unsupported schema version, path
-traversal, unreadable image, invalid scaling mode, malformed color).
+traversal, unreadable image, invalid scaling mode, malformed color). `src/registry.rs`'s
+own `#[cfg(test)]` module covers User Story 4's registry round-trip, idempotent
+registration, explicit removal, and unavailable-marking scenarios against a
+`tempfile`-backed `cosmic-config` instance (never the real user config directory).

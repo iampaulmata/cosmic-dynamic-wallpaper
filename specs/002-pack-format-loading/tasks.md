@@ -141,31 +141,30 @@ entry outright.
 **Independent Test**: Load a pack, persist its registration, restart the loading component
 fresh, and verify the previously-loaded pack's location is still known without re-scanning.
 
-**⏸ Deferred 2026-08-13**: T026–T032 are not implemented in this pass. `cosmic-config` is
-an unpublished git dependency on the full `pop-os/libcosmic` tree (research.md R4) —
-pulling it in was judged a disproportionate build-time/risk cost for a P3 (lowest
-priority) story that spec.md itself frames as "a persistence convenience layered on top
-of Stories 1–3, not a blocker for them." The MVP-defining P1 stories (US1, US2) plus P2
-(US3) are complete and fully tested without it. `PackSource` (T007, done) already carries
-the identity-key shape `PackRegistryEntry` will wrap, so this phase is additive, not a
-rework, whenever it's picked up.
+**Un-deferred 2026-08-13, same session**: the initial pass deferred this phase (see git
+history), judging the `cosmic-config` git dependency too risky/heavy to pull in for a P3
+story. That was re-tested directly — with `default-features = false, features =
+["macro"]` (dropping the default `subscription`/`iced_futures` pull-in this crate never
+needed), it resolves and builds in ~15s, a small dependency footprint (`ron`, `notify`,
+`atomicwrites`, `xdg`, `tracing`, `dirs`). Since spec 4 (CLI) also needs `cosmic-config`
+for its own persisted config (location, output assignment) and can't reach its own MVP
+without it either, the earlier deferral was reversed rather than carried forward as debt.
 
 ### Tests for User Story 4
 
-- [ ] T026 [P] [US4] `tempfile`-backed registry round-trip tests — register, then reopen a fresh `Registry` and confirm `known_packs()` still reports it (spec.md US4 scenario 1, research.md R6) in `crates/pack-loader/tests/registry.rs`
-- [ ] T027 [P] [US4] Unavailable-marking and explicit-removal tests — a pack whose source vanished is marked `Unavailable` without affecting other known packs on `reload_all`, and explicit `remove` deletes the entry outright (spec.md US4 scenarios 2–3, FR-011 vs. FR-012) in `crates/pack-loader/tests/registry.rs`
+- [X] T026 [P] [US4] `tempfile`-backed registry round-trip tests — register, then reopen a fresh `Registry` and confirm `known_packs()` still reports it (spec.md US4 scenario 1, research.md R6) in `crates/pack-loader/tests/registry.rs` — landed as `#[cfg(test)]` unit tests inside `src/registry.rs` itself (using the doc-hidden `Registry::open_at` test hook) rather than a separate `tests/registry.rs` file; equivalent coverage, noted as a minor structural deviation from the task's literal file path
+- [X] T027 [P] [US4] Unavailable-marking and explicit-removal tests — a pack whose source vanished is marked `Unavailable` without affecting other known packs on `reload_all`, and explicit `remove` deletes the entry outright (spec.md US4 scenarios 2–3, FR-011 vs. FR-012) in `crates/pack-loader/tests/registry.rs` — same note as T026
 
 ### Implementation for User Story 4
 
-- [ ] T028 [US4] Create `PackRegistryEntry` and `RegistryStatus` types in `crates/pack-loader/src/registry.rs` (data-model.md PackRegistryEntry, FR-010, FR-011)
-- [ ] T029 [US4] Implement `Registry` backed by `cosmic-config`'s `CosmicConfigEntry` pattern — `Registry::open`, `register`, `known_packs` — in `crates/pack-loader/src/registry.rs` (FR-009, FR-010, research.md R4; depends on T028)
-- [ ] T030 [US4] Implement `Registry::reload_all` — attempt every known pack independently via `load_pack`, marking any whose source is unreachable `Unavailable` without failing the others — in `crates/pack-loader/src/registry.rs` (FR-011; depends on T029, T017, T021)
-- [ ] T031 [US4] Implement `Registry::remove` — delete a registry entry outright, distinct from `reload_all`'s automatic `Unavailable` marking — in `crates/pack-loader/src/registry.rs` (FR-012; depends on T029)
-- [ ] T032 [US4] Add `Registry` and `PackRegistryEntry` re-exports to `crates/pack-loader/src/lib.rs` (depends on T029–T031; extends T011)
+- [X] T028 [US4] Create `PackRegistryEntry` and `RegistryStatus` types in `crates/pack-loader/src/registry.rs` (data-model.md PackRegistryEntry, FR-010, FR-011)
+- [X] T029 [US4] Implement `Registry` backed by `cosmic-config`'s `CosmicConfigEntry` pattern — `Registry::open`, `register`, `known_packs` — in `crates/pack-loader/src/registry.rs` (FR-009, FR-010, research.md R4; depends on T028)
+- [X] T030 [US4] Implement `Registry::reload_all` — attempt every known pack independently via `load_pack`, marking any whose source is unreachable `Unavailable` without failing the others — in `crates/pack-loader/src/registry.rs` (FR-011; depends on T029, T017, T021)
+- [X] T031 [US4] Implement `Registry::remove` — delete a registry entry outright, distinct from `reload_all`'s automatic `Unavailable` marking — in `crates/pack-loader/src/registry.rs` (FR-012; depends on T029)
+- [X] T032 [US4] Add `Registry` and `PackRegistryEntry` re-exports to `crates/pack-loader/src/lib.rs` (depends on T029–T031; extends T011)
 
-**Checkpoint**: User Stories 1–3 independently functional and complete; full acceptance
-suite green for those three. User Story 4 (registry persistence) remains open — see the
-deferral note above.
+**Checkpoint**: All four user stories independently functional and complete; full
+acceptance suite green.
 
 ---
 
@@ -173,11 +172,11 @@ deferral note above.
 
 **Purpose**: Close out the spec's success criteria and hand off a stable contract to specs 3–4.
 
-- [X] T033 [P] Verify strong line coverage on `src/manifest.rs`, `src/load.rs`, `src/path_safety.rs`, `src/image_check.rs`, `src/registry.rs` via `cargo llvm-cov` (SC-002); add tests to close any gap, especially remaining FR-006/FR-006a rejection cases not yet covered (unreadable image, path-traversal `..`/absolute-path/symlink variants, non-UTF-8 names) — 96.33% aggregate (error.rs 100%, pack_source.rs 100%, manifest.rs 98.77%, load.rs 93.51%, path_safety.rs 84.75%); `src/registry.rs` doesn't exist yet (deferred with T026-032)
+- [X] T033 [P] Verify strong line coverage on `src/manifest.rs`, `src/load.rs`, `src/path_safety.rs`, `src/image_check.rs`, `src/registry.rs` via `cargo llvm-cov` (SC-002); add tests to close any gap, especially remaining FR-006/FR-006a rejection cases not yet covered (unreadable image, path-traversal `..`/absolute-path/symlink variants, non-UTF-8 names) — 95.66% aggregate across all 7 source files (error.rs 100%, pack_source.rs 100%, manifest.rs 98.77%, registry.rs 92.04%, load.rs 94.81%, image_check.rs 97.50%, path_safety.rs 84.75%)
 - [X] T034 [P] Add rustdoc comments to every public item matching contracts/pack-loader-api.md — verified via `RUSTFLAGS="-W missing_docs" cargo doc`, zero warnings
-- [X] T035 [P] Add `crates/pack-loader/README.md` summarizing scope and explicit non-scope (no output assignment or rendering — spec 3; no network-sourced packs — PRD NG2; registry/US4 deferral noted explicitly)
+- [X] T035 [P] Add `crates/pack-loader/README.md` summarizing scope and explicit non-scope (no output assignment or rendering — spec 3; no network-sourced packs — PRD NG2), plus a Registry section covering FR-010-012 and the `cosmic-config` git-dependency note
 - [X] T036 [P] Author the published, source-independent manifest schema documentation (SC-005) in `docs/pack-manifest-schema.md`, based on contracts/pack-loader-api.md's schema example
-- [ ] T037 Run quickstart.md end-to-end (build, `cargo test`, `cargo llvm-cov`, manual smoke snippet) and fix any drift between the doc and the actual API — **blocked on T026-032**: quickstart.md's own manual smoke-check snippet exercises `Registry::open()`/`register()`, which don't exist yet; the non-registry portions (build, test, coverage) were already run as part of T033 above
+- [X] T037 Run quickstart.md end-to-end (build, `cargo test`, `cargo llvm-cov`, manual smoke snippet) and fix any drift between the doc and the actual API — no drift found this time; the smoke-check snippet (adapted to a scratch directory) is now a real passing doctest in `src/lib.rs`
 
 ---
 
