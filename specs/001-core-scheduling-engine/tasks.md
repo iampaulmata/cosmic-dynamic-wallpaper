@@ -33,10 +33,10 @@ Single Rust library crate in a workspace (plan.md Structure Decision):
 
 **Purpose**: Stand up the workspace and crate this and later specs will build in.
 
-- [ ] T001 Create workspace root `Cargo.toml` at the repository root with `crates/schedule-engine` as its first member (plan.md Project Structure)
-- [ ] T002 Create `crates/schedule-engine/Cargo.toml` with `sunrise` and `chrono` dependencies and `proptest` as a dev-dependency (research.md R1–R3); leave the MSRV field for the toolchain present when first built (research.md R5)
-- [ ] T003 [P] Add `[lints]` denying `clippy::unwrap_used` and `clippy::expect_used` outside `#[cfg(test)]` to `crates/schedule-engine/Cargo.toml` (constitution Principle VIII)
-- [ ] T004 [P] Add a CI workflow running `cargo test`, `cargo clippy`, and `cargo llvm-cov` for the crate in `.github/workflows/schedule-engine-ci.yml`
+- [X] T001 Create workspace root `Cargo.toml` at the repository root with `crates/schedule-engine` as its first member (plan.md Project Structure)
+- [X] T002 Create `crates/schedule-engine/Cargo.toml` with `sunrise` and `chrono` dependencies and `proptest` as a dev-dependency (research.md R1–R3); leave the MSRV field for the toolchain present when first built (research.md R5)
+- [X] T003 [P] Add `[lints]` denying `clippy::unwrap_used` and `clippy::expect_used` outside `#[cfg(test)]` to `crates/schedule-engine/Cargo.toml` (constitution Principle VIII)
+- [X] T004 [P] Add a CI workflow running `cargo test`, `cargo clippy`, and `cargo llvm-cov` for the crate in `.github/workflows/schedule-engine-ci.yml`
 
 **Checkpoint**: `cargo build` succeeds on an empty crate; CI pipeline is defined.
 
@@ -49,12 +49,12 @@ phase is done.
 
 **⚠️ CRITICAL**: Blocks Phases 3–5.
 
-- [ ] T005 Create `LocationError` and `PackError` types in `crates/schedule-engine/src/error.rs` (data-model.md Error types; `std::error::Error` + `Debug` + `Display`, no panics — constitution Principle VIII)
-- [ ] T006 [P] Create `TimeAnchor` and `SolarEventKind` types in `crates/schedule-engine/src/anchor.rs` (data-model.md TimeAnchor/SolarEventKind, FR-6)
-- [ ] T007 [P] Create `Location` type with `Location::new` range/finite validation in `crates/schedule-engine/src/location.rs` (data-model.md Location, FR-002a; depends on T005 for `LocationError`)
-- [ ] T008 Create `PackImage` and `WallpaperPack` container types with structural validation — max 64 anchors (FR-001), unique image ids, mixed-anchor-type rejection (FR-006) — in `crates/schedule-engine/src/pack.rs` (depends on T005, T006)
-- [ ] T009 [P] Create `ScheduleQueryResult` and `TransitionState` types in `crates/schedule-engine/src/query.rs` (data-model.md ScheduleQueryResult/TransitionState)
-- [ ] T010 Wire up public API re-exports (`Location`, `TimeAnchor`, `SolarEventKind`, `PackImage`, `WallpaperPack`, `ScheduleQueryResult`, `TransitionState`, `LocationError`, `PackError`) in `crates/schedule-engine/src/lib.rs` (depends on T005–T009; matches contracts/schedule-engine-api.md)
+- [X] T005 Create `LocationError` and `PackError` types in `crates/schedule-engine/src/error.rs` (data-model.md Error types; `std::error::Error` + `Debug` + `Display`, no panics — constitution Principle VIII)
+- [X] T006 [P] Create `TimeAnchor` and `SolarEventKind` types in `crates/schedule-engine/src/anchor.rs` (data-model.md TimeAnchor/SolarEventKind, FR-6)
+- [X] T007 [P] Create `Location` type with `Location::new` range/finite validation in `crates/schedule-engine/src/location.rs` (data-model.md Location, FR-002a; depends on T005 for `LocationError`)
+- [X] T008 Create `PackImage` and `WallpaperPack` container types with structural validation — max 64 anchors (FR-001), unique image ids, mixed-anchor-type rejection (FR-006) — in `crates/schedule-engine/src/pack.rs` (depends on T005, T006)
+- [X] T009 [P] Create `ScheduleQueryResult` and `TransitionState` types in `crates/schedule-engine/src/query.rs` (data-model.md ScheduleQueryResult/TransitionState)
+- [X] T010 Wire up public API re-exports (`Location`, `TimeAnchor`, `SolarEventKind`, `PackImage`, `WallpaperPack`, `ScheduleQueryResult`, `TransitionState`, `LocationError`, `PackError`) in `crates/schedule-engine/src/lib.rs` (depends on T005–T009; matches contracts/schedule-engine-api.md)
 
 **Checkpoint**: Crate compiles with all shared types defined; user stories can now proceed.
 
