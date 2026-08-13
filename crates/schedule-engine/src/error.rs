@@ -95,3 +95,51 @@ impl fmt::Display for PackError {
 }
 
 impl std::error::Error for PackError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn location_error_display_is_readable() {
+        assert_eq!(
+            LocationError::OutOfRange { field: CoordinateField::Latitude, value: 200.0 }.to_string(),
+            "latitude 200 is out of range"
+        );
+        assert_eq!(
+            LocationError::NotFinite { field: CoordinateField::Longitude, value: f64::NAN }.to_string(),
+            "longitude NaN is not a finite number"
+        );
+    }
+
+    #[test]
+    fn coordinate_field_display() {
+        assert_eq!(CoordinateField::Latitude.to_string(), "latitude");
+        assert_eq!(CoordinateField::Longitude.to_string(), "longitude");
+    }
+
+    #[test]
+    fn pack_error_display_is_readable() {
+        assert_eq!(PackError::Empty.to_string(), "pack contains no images");
+        assert_eq!(
+            PackError::TooManyAnchors { count: 65 }.to_string(),
+            "pack contains 65 anchors, which exceeds the limit of 64"
+        );
+        assert_eq!(
+            PackError::MixedAnchorTypes.to_string(),
+            "pack mixes solar-anchored and clock-anchored images"
+        );
+        assert_eq!(
+            PackError::DuplicateInstant.to_string(),
+            "two or more anchors resolve to the exact same instant"
+        );
+        assert_eq!(PackError::DuplicateImageId.to_string(), "two or more images share the same id");
+    }
+
+    #[test]
+    fn errors_implement_std_error() {
+        fn assert_error<E: std::error::Error>() {}
+        assert_error::<LocationError>();
+        assert_error::<PackError>();
+    }
+}

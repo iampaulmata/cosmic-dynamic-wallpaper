@@ -282,3 +282,61 @@ fn clock_instant_fn(images: &[PackImage]) -> impl Fn(NaiveDate, usize) -> Option
         TimeAnchor::Solar { .. } => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pack::WallpaperPack;
+    use crate::anchor::SolarEventKind;
+
+    fn img(id: &str) -> PackImage {
+        PackImage::new(id, TimeAnchor::Clock(chrono::NaiveTime::from_hms_opt(6, 0, 0).unwrap()))
+    }
+
+    #[test]
+    fn fallback_result_picks_nearest_entry() {
+        let images = vec![img("a"), img("b")];
+        let at = chrono::Local::now();
+        let entries = vec![(at - TimeDelta::days(10), 0), (at + TimeDelta::hours(1), 1)];
+        let result = fallback_result(&images, &entries, at);
+        // Closer to `at` is the +1h entry (image "b") than the -10d one (image "a").
+        assert_eq!(result.active_before.as_str(), "b");
+        assert!(result.transition.is_none());
+        assert!(result.next_transition_at.is_none());
+    }
+
+    #[test]
+    fn fallback_result_defaults_to_first_image_when_no_entries_at_all() {
+        let images = vec![img("only")];
+        let at = chrono::Local::now();
+        let result = fallback_result(&images, &[], at);
+        assert_eq!(result.active_before.as_str(), "only");
+    }
+
+    #[test]
+    #[should_panic(expected = "Location is required")]
+    fn query_panics_when_location_missing_for_solar_pack() {
+        let images = vec![
+            PackImage::new("a", TimeAnchor::Solar { event: SolarEventKind::Sunrise, offset: None }),
+            PackImage::new("b", TimeAnchor::Solar { event: SolarEventKind::Sunset, offset: None }),
+        ];
+        let pack = WallpaperPack::validate(images).unwrap();
+        let _ = pack.query(None, chrono::Local::now(), TimeDelta::minutes(5));
+    }
+
+    #[test]
+    fn resolve_clock_instant_handles_dst_ambiguous_and_nonexistent_times() {
+        // Host-dependent: only meaningfully exercises the Ambiguous/None branches on a
+        // system whose `Local` timezone observes DST on the US schedule (this dev
+        // environment does — America/New_York). On a non-DST-observing host these are
+        // harmless `Single` resolutions instead; either way must not panic.
+        let fall_back = NaiveDate::from_ymd_opt(2016, 11, 6).unwrap();
+        let ambiguous = resolve_clock_instant(fall_back, chrono::NaiveTime::from_hms_opt(1, 30, 0).unwrap());
+        assert!(ambiguous.is_some());
+
+        let spring_forward = NaiveDate::from_ymd_opt(2016, 3, 13).unwrap();
+        // 02:30 doesn't exist on a spring-forward day in a DST-observing zone — must not
+        // panic either way.
+        let _ = resolve_clock_instant(spring_forward, chrono::NaiveTime::from_hms_opt(2, 30, 0).unwrap());
+    }
+}
