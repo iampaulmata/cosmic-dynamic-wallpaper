@@ -12,9 +12,27 @@ mod error;
 mod location;
 mod pack;
 mod query;
+mod solar;
 
 pub use anchor::{SolarEventKind, TimeAnchor};
 pub use error::{CoordinateField, LocationError, PackError};
 pub use location::Location;
 pub use pack::{AnchorKind, ImageId, PackImage, ValidatedPack, WallpaperPack, MAX_ANCHORS};
 pub use query::{ScheduleQueryResult, TransitionState};
+
+/// Test-only internal accessors. **Not** part of the committed public contract
+/// (contracts/schedule-engine-api.md) — exists solely so `tests/solar_accuracy.rs` can
+/// check individual solar event computations directly (SC-002) without constructing a
+/// full pack per event. Hidden from generated docs.
+#[doc(hidden)]
+pub mod testing {
+    /// Resolve a single solar event's instant with no offset — thin wrapper over the
+    /// crate-private `solar::resolve_solar_anchor` for accuracy testing.
+    pub fn solar_event_instant(
+        location: &crate::Location,
+        date: chrono::NaiveDate,
+        event: crate::SolarEventKind,
+    ) -> Option<chrono::DateTime<chrono::Local>> {
+        crate::solar::resolve_solar_anchor(location, date, event, None)
+    }
+}

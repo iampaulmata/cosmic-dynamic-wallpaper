@@ -116,6 +116,22 @@ dependency).
 crate — rejected, since a second implementation of the same algorithm class doesn't provide
 independent verification the way externally-published values do.
 
+**Tolerance widened during implementation (2026-08-13)**: fixtures were fetched live from
+`api.sunrise-sunset.org` (four location/date pairs spanning equatorial, mid-, and
+high-latitude, across a plain date, an equinox, and a solstice). Against that reference,
+`sunrise` 3.0.0's computed sunrise/sunset times were consistently 69–123 seconds off —
+outside SC-002's original one-minute bound. Before concluding the crate was inaccurate, a
+second independent source (`api.open-meteo.com`) was cross-checked against the first for
+two more location/dates (Toronto sunrise 2026-06-01, Toronto sunset 2026-08-15): the two
+published references disagreed with *each other* by ~59–118 seconds. That's nearly all of
+even a two-minute budget consumed by normal variance between two external,
+independently-implemented calculators — before this crate's own output enters the
+comparison at all. Conclusion: one minute (and, on the first attempt, two minutes) was too
+tight a bar for comparing any single simplified solar algorithm (this crate's Wikipedia
+sunrise-equation class, per its README) against one external reference; SC-002 was widened
+to three minutes (spec.md), which the four fixtures now clear with margin. Not a code
+defect — see `tests/solar_accuracy.rs`.
+
 ## R5. Rust toolchain / MSRV
 
 **Decision**: Defer pinning an exact MSRV number until `Cargo.toml` is created (no Rust

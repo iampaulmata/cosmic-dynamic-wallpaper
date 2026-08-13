@@ -113,6 +113,21 @@ impl WallpaperPack {
             }
         }
 
+        // Clock-pack duplicate-instant check (FR-006a, data-model.md rule 4): unlike
+        // solar packs, a `NaiveTime` doesn't depend on a resolved date, so this can be
+        // — and is — a static, one-time check right here rather than a separate
+        // per-date method (contrast `check_solar_duplicate_instant` below).
+        if anchor_kind == AnchorKind::Clock {
+            let mut seen_times = std::collections::HashSet::with_capacity(images.len());
+            for img in &images {
+                if let TimeAnchor::Clock(time) = img.anchor {
+                    if !seen_times.insert(time) {
+                        return Err(PackError::DuplicateInstant);
+                    }
+                }
+            }
+        }
+
         Ok(ValidatedPack { images, anchor_kind })
     }
 }
@@ -143,6 +158,42 @@ impl ValidatedPack {
     /// FR-3): always active, no transition, ever.
     pub fn is_static(&self) -> bool {
         self.images.len() == 1
+    }
+
+    /// Check a solar-anchored pack for two-or-more anchors resolving to the exact same
+    /// instant on `date` (FR-006a, data-model.md validation rule 4).
+    ///
+    /// Unlike the structural checks in [`WallpaperPack::validate`], this can't run once
+    /// at pack-load time for solar packs — solar event instants shift day to day, so a
+    /// collision on one date doesn't imply a collision on another (data-model.md rule 4's
+    /// own note). Callers (pack loading/registration in spec 2, or a periodic re-check as
+    /// the daemon crosses into a new date) are expected to call this for the date(s) that
+    /// matter to them; [`ValidatedPack::query`]/`next_transition_after` intentionally stay
+    /// infallible (contracts/schedule-engine-api.md) and don't call it internally.
+    ///
+    /// A no-op returning `Ok(())` for clock-anchored packs — their duplicate-instant check
+    /// is static and already applied once in `validate` (T019).
+    pub fn check_solar_duplicate_instant(
+        &self,
+        location: &crate::Location,
+        date: chrono::NaiveDate,
+    ) -> Result<(), PackError> {
+        if self.anchor_kind != AnchorKind::Solar {
+            return Ok(());
+        }
+        let mut seen = Vec::with_capacity(self.images.len());
+        for img in &self.images {
+            let TimeAnchor::Solar { event, offset } = img.anchor else {
+                continue;
+            };
+            if let Some(instant) = crate::solar::resolve_solar_anchor(location, date, event, offset) {
+                if seen.contains(&instant) {
+                    return Err(PackError::DuplicateInstant);
+                }
+                seen.push(instant);
+            }
+        }
+        Ok(())
     }
 }
 
