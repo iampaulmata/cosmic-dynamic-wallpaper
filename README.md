@@ -53,7 +53,7 @@ pack applied and crossfaded on-screen via `wallpaperctl` + `wallpaperd`.
 |---|---|---|
 | 1 | [Core scheduling engine](specs/001-core-scheduling-engine/) — pure solar/time logic, no rendering | **Implemented** — `crates/schedule-engine` |
 | 2 | [Pack format & loading](specs/002-pack-format-loading/) — manifest schema, pack directory loading, `cosmic-config` registry | **Implemented** — `crates/pack-loader` |
-| 3 | [Renderer](specs/003-wallpaper-renderer/) — Wayland layer-shell client, GPU crossfade, multi-output | **Mostly implemented, live-verified** — `crates/renderer` (`wallpaperd` binary). Config is now live-watched (no restart needed) and the idle-wait timer is precise (schedule-driven, not a flat poll). Remaining gaps: no live D-Bus service yet (so `wallpaperctl query`/`reevaluate` can't reach it), only "Fill" scaling, and no hotplug resize/rescale. See [`crates/renderer/README.md`](crates/renderer/README.md) for the full, current list. |
+| 3 | [Renderer](specs/003-wallpaper-renderer/) — Wayland layer-shell client, GPU crossfade, multi-output | **Mostly implemented, live-verified** — `crates/renderer` (`wallpaperd` binary). Config is live-watched (no restart needed), the idle-wait timer is precise (schedule-driven, not a flat poll), and the live D-Bus service now backs `wallpaperctl query`/`reevaluate`/`list outputs`. Remaining gaps: only "Fill" scaling, and no hotplug resize/rescale. See [`crates/renderer/README.md`](crates/renderer/README.md) for the full, current list. |
 | 4 | [CLI control surface](specs/004-cli-control-surface/) | **Implemented** — `crates/wallpaperctl` (binary: `wallpaperctl`) |
 | 5 | Session integration & packaging | Not started |
 | 6 | Location portal integration | Not started |

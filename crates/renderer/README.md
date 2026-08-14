@@ -37,9 +37,25 @@ progress 0.0/0.5/1.0.
   `ScheduleQueryResult`, with the location-required-panic fix described below.
 - **`dbus_types.rs`** — `QueryResponse`, the pure data-mapping half of spec 4's D-Bus
   interface.
+- **`dbus_service.rs`** — the live `zbus` server (T049/T053/T054, FR-016):
+  `QueryOutput`/`QueryAll`/`Reevaluate`/`ReevaluateAll` exactly matching
+  `specs/004-cli-control-surface/contracts/wallpaperd-dbus-interface.md`, integrated
+  into `wallpaperd.rs`'s `calloop` loop via `internal_executor(false)` + `EventLoop::
+  block_on` (no extra thread for this daemon's own code — see the module doc for the
+  full integration story, including why `DbusState` is `Arc<Mutex<_>>` rather than
+  `Rc<RefCell<_>>`). Live-verified against `crates/wallpaperctl/src/dbus_client.rs`
+  (unchanged) — `wallpaperctl list outputs`/`query`/`reevaluate` all get real answers
+  now, including the `InvalidArgs`→`CliError::OutputNotFound` mapping round-tripping
+  for an unmanaged output name. **One honest caveat**: `zbus`'s `async-io` backend
+  keeps one lazy background OS thread alive for its own reactor regardless of
+  `internal_executor(false)` (a property of the `async-io` crate itself) — inert w.r.t.
+  Wayland/wgpu state (never touches it), confirmed live: instantaneous CPU usage settles
+  to 0% once idle (checked via `/proc/[pid]/stat` deltas, not just `ps`'s
+  lifetime-averaged `%CPU` column, which is misleading right after the GPU/Vulkan
+  startup burst).
 - **`src/bin/wallpaperd.rs`** — the actual daemon binary: connects to Wayland, loads
-  config, runs the `calloop` event loop, and wires up the two live `cosmic-config`
-  watches below.
+  config, runs the `calloop` event loop, wires up the two live `cosmic-config`
+  watches below, and serves the D-Bus service.
 - **Precise idle-wait timer** (T021) — `WallpaperDaemon::reschedule_idle_timer`
   replaces every managed output on a flat 5s poll with a single `calloop`
   `Timer::from_deadline` computed from `next_wake()` (the real next-transition
@@ -90,10 +106,6 @@ once a specific serialization format's own semantics enter the picture.
   structurally but not exercised against a real hotplug event in this pass.
   `wp_fractional_scale_v1` isn't wired either — only `wp_viewporter`'s destination-size
   path, which is enough for integer-scale correctness but not fractional scaling.
-- **The live D-Bus service** (`dbus_service.rs`, T049/T053/T054) — not implemented.
-  `wallpaperctl query`/`reevaluate`/`list outputs` (spec 4) correctly report "daemon
-  unreachable" until this lands. `dbus_types::QueryResponse`'s data mapping is done and
-  tested, ready for a `zbus` server to use.
 - **Per-image scaling overrides**: only "Fill" (cover) scaling is implemented in the
   shader; `pack-loader`'s `ScalingMode::Fit`/`Stretch`/`Center` aren't wired into
   `crossfade.rs`'s UV transform yet (`fill_uv_transform` would need siblings for the
@@ -122,7 +134,7 @@ should already have the real `-dev` package and need no workaround.
 ## Testing
 
 ```sh
-cargo test --package renderer            # 27 tests: pure logic + a real offscreen GPU render
+cargo test --package renderer            # 31 tests: pure logic + a real offscreen GPU render
 cargo llvm-cov --package renderer --summary-only
 ```
 

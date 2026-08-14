@@ -1,13 +1,15 @@
 //! `renderer` — the wallpaper renderer daemon (`wallpaperd`) for the dynamic wallpaper
 //! project. Implements the pure-logic subset (`output`, `crossfade`'s progress math,
 //! `config`, `scheduler_bridge`, `dbus_types`) plus a real Wayland/GPU rendering path
-//! (`gpu`, `texture`, `crossfade`'s pipeline, `surface`, the `wallpaperd` binary) —
-//! see `README.md` for exactly what's implemented, what's simplified, and what's still
-//! open (live config-watch, hotplug resize handling, the D-Bus service).
+//! (`gpu`, `texture`, `crossfade`'s pipeline, `surface`, the `wallpaperd` binary) and a
+//! live D-Bus service (`dbus_service`) — see `README.md` for exactly what's
+//! implemented, what's simplified, and what's still open (hotplug resize handling,
+//! non-Fill scaling modes).
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod config;
 pub mod crossfade;
+pub mod dbus_service;
 pub mod dbus_types;
 pub mod error;
 pub mod gpu;

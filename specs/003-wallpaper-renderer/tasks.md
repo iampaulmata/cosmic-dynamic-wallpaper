@@ -91,9 +91,21 @@ previously-unassigned output and changing location, observed applying without a 
 A real gap found live during this pass, not just designed on paper: the idle timer was
 originally armed once at startup, before any output (and therefore its real schedule) was
 known, so it ran on a 60s fallback deadline until that fallback happened to fire — fixed by
-also rescheduling at the end of each output's first `configure`. See
-`crates/renderer/README.md` for the current up-to-date breakdown. T049/T053/T054 (the live
-D-Bus service) remain the one major piece still not implemented.
+also rescheduling at the end of each output's first `configure`.
+
+Same pass, next: T049/T053/T054 (the live D-Bus service) also closed — `dbus_service.rs`'s
+`zbus` server, integrated into the `calloop` loop via `internal_executor(false)` +
+`EventLoop::block_on` (no extra thread for this daemon's own code). A real design correction
+found while implementing, not assumed: `zbus`'s `Interface` trait requires `Send + Sync`,
+ruling out the originally-planned `Rc<RefCell<_>>` in favor of `Arc<Mutex<_>>` for the
+D-Bus-visible state mirror — verified against the vendored trait bound before writing the
+code, not discovered by a failed build. Live-verified against the real, unmodified
+`wallpaperctl` client (`list outputs`/`query`/`reevaluate`, including the unmanaged-output
+error path); idle CPU confirmed genuinely 0% via `/proc/[pid]/stat` deltas (`ps`'s
+lifetime-averaged `%CPU` was misleading right after the GPU/Vulkan startup burst).
+
+See `crates/renderer/README.md` for the current up-to-date breakdown. Only hotplug
+resize/rescale and non-Fill scaling modes remain from the original 5-gap list.
 
 ---
 
@@ -285,20 +297,20 @@ configured via spec 4's `LocationConfig`, confirm a solar-anchored pack schedule
 using that location, and that an external D-Bus caller can query/re-evaluate any managed
 output and get a response matching the daemon's real state.
 
-- [ ] T049 [P] Add `zbus` (5.x) as a dependency in `crates/renderer/Cargo.toml` (research.md R8; extends T002) — not added; nothing here yet needs it (T053, the actual D-Bus server, is the task that would).
+- [X] T049 [P] Add `zbus` (5.x) as a dependency in `crates/renderer/Cargo.toml` (research.md R8; extends T002) — added (`zbus = { version = "5", default-features = false, features = ["async-io"] }`), reusing the exact `5.19.0` resolution `wallpaperctl` already pinned workspace-wide; `calloop`'s `block_on` feature also enabled (needed by T054's integration).
 - [X] T050 [US2] Extend `config.rs` to also watch spec 4's `LocationConfig` `cosmic-config` entry, coalescing location changes the same way `RendererConfig` changes are coalesced (FR-015, research.md R7; depends on T028, T049) — `LocationSource` reading was already done and tested; the live watch/coalescing half now lands via a second `ConfigWatchSource` in `wallpaperd.rs` feeding `WallpaperDaemon::on_location_changed`, coalescing every managed output (not filtered to solar-anchored-only — accepted first cut, same posture as T031). Live-verified: `wallpaperctl location set` while `wallpaperd` is running takes effect within ~2s with no restart.
 - [X] T051 [US1] Wire `config.rs`'s current location value into `scheduler_bridge.rs`'s calls to spec 1's `ValidatedPack::query` for solar-anchored packs; a `None` location degrades that output per `RendererError`'s existing containment posture (FR-015, FR-013's pattern; depends on T017, T021, T050) — **done, and this is where the real bug (status note at top of this file) was found**: naively passing `location: None` straight through to `query()` for a solar-anchored pack would panic (spec 1's own documented caller-contract violation), not degrade — `scheduler_bridge.rs::evaluate` checks `anchor_kind() == Solar && location.is_none()` *before* calling `query()` and returns `RendererError::LocationRequired` instead. Fully unit-tested (`solar_pack_without_location_degrades_this_output_only`, `solar_pack_with_location_resolves_normally`, `clock_pack_never_needs_a_location`).
-- [X] T052 [US7] Create the `QueryResponse` type and `OutputNotManaged` error variant in `crates/renderer/src/error.rs` and `crates/renderer/src/dbus_service.rs` (data-model.md QueryResponse/RendererError; depends on T005, T008) — landed as `error.rs`'s `OutputNotManaged` (as specified) and `dbus_types.rs`'s `QueryResponse` (not `dbus_service.rs`, since no service exists yet to house it alongside — see T053).
-- [ ] T053 [US7] Implement the `dbus_service.rs` `zbus` server — `QueryOutput`, `QueryAll`, `Reevaluate`, `ReevaluateAll` per `specs/004-cli-control-surface/contracts/wallpaperd-dbus-interface.md` — integrated into the existing `calloop` event loop (FR-016, research.md R8; depends on T025, T049, T052) — not implemented; needs the event loop. Note for whoever picks this up: `wallpaperctl`'s `dbus_client.rs` (spec 4, already implemented and tested) is the exact interface this server needs to satisfy — its tests currently confirm "no service registered" and would start exercising the real request/response path the moment this task lands, with no changes needed on the CLI side.
-- [ ] T054 [US7] Wire `dbus_service.rs` into `wallpaperd.rs`'s startup (register the session-bus name, serve requests alongside the Wayland/timer event sources) in `crates/renderer/src/bin/wallpaperd.rs` (depends on T020, T053) — not implemented (no `wallpaperd.rs`/`dbus_service.rs` yet).
+- [X] T052 [US7] Create the `QueryResponse` type and `OutputNotManaged` error variant in `crates/renderer/src/error.rs` and `crates/renderer/src/dbus_service.rs` (data-model.md QueryResponse/RendererError; depends on T005, T008) — landed as `error.rs`'s `OutputNotManaged` and `dbus_types.rs`'s `QueryResponse` (kept there rather than moved into `dbus_service.rs` now that it exists — `dbus_types.rs` stays the pure data-mapping half, `dbus_service.rs` the `zbus` server that uses it, per T053).
+- [X] T053 [US7] Implement the `dbus_service.rs` `zbus` server — `QueryOutput`, `QueryAll`, `Reevaluate`, `ReevaluateAll` per `specs/004-cli-control-surface/contracts/wallpaperd-dbus-interface.md` — integrated into the existing `calloop` event loop (FR-016, research.md R8; depends on T025, T049, T052) — implemented: `DaemonInterface` (a `#[zbus::interface]` impl over a small `Arc<Mutex<DbusState>>` read/write mirror, not `WallpaperDaemon` itself — `zbus`'s `Interface` trait requires `Send + Sync`, which ruled out the cheaper `Rc<RefCell<_>>` a truly single-threaded design would use, verified against the vendored trait bound before writing this). `QueryOutput`/`QueryAll` answer synchronously from the mirror; `Reevaluate`/`ReevaluateAll` validate then enqueue, drained once per event-loop tick by `WallpaperDaemon::drain_dbus_requests`. Live-verified against the real, unmodified `wallpaperctl` client: `list outputs`/`query`/`reevaluate` (single + all) all return correct real answers, and querying/re-evaluating an unmanaged output name correctly round-trips to `CliError::OutputNotFound`.
+- [X] T054 [US7] Wire `dbus_service.rs` into `wallpaperd.rs`'s startup (register the session-bus name, serve requests alongside the Wayland/timer event sources) in `crates/renderer/src/bin/wallpaperd.rs` (depends on T020, T053) — implemented: the connection is built with `internal_executor(false)` (no driver thread of `zbus`'s own) and its executor is ticked forward as a foreign future via `calloop`'s `block_on` feature — the same pattern zbus's own `Connection::executor` doc example uses, just driven by `calloop` instead of `tokio::spawn`, so this daemon's own code still spawns no threads. Live-verified idle CPU is genuinely 0% (checked via `/proc/[pid]/stat` deltas, not `ps`'s misleading lifetime-averaged `%CPU` right after the GPU/Vulkan startup burst) — confirms `block_on` isn't busy-spinning.
 - [X] T055 [P] [US7] Pure unit tests for `QueryResponse` construction from `ManagedOutput`/`RendererState` — no real D-Bus connection needed, just the data-mapping logic — in `crates/renderer/tests/dbus_response_mapping.rs` (depends on T052) — landed as `dbus_types.rs`'s own `#[cfg(test)]` module, built from `ScheduleQueryResult` directly rather than `ManagedOutput`/`RendererState` (neither exists — see T008's note); covers the unassigned case, the outside-a-transition case (`active_before`), and the mid-transition case (reports the *incoming* image, since that's what's actually becoming visible).
 
-**Checkpoint**: Not fully reached. FR-015's location-consumption logic (T051, the reading half
-of T050) is done, tested, and includes a real correctness fix. `QueryResponse`'s data mapping
-(T052, T055) is done and tested. T050's live change-watch half is now also done and
-live-verified (see above). The live D-Bus server itself (T049, T053, T054) is still not
-implemented — so spec 4's CLI (`wallpaperctl query`/`reevaluate`) still correctly reports
-"daemon unreachable" until a future pass adds it.
+**Checkpoint**: Fully reached (2026-08-14, follow-up gap-closure pass, branch
+`003-close-renderer-gaps`). All of T049–T055 are now done. `wallpaperctl query`/`reevaluate`/
+`list outputs` were live-verified against a real running `wallpaperd` and the existing,
+unmodified `wallpaperctl` client — including the unmanaged-output error path round-tripping to
+`CliError::OutputNotFound` — rather than only unit-tested. Spec 4's CLI no longer needs to
+report "daemon unreachable" once `wallpaperd` is actually running.
 
 ---
 

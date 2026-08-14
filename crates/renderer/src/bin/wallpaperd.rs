@@ -1,8 +1,9 @@
 //! `wallpaperd` — the wallpaper renderer daemon (T020). Connects to Wayland, loads
 //! config, manages every output's crossfade/idle-wait lifecycle via a `calloop` event
-//! loop, and live-watches `RendererConfig`/`LocationSource` for changes (no restart
-//! needed). See `crates/renderer/README.md` for what this binary does and doesn't
-//! cover yet (no live D-Bus service this pass — see that file).
+//! loop, live-watches `RendererConfig`/`LocationSource` for changes (no restart
+//! needed), and serves a live D-Bus service for `wallpaperctl query`/`reevaluate`/
+//! `list outputs` (FR-016). See `crates/renderer/README.md` for what this binary does
+//! and doesn't cover yet.
 
 use cosmic_config::calloop::ConfigWatchSource;
 use smithay_client_toolkit::reexports::calloop::EventLoop;
@@ -10,6 +11,7 @@ use smithay_client_toolkit::reexports::calloop_wayland_source::WaylandSource;
 use wayland_client::{globals::registry_queue_init, Connection};
 
 use pack_loader::Registry;
+use renderer::dbus_service::{self, DaemonInterface};
 use renderer::surface::WallpaperDaemon;
 use renderer::{LocationSource, RendererConfig};
 
@@ -73,12 +75,32 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     // see `WallpaperDaemon::reschedule_idle_timer`.
     daemon.reschedule_idle_timer();
 
-    loop {
-        event_loop.dispatch(None, &mut daemon)?;
-        if daemon.exit {
-            break;
+    // Live D-Bus service (T049/T053/T054, FR-016): `internal_executor(false)` means
+    // this connection spawns no driver thread of its own — its executor is ticked
+    // forward as a foreign future via `calloop`'s `block_on`, the same pattern zbus's
+    // own `Connection::executor` doc example uses (just driven by `calloop` instead of
+    // `tokio::spawn`). See `dbus_service`'s module doc for the full integration story.
+    let iface = DaemonInterface { state: daemon.dbus_state() };
+    let connection = pollster::block_on(
+        zbus::connection::Builder::session()?.name(dbus_service::BUS_NAME)?.serve_at(dbus_service::OBJECT_PATH, iface)?.internal_executor(false).build(),
+    )
+    .map_err(|e| format!("failed to start the D-Bus service: {e}"))?;
+    tracing::info!(bus_name = dbus_service::BUS_NAME, "D-Bus service registered");
+
+    let executor = connection.executor().clone();
+    let drive_zbus = async move {
+        loop {
+            executor.tick().await;
         }
-    }
+    };
+
+    let signal = event_loop.get_signal();
+    event_loop.block_on(drive_zbus, &mut daemon, |daemon| {
+        daemon.drain_dbus_requests();
+        if daemon.exit {
+            signal.stop();
+        }
+    })?;
 
     Ok(())
 }
