@@ -11,6 +11,11 @@ scrolling) needs a real COSMIC session.
   as spec 7's own GUI quickstart).
 - At least one registered pack (directory-based, with a `manifest.toml` `name`) and, ideally, one
   static single-image pack, to exercise both branches of `resolve_pack_name` (data-model.md).
+- At least two registered packs and (ideally) two connected displays, to exercise US5's
+  per-display dropdowns meaningfully — a single-display dev machine can still validate the toggle
+  and its one dropdown, just not the "different pack per display" case directly.
+- For US6: at least one registered pack with a solar-noon anchor (the bundled "Mountains" starter
+  pack has one) and one without (e.g. a single-image static pack).
 
 ## Run the automated test suite
 
@@ -33,11 +38,17 @@ Expected coverage:
   it is what's unit-tested).
 - `pages::assignment`: given a registered pack with a known name, `view`'s row (indirectly, via
   the same `resolve_pack_name` unit tests) never renders a path-shaped string.
+  `set_same_everywhere_enabled` (data-model.md): switching to `true` clears `overrides` and
+  pre-selects a default pack only if none was already chosen; switching to `false` sets
+  `same_pack_everywhere = None` and leaves `overrides` untouched.
 - `pages::location`: `ToggleIpDisclosure` flips `show_ip_disclosure`; the disclosure text is
   shown regardless of `entry.mode`.
 - `wallpaper_ipc::IP_GEOLOCATION_DISCLOSURE`: capitalized, ends with terminal punctuation, and
   `wallpaperctl`'s and `wallpaper-settings`' own uses both resolve to the same string (a
   same-crate-constant equality check, closing the drift risk research.md R4 found).
+- `resolve_thumbnail_path` (data-model.md): a pack with a solar-noon anchor returns that image's
+  path; a pack without one (including a single-image static pack) returns its first image's path;
+  a failed `load_pack` returns `None`.
 
 ## Manual smoke check 1: add and remove a pack (US1)
 
@@ -79,10 +90,36 @@ cargo run -p wallpaper-settings
    or enable "same pack everywhere." **Expected**: the Assignment page shows "Mountains", not a
    file path, for that output/toggle.
 
+## Manual smoke check 5: assign packs from the GUI (US5)
+
+1. With at least two packs registered, open the Assignment page. **Expected**: the "same pack
+   everywhere" toggle is on by default, with a single dropdown; selecting a pack from it applies
+   to every connected display.
+2. Switch the toggle off. **Expected**: one independent dropdown appears per connected display,
+   each showing whatever is currently assigned (or empty if nothing is).
+3. Select a different pack for each display (or the one display, if single-monitor).
+   **Expected**: only that display's assignment changes; re-check via `wallpaperctl list outputs`
+   or `query` that the other display's assignment is untouched.
+4. Switch the toggle back on and pick a pack. **Expected**: every display — including the one(s)
+   with an individual assignment from step 3 — now shows the toggle's chosen pack, confirming
+   FR-015's overrides-clearing behavior.
+5. With zero packs registered, open the Assignment page. **Expected**: a clear "register a pack
+   first" message instead of an empty or broken dropdown.
+
+## Manual smoke check 6: Packs page thumbnail (US6)
+
+1. Register a pack with a solar-noon-anchored image (the bundled "Mountains" starter pack
+   qualifies). **Expected**: the Packs page shows that specific image as the pack's thumbnail.
+2. Register a pack with no solar-noon anchor (e.g. a single-image static pack). **Expected**: its
+   one image is shown as the thumbnail.
+3. If reachable, register a pack whose chosen thumbnail image is missing/corrupt. **Expected**: a
+   clearly-labeled placeholder is shown, not a broken image or a crash.
+
 ## What "done" looks like for this spec
 
-See spec.md's Success Criteria (SC-001–SC-005). `cargo test` closes the pure-logic half of every
-user story (name resolution, message dispatch, disclosure-text consistency). The four manual
-smoke checks above close the rendered/interactive half — dialogs, tooltips, and scrolling are not
+See spec.md's Success Criteria (SC-001–SC-007). `cargo test` closes the pure-logic half of every
+user story (name/thumbnail resolution, message dispatch, disclosure-text consistency, the
+toggle's overrides-clearing transition). The six manual smoke checks above close the
+rendered/interactive half — dialogs, tooltips, scrolling, dropdowns, and thumbnails are not
 practically unit-testable outside a real compositor, same posture this project's GUI work already
 established in spec 7's own quickstart.md.

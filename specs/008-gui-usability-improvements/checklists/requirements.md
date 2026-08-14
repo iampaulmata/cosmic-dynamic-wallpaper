@@ -51,3 +51,12 @@
   non-hover IP-geolocation disclosure fallback (a persistent info icon). All four are now
   reflected directly in the Functional Requirements, Key Entities, and Assumptions sections
   — re-validated against this checklist, still 18/18 passing.
+- Follow-up round (2026-08-14, after plan.md/tasks.md were already generated): the user added
+  two more capabilities — assigning packs to displays from the GUI (User Story 5, a toggle plus
+  per-display dropdowns, FR-013–FR-017) and a Packs-page thumbnail preview (User Story 6,
+  solar-noon-anchored image or first image, FR-018–FR-020) — plus one targeted clarification
+  (whether switching the new toggle on should clear existing per-display assignments; answered
+  yes, FR-015). Re-validated against this checklist afterward: still 18/18 passing, no new
+  implementation-detail leakage (FR-013–FR-020 describe behavior, not `libcosmic` widget names).
+  plan.md, research.md, data-model.md, contracts/, quickstart.md, and tasks.md were all amended
+  in the same pass to incorporate US5/US6 rather than left stale against the updated spec.

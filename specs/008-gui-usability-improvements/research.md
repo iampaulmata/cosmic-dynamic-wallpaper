@@ -117,10 +117,91 @@ default size a non-issue regardless.
 the sole fix per the reasoning above, though it remains a trivially compatible *addition* if a
 future pass wants both; this plan doesn't need it to satisfy FR-005/006/SC-003.
 
+## R6: Assigning packs from the GUI — toggle semantics and the overrides-clearing decision
+
+**Decision**: `RendererConfig.same_pack_everywhere: Option<PackSource>` *is* the toggle's on/off
+state already (`crates/wallpaper-ipc/src/renderer_config.rs`) — `None` means off, `Some(pack)`
+means on with that pack chosen. No schema change needed; the GUI toggle (`widget::toggler`,
+already available, no new dependency) reads/writes this field directly:
+
+- **Toggle off → on**: if `same_pack_everywhere` is already `Some`, leave it; if `None`,
+  pre-select a pack (the first registered one) rather than leaving the toggle visually "on" with
+  nothing chosen (spec.md Edge Case). **Also clear `overrides` in the same write** — per the
+  `/speckit-clarify`-style follow-up answer (2026-08-14): `resolve_assignment`'s existing,
+  already-shipped precedence rule gives an explicit per-output override priority over the toggle
+  (`crates/wallpaper-ipc/src/renderer_config.rs`'s own doc comment: "always takes precedence over
+  the toggle") — left alone, a display with a stale override would silently keep showing its old
+  individual pack even though the toggle now reads "on," breaking the toggle's own promise.
+- **Toggle on → off**: set `same_pack_everywhere = None`. Any display without its own override
+  then resolves to `Unassigned` (already a well-defined, non-error state,
+  `renderer_config.rs`'s own doc comment, FR-009 in spec 3) until the user picks something from
+  its now-visible individual dropdown.
+
+**A real, deliberate divergence from already-shipped CLI behavior** (flagged per this project's
+practice, plan.md Constitution Check): `wallpaperctl assign --same-everywhere` does **not** clear
+`overrides` today (`crates/wallpaperctl/src/commands/assign.rs` — confirmed by reading its
+implementation directly) and this spec does not change that command. Only the GUI's toggle
+interaction clears overrides, because a toggle switch is a stronger UI promise ("this fully
+controls behavior when on") than a CLI flag is — spec.md's Assumptions section records this
+explicitly so it isn't mistaken for an oversight later.
+
+**Selection widgets**: `widget::dropdown(&labels, selected_index, on_selected)` (already available,
+`src/widget/dropdown/mod.rs`) for both the single "same everywhere" dropdown and each per-display
+dropdown when the toggle is off. Labels are `resolve_pack_name` results (research.md R2) — so
+FR-010/FR-011 (User Story 4) end up satisfied by construction once User Story 5 lands: a
+dropdown's own closed-state display *is* the selected pack's resolved name. No separate read-only
+label needs to be built or maintained (spec.md Assumptions).
+
+**State design**: no new persisted or transient state needed beyond what `assignment::State`
+already holds (`known_outputs`, `available_packs`, `current_config`) — the toggle's checked state
+and each dropdown's selected index are both derived at render time directly from
+`current_config`, the same "single source of truth, no duplicated cache" pattern this crate
+already uses elsewhere (e.g. the Location page's mode radios read `entry.mode` directly).
+
+**Alternatives considered**: Storing a separate `toggle_enabled: bool` in GUI-only state,
+independent of `same_pack_everywhere`'s `Option`-ness — rejected as redundant: the `Option` already
+*is* the boolean, and a separate flag risks the two disagreeing (e.g. toggle "on" in GUI state
+with `same_pack_everywhere` still `None` after a config reload).
+
+## R7: Packs page thumbnail
+
+**Decision**: Extend the Foundational display-derivation module (research.md R2's
+`resolve_pack_name`, now generalized to a `pack_display` module) with
+`resolve_thumbnail_path(source: &PackSource) -> Option<PathBuf>`:
+
+```text
+fn resolve_thumbnail_path(source: &PackSource) -> Option<PathBuf> {
+    let loaded = pack_loader::load_pack(source.path()).ok()?;
+    let chosen = loaded.pack.images().iter()
+        .find(|img| matches!(img.anchor, TimeAnchor::Solar { event: SolarEventKind::SolarNoon, .. }))
+        .or_else(|| loaded.pack.images().first())?;
+    loaded.image_paths.get(&chosen.id).cloned()
+}
+```
+
+`ValidatedPack::images()` (`crates/schedule-engine/src/pack.rs`) preserves manifest declaration
+order, so `.first()` is exactly "the first image in the pack" (spec.md FR-019). A single-image
+static pack has no `Solar` anchor at all (it's `Clock`-anchored per `load.rs`'s degenerate case),
+so the `find` naturally falls through to `.first()` — its one and only image — with no special
+casing needed for that pack type.
+
+**Rendering**: `widget::image(path)` (`pub use iced::widget::{Image, image}`,
+`src/widget/mod.rs:69`) — already re-exported, no new dependency (the `image` crate itself is
+already a workspace dependency, used by `pack-loader`). `PackRow` gains a `thumbnail:
+Option<PathBuf>` field (`None` renders the FR-020 placeholder — a generic icon plus "(no preview
+available)" text, reusing the placeholder posture `packs.rs` already has for a missing preview).
+
+**Alternatives considered**: Rendering every image in the pack as a strip/carousel — rejected as
+scope creep beyond what spec.md actually asks (a single representative thumbnail, chosen
+deterministically). Caching decoded thumbnails across app restarts — rejected as premature; the
+Packs page loads the full registry once already (`State::load`), and thumbnail decoding is a
+one-time cost per session, not a hot path.
+
 ## Summary: no new Cargo dependencies
 
 Every mechanism above (`cosmic::dialog::file_chooser`, `cosmic::widget::dialog`,
-`cosmic::widget::tooltip`, `cosmic::widget::scrollable`, `cosmic::widget::button::icon`) already
-ships inside the `libcosmic` git dependency this crate already pins, with the feature flags
+`cosmic::widget::tooltip`, `cosmic::widget::scrollable`, `cosmic::widget::button::icon`,
+`cosmic::widget::toggler`, `cosmic::widget::dropdown`, `cosmic::widget::image`) already ships
+inside the `libcosmic` git dependency this crate already pins, with the feature flags
 (`xdg-portal`) already enabled in `crates/wallpaper-settings/Cargo.toml`. The only non-GUI-crate
 change is moving one existing `pub const` from two crates into `wallpaper_ipc` (R4).
