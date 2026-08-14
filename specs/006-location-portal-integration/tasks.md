@@ -39,7 +39,7 @@ schema write side).
 
 **Purpose**: Add the one new external dependency this spec needs.
 
-- [ ] T001 Add `ashpd = { version = "0.13", default-features = false, features = ["location", "async-io"] }` to `crates/renderer/Cargo.toml` (research.md R3 — `default-features = false` is required to drop `ashpd`'s own `tokio` default and keep it on the same `async-io` backend `zbus` already uses in this crate)
+- [X] T001 Add `ashpd = { version = "0.13", default-features = false, features = ["location", "async-io"] }` to `crates/renderer/Cargo.toml` (research.md R3 — `default-features = false` is required to drop `ashpd`'s own `tokio` default and keep it on the same `async-io` backend `zbus` already uses in this crate)
 
 **Checkpoint**: `cargo build -p renderer` succeeds with the new dependency present but unused. No change needed to `crates/wallpaperctl/Cargo.toml` — its new subcommands are pure `cosmic-config` reads/writes, same posture as its existing `get`/`set`/`clear` (plan.md Technical Context). Existing per-crate CI (`.github/workflows/renderer-ci.yml`, `wallpaperctl-ci.yml`) already runs `cargo test`/`cargo clippy` for both crates and needs no changes to pick up this spec's new code.
 
@@ -52,25 +52,25 @@ writes this shape.
 
 **⚠️ CRITICAL**: Blocks Phases 3–6.
 
-- [ ] T002 [P] Define `LocationMode` (`Manual`/`Automatic`) and `AutomaticStatus`
+- [X] T002 [P] Define `LocationMode` (`Manual`/`Automatic`) and `AutomaticStatus`
       (`Unresolved`/`Resolved`/`Unavailable { reason: String }`) enums, and extend
       `LocationConfigEntry` to v2 (`mode`, `location`, `automatic_location`,
       `automatic_status` fields, `#[version = 2]`, a `Default` impl matching data-model.md's
       Migration mapping) in `crates/wallpaperctl/src/config.rs` (data-model.md,
       contracts/location-config-schema-v2.md — write side)
-- [ ] T003 [P] Mirror the exact same `LocationMode`/`AutomaticStatus`/`LocationSource` v2 shape
+- [X] T003 [P] Mirror the exact same `LocationMode`/`AutomaticStatus`/`LocationSource` v2 shape
       (renderer's existing name for its read-side struct) with `#[version = 2]` in
       `crates/renderer/src/config.rs` — field names and types MUST match T002 exactly (this
       project's own established lesson: a prior mismatch between these two crates' independently
       -defined "identical" types silently produced an empty map at runtime, see
       `crates/renderer/src/config.rs`'s existing regression test and doc comment)
-- [ ] T004 [P] Regression test confirming `cosmic-config`'s built-in previous-version fallback
+- [X] T004 [P] Regression test confirming `cosmic-config`'s built-in previous-version fallback
       needs no hand-written migration code (research.md R7): hand-write a v1-shaped RON entry on
       disk, load it through the new v2 struct, and assert `mode: Manual`, unchanged `location`,
       `automatic_location: None`, `automatic_status: Unresolved` — add to both
       `crates/wallpaperctl/src/config.rs` and `crates/renderer/src/config.rs` test modules
       (depends on T002, T003)
-- [ ] T005 Implement `effective_location()` (data-model.md) as a pure function in
+- [X] T005 Implement `effective_location()` (data-model.md) as a pure function in
       `crates/renderer/src/config.rs`, with unit tests for all three branches: `Manual` mode
       returns `location`; `Automatic` mode with a resolved value returns `automatic_location`;
       `Automatic` mode unresolved/unavailable falls back to `location`, then `None` (depends on
@@ -93,11 +93,11 @@ active image/next-transition match what spec 1 computes for the resolved coordin
 
 ### Tests for User Story 1
 
-- [ ] T006 [P] [US1] Unit test: `location auto` sets `mode: Automatic` only, is idempotent on
+- [X] T006 [P] [US1] Unit test: `location auto` sets `mode: Automatic` only, is idempotent on
       repeat calls, and never touches `location`/`automatic_location`/`automatic_status`
       (spec.md US1, contracts/wallpaperctl-location-cli.md) in
       `crates/wallpaperctl/src/commands/location.rs`
-- [ ] T007 [P] [US1] Unit test: given a successful resolved reading, `portal_location.rs`'s
+- [X] T007 [P] [US1] Unit test: given a successful resolved reading, `portal_location.rs`'s
       conversion path validates it through spec 1's `Location::new` and produces
       `automatic_location: Some(..)`, `automatic_status: Resolved` (spec.md US1 Scenarios 1–2) in
       `crates/renderer/src/portal_location.rs` — inject the reading through a small seam (a
@@ -106,21 +106,21 @@ active image/next-transition match what spec 1 computes for the resolved coordin
 
 ### Implementation for User Story 1
 
-- [ ] T008 [US1] Implement the `location auto` subcommand (writes `mode: Automatic` only) in
+- [X] T008 [US1] Implement the `location auto` subcommand (writes `mode: Automatic` only) in
       `crates/wallpaperctl/src/commands/location.rs` (FR-001/FR-002/FR-003,
       contracts/wallpaperctl-location-cli.md; depends on T002)
-- [ ] T009 [US1] Wire `location auto` into `main.rs`'s dispatch (depends on T008)
-- [ ] T010 [US1] Implement `crates/renderer/src/portal_location.rs`: create an
+- [X] T009 [US1] Wire `location auto` into `main.rs`'s dispatch (depends on T008)
+- [X] T010 [US1] Implement `crates/renderer/src/portal_location.rs`: create an
       `ashpd::desktop::location::LocationProxy` session requesting `Accuracy::City`
       (research.md R4), call `Start` wrapped in a 5-second timeout (research.md R6), and on
       success convert the reading to spec 1's `Location` (validated via `Location::new`),
       writing `automatic_location`/`automatic_status: Resolved` back through the v2
       `LocationConfigEntry` (research.md R3/R4/R6; depends on T003, T001)
-- [ ] T011 [US1] Wire `portal_location.rs`'s resolution future into `wallpaperd.rs`'s existing
+- [X] T011 [US1] Wire `portal_location.rs`'s resolution future into `wallpaperd.rs`'s existing
       single `calloop` loop, advanced the same `internal_executor(false)` + `block_on` way
       `dbus_service.rs` already is (research.md R5; depends on T010) — in
       `crates/renderer/src/bin/wallpaperd.rs`
-- [ ] T012 [US1] Amend `scheduler_bridge.rs` to call `effective_location()` (T005) instead of
+- [X] T012 [US1] Amend `scheduler_bridge.rs` to call `effective_location()` (T005) instead of
       reading `LocationSource.location` directly, so a resolved automatic value actually reaches
       spec 1's `ValidatedPack::query` (plan.md Cross-Spec Dependency; depends on T005) — in
       `crates/renderer/src/scheduler_bridge.rs`
@@ -145,29 +145,29 @@ existing manual/clock-anchored packs keep working exactly as before.
 
 ### Tests for User Story 2
 
-- [ ] T013 [P] [US2] Unit test: a portal error/timeout/absence maps to
+- [X] T013 [P] [US2] Unit test: a portal error/timeout/absence maps to
       `AutomaticStatus::Unavailable { reason }` with the specific error string preserved
       verbatim — including this project's own live-observed `"Location services disabled"`
       string (research.md R1) as a literal test case, not a generic placeholder — in
       `crates/renderer/src/portal_location.rs`
-- [ ] T014 [P] [US2] Unit test extending T005's coverage: `effective_location()` with
+- [X] T014 [P] [US2] Unit test extending T005's coverage: `effective_location()` with
       `mode: Automatic` and `automatic_status: Unavailable` falls back to `location` if present,
       else `None` — no panic, no new failure mode invented (spec.md FR-005) in
       `crates/renderer/src/config.rs`
-- [ ] T015 [P] [US2] Unit test: repeated resolution failures back off exponentially (30s start,
+- [X] T015 [P] [US2] Unit test: repeated resolution failures back off exponentially (30s start,
       5-minute cap), never a tight loop (research.md R6) in
       `crates/renderer/src/portal_location.rs`
 
 ### Implementation for User Story 2
 
-- [ ] T016 [US2] Implement the failure/timeout path in `portal_location.rs`: map every failure
+- [X] T016 [US2] Implement the failure/timeout path in `portal_location.rs`: map every failure
       mode (portal absent, backend absent, permission declined, mid-session error, the 5s
       timeout) to `AutomaticStatus::Unavailable { reason }`, written back immediately with no
       grace period (spec.md FR-005 Clarifications; depends on T010)
-- [ ] T017 [US2] Implement the exponential-backoff retry timer (research.md R6) as a `calloop`
+- [X] T017 [US2] Implement the exponential-backoff retry timer (research.md R6) as a `calloop`
       timer alongside the resolution future, so a transient failure recovers automatically
       without user action (depends on T011, T016)
-- [ ] T018 [US2] Manual QA: run quickstart.md's "Manual smoke check" against this project's real
+- [X] T018 [US2] Manual QA: run quickstart.md's "Manual smoke check" against this project's real
       COSMIC session once T008–T017 land, confirming `wallpaperctl location get` reports
       `status: unavailable (Location services disabled)` and manual/clock-anchored packs remain
       unaffected (spec.md US2, quickstart.md; depends on T009, T016, T017)
@@ -189,22 +189,22 @@ location and confirm the schedule recomputes within the existing reaction bound,
 
 ### Tests for User Story 3
 
-- [ ] T019 [P] [US3] Unit test: a `LocationUpdated` value distinct from the currently-stored
+- [X] T019 [P] [US3] Unit test: a `LocationUpdated` value distinct from the currently-stored
       `automatic_location` triggers `Coalescer::record_change` for every output currently
       scheduling in automatic mode (spec.md US3 Scenario 1, FR-006) in
       `crates/renderer/src/portal_location.rs`
-- [ ] T020 [P] [US3] Unit test: several rapid `LocationUpdated` signals collapse to a single
+- [X] T020 [P] [US3] Unit test: several rapid `LocationUpdated` signals collapse to a single
       re-evaluation via the existing `Coalescer` (spec 3 FR-014, spec.md US3 Scenario 2) in
       `crates/renderer/src/config.rs`
 
 ### Implementation for User Story 3
 
-- [ ] T021 [US3] Subscribe to `ashpd`'s `receive_location_updated()` stream for the lifetime of
+- [X] T021 [US3] Subscribe to `ashpd`'s `receive_location_updated()` stream for the lifetime of
       automatic mode (not just the one-shot initial `Start` resolution), routing every distinct
       value through the same write-back and coalescing path T010/T016 already established —
       in `crates/renderer/src/portal_location.rs` (research.md R5, spec.md FR-006; depends on
       T010, T011)
-- [ ] T022 [US3] Confirm/adjust `wallpaperd.rs`'s event-loop wiring so the ongoing
+- [X] T022 [US3] Confirm/adjust `wallpaperd.rs`'s event-loop wiring so the ongoing
       `LocationUpdated` stream (not just the initial resolution future) is polled every tick
       alongside the D-Bus server and existing timers (depends on T011, T021)
 
@@ -224,28 +224,28 @@ confirm the daemon reverts to the previously-stored manual location without re-e
 
 ### Tests for User Story 4
 
-- [ ] T023 [P] [US4] Unit test: `location manual` sets `mode: Manual` only, leaves `location`
+- [X] T023 [P] [US4] Unit test: `location manual` sets `mode: Manual` only, leaves `location`
       untouched, and handles the "no manual value was ever stored" case cleanly (spec.md US4
       Scenarios 2–3, contracts/wallpaperctl-location-cli.md) in
       `crates/wallpaperctl/src/commands/location.rs`
-- [ ] T024 [P] [US4] Unit test: `location get`'s human and `--json` output both report `mode`,
+- [X] T024 [P] [US4] Unit test: `location get`'s human and `--json` output both report `mode`,
       `status`, and the effective location for every `(mode, status)` combination (spec.md US4
       Scenario 1, SC-004) in `crates/wallpaperctl/src/commands/location.rs`
-- [ ] T025 [P] [US4] Regression test: `location set` now also writes `mode: Manual`
+- [X] T025 [P] [US4] Regression test: `location set` now also writes `mode: Manual`
       (research.md R8) and `location clear` continues to leave `mode` untouched (research.md
       R7) — both documented deliberate side effects, not accidental scope creep — in
       `crates/wallpaperctl/src/commands/location.rs`
 
 ### Implementation for User Story 4
 
-- [ ] T026 [US4] Implement the `location manual` subcommand (depends on T002)
-- [ ] T027 [US4] Extend `location get`'s human/JSON output with `mode`/`status`/
+- [X] T026 [US4] Implement the `location manual` subcommand (depends on T002)
+- [X] T027 [US4] Extend `location get`'s human/JSON output with `mode`/`status`/
       `manual_location`/`automatic_location` fields per
       contracts/wallpaperctl-location-cli.md (depends on T002)
-- [ ] T028 [US4] Update `location set` to also write `mode: Manual` (research.md R8); confirm
+- [X] T028 [US4] Update `location set` to also write `mode: Manual` (research.md R8); confirm
       `location clear`'s existing behavior needs no code change (research.md R7) (depends on
       T002)
-- [ ] T029 [US4] Wire `location manual` into `main.rs`'s dispatch alongside the existing
+- [X] T029 [US4] Wire `location manual` into `main.rs`'s dispatch alongside the existing
       `location` subcommand group (depends on T009, T026)
 
 **Checkpoint**: All four user stories functional and tested. The full CLI surface (`auto`/
@@ -258,19 +258,19 @@ confirm the daemon reverts to the previously-stored manual location without re-e
 
 **Purpose**: Close out the spec's success criteria and hand off a stable, documented feature.
 
-- [ ] T030 [P] Verify strong test coverage via `cargo llvm-cov` on `portal_location.rs`,
+- [X] T030 [P] Verify strong test coverage via `cargo llvm-cov` on `portal_location.rs`,
       `config.rs` (both crates), and `commands/location.rs`'s new/changed paths; add tests to
       close any real gap
-- [ ] T031 [P] Add rustdoc comments to every new public item; verify with
+- [X] T031 [P] Add rustdoc comments to every new public item; verify with
       `RUSTFLAGS="-W missing_docs" cargo build --workspace` (spec 4 T047's precedent — this
       full-workspace check has caught real cross-crate gaps before)
-- [ ] T032 [P] Update `crates/renderer/README.md`'s "What's simplified or not implemented"
+- [X] T032 [P] Update `crates/renderer/README.md`'s "What's simplified or not implemented"
       section: remove automatic location from the gap list, and add the honest caveat that
       full success-path verification needs a GeoClue-backed machine this dev environment
       doesn't have (research.md R2)
-- [ ] T033 [P] Update `crates/wallpaperctl/README.md` documenting the two new `location`
+- [X] T033 [P] Update `crates/wallpaperctl/README.md` documenting the two new `location`
       subcommands and `get`'s extended output
-- [ ] T034 Run quickstart.md end-to-end (the automated `cargo test` portion, plus the manual
+- [X] T034 Run quickstart.md end-to-end (the automated `cargo test` portion, plus the manual
       smoke check against this project's real COSMIC session) and fix any drift between the
       doc and actual behavior
 

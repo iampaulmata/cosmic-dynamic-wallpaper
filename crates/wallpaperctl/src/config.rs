@@ -3,9 +3,12 @@
 //! [`RendererConfig`] is *owned* by spec 3 (contracts/renderer-config-schema.md) — this
 //! crate is one of its writers (`wallpaperctl assign`), not its owner; the shape here
 //! matches that contract exactly so spec 3, whenever implemented, reads the same data.
-//! [`LocationConfigEntry`] is owned by *this* spec (contracts/location-config-schema.md)
-//! — `wallpaperctl location` is its only writer, spec 3's `scheduler_bridge.rs` its
-//! reader.
+//! [`LocationConfigEntry`] was originally owned by spec 4
+//! (contracts/location-config-schema.md, v1) and is now a v2 schema owned by spec 6
+//! (specs/006-location-portal-integration/contracts/location-config-schema-v2.md) —
+//! `wallpaperctl location` is one writer (`set`/`clear`/`auto`/`manual`), `wallpaperd`
+//! is the only writer of `automatic_location`/`automatic_status`, and spec 3's
+//! `scheduler_bridge.rs` (via `effective_location()`) is the reader.
 //!
 //! Both `cosmic-config` application ids below are an implementation decision made here
 //! (neither contract names one) — documented prominently since spec 3 must match
@@ -15,6 +18,7 @@ use std::collections::HashMap;
 
 use cosmic_config::cosmic_config_derive::CosmicConfigEntry;
 use cosmic_config::{Config, CosmicConfigEntry};
+use serde::{Deserialize, Serialize};
 
 use pack_loader::PackSource;
 use schedule_engine::Location;
@@ -74,13 +78,54 @@ impl RendererConfig {
     }
 }
 
-/// The manual latitude/longitude a user provides for solar-anchored pack scheduling
-/// (FR-008; data-model.md `LocationConfig`).
+/// Which source `effective_location()` (spec 6 data-model.md) should resolve from.
+/// Default `Manual` — automatic is opt-in, never implicit (spec 6 FR-002).
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum LocationMode {
+    #[default]
+    Manual,
+    Automatic,
+}
+
+/// Surfaces spec 6.md's Location Availability Status Key Entity without requiring a
+/// live daemon query (FR-008 — `location get` must work "at any time", daemon or not).
+/// Only meaningful when `mode == Automatic`; still persisted (not reset) when
+/// `mode == Manual`, so re-enabling automatic mode later doesn't lose the last-known
+/// status.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub enum AutomaticStatus {
+    /// Automatic mode was just enabled; no resolution attempt has completed yet.
+    #[default]
+    Unresolved,
+    /// `automatic_location` holds a value from a successful portal resolution.
+    Resolved,
+    /// The most recent resolution attempt failed (portal absent, backend absent,
+    /// permission declined, timeout, or a mid-session error) — `reason` is a short,
+    /// specific string for display, not a generic catch-all (e.g. this project's own
+    /// live-observed `"Location services disabled"`, spec 6 research.md R1).
+    Unavailable { reason: String },
+}
+
+/// The location config entry (spec 6 data-model.md `LocationConfigEntry`, v2 —
+/// supersedes spec 4's v1 `{ location: Option<Location> }` shape). Field names/types
+/// **must match** `renderer`'s mirror of this type exactly
+/// (`crates/renderer/src/config.rs`'s `LocationSource`) — this project's own
+/// established lesson: a prior mismatch between two independently-defined "identical"
+/// types silently produced an empty map at runtime.
 #[derive(Debug, Clone, Default, CosmicConfigEntry, PartialEq)]
-#[version = 1]
+#[version = 2]
 pub struct LocationConfigEntry {
-    /// `None` = no location set — only clock-anchored packs are usable.
+    /// `Manual` (default) uses `location` directly; `Automatic` uses
+    /// `effective_location()`'s resolution instead (spec 6 data-model.md).
+    pub mode: LocationMode,
+    /// The manual value — spec 4's original field, unchanged meaning. Never cleared by
+    /// switching to `Automatic` mode or by a successful automatic resolution (FR-007).
     pub location: Option<Location>,
+    /// The last successfully-resolved automatic value, persisted so a restarted daemon
+    /// has an immediate value (FR-010). Written only by `wallpaperd`.
+    pub automatic_location: Option<Location>,
+    /// The most recent automatic resolution's outcome. Written only by `wallpaperd`.
+    pub automatic_status: AutomaticStatus,
 }
 
 impl LocationConfigEntry {
@@ -131,11 +176,42 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let config = LocationConfigEntry::open_at(dir.path()).unwrap();
 
-        assert_eq!(LocationConfigEntry::load(&config).location, None);
+        let default = LocationConfigEntry::load(&config);
+        assert_eq!(default.location, None);
+        assert_eq!(default.mode, LocationMode::Manual);
+        assert_eq!(default.automatic_location, None);
+        assert_eq!(default.automatic_status, AutomaticStatus::Unresolved);
 
         let loc = Location::new(45.5019, -73.5674).unwrap();
-        LocationConfigEntry { location: Some(loc) }.save(&config).unwrap();
+        LocationConfigEntry { location: Some(loc), ..LocationConfigEntry::default() }.save(&config).unwrap();
 
         assert_eq!(LocationConfigEntry::load(&config).location, Some(loc));
+    }
+
+    /// Regression test (spec 6 research.md R7, tasks.md T004): `cosmic-config`'s
+    /// built-in previous-version fallback needs no hand-written migration code — a
+    /// v1-shaped entry's `location` value carries forward automatically once the v2
+    /// struct's `#[version = 2]` chains back to the v1 directory, and every new v2-only
+    /// field simply takes its `Default`.
+    #[test]
+    fn v1_location_entry_migrates_to_v2_with_no_hand_written_migration() {
+        #[derive(Debug, Clone, Default, CosmicConfigEntry, PartialEq)]
+        #[version = 1]
+        struct LocationV1 {
+            location: Option<Location>,
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let loc = Location::new(45.5019, -73.5674).unwrap();
+        let v1_config = Config::with_custom_path(LOCATION_CONFIG_ID, LocationV1::VERSION, dir.path().to_path_buf()).unwrap();
+        LocationV1 { location: Some(loc) }.write_entry(&v1_config).unwrap();
+
+        let v2_config = LocationConfigEntry::open_at(dir.path()).unwrap();
+        let loaded = LocationConfigEntry::load(&v2_config);
+
+        assert_eq!(loaded.mode, LocationMode::Manual);
+        assert_eq!(loaded.location, Some(loc));
+        assert_eq!(loaded.automatic_location, None);
+        assert_eq!(loaded.automatic_status, AutomaticStatus::Unresolved);
     }
 }

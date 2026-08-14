@@ -73,10 +73,17 @@ wallpaperctl query --output <your-output>
 **Expected outcome on this project's own dev machine** (research.md R1/R2, steps 1–2 already
 verified live during planning): step 1 lists `CreateSession`/`Start`/`LocationUpdated` — the
 interface is real. Step 2 returns `"Location services disabled"`, not a D-Bus
-unknown-interface error. Once step 3–5's code exists: `wallpaperctl location get` should report
-`status: unavailable (Location services disabled)` and `location: no location available` (or
-whatever manual value is separately stored, per `effective_location()`'s fallback) — this is the
-FR-005 degrade path validated against a real backend response, not a simulated one.
+unknown-interface error.
+
+**Confirmed live during implementation (2026-08-14)**, not just planned: steps 3–5 were run for
+real against this exact dev machine. `ashpd` wraps the raw D-Bus error with its own context, so
+the reason string `wallpaperctl location get` actually reports is `"Portal request failed:
+org.freedesktop.portal.Error.NotAllowed: Location services disabled"` — the same underlying
+business error research.md R1 found via `busctl`, just surfaced through `ashpd::Error`'s own
+`Display` impl rather than verbatim. `location get` correctly reported `status: unavailable
+(Portal request failed: ...)` and fell back to the separately-stored manual location via
+`effective_location()`, exactly as designed — the FR-005 degrade path validated end-to-end
+against a real backend response, not a simulated one.
 
 **Expected outcome on a machine with GeoClue2 installed and location services enabled**: step 4's
 `wallpaperctl location get` should report `status: resolved` with real coordinates, and step 5's
@@ -88,8 +95,10 @@ same honest-caveat posture spec 3's README already uses for its own untested bra
 ## What "done" looks like for this spec
 
 See spec.md's Success Criteria (SC-001–SC-005). The automated suite closes out the config/
-migration/CLI logic (headless). Full SC-001 (auto-resolve a working schedule) additionally
+migration/CLI logic (headless) — confirmed: 50 tests in `crates/renderer`, 41 in
+`crates/wallpaperctl`, all passing. Full SC-001 (auto-resolve a working schedule) additionally
 requires a machine with a working GeoClue2 backend and location services enabled to observe
-end-to-end — not available in this project's own dev environment as of this planning pass (R2).
-SC-002 (graceful degrade) is the one criterion this project's own dev environment can validate
-completely and has already partially demonstrated live, before implementation even starts.
+end-to-end — not available in this project's own dev environment (R2), so it remains a documented
+expectation. SC-002 (graceful degrade) is the one criterion this project's own dev environment can
+validate completely, and now has been, live, post-implementation (2026-08-14) — see the "Manual
+smoke check" section above.
