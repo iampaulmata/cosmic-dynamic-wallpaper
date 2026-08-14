@@ -13,14 +13,33 @@ verified precisely via an offscreen GPU render + pixel readback test
 (`tests/gpu_render.rs`) — not just "looked right" but exact byte values at
 progress 0.0/0.5/1.0.
 
+**Follow-up gap-closure pass (2026-08-14)**: all 5 gaps documented below as of the
+initial pass are now closed — precise idle-wait timer, live config/location watch, a
+live D-Bus service, all four scaling modes, and hotplug resize/rescale + fractional
+scale. Live-verified against a real two-output `cosmic-comp` session (this dev
+environment now has `eDP-1` + `HDMI-A-1` connected). See each section below for the
+specifics and the couple of caveats that remain honestly unverified (a real
+disconnect/resize event can't be triggered on this dev machine).
+
 ## What's implemented and tested
 
 - **`output.rs`** — `OutputId`, `OutputAssignment`, `RendererConfig` (the
   `cosmic-config` schema `wallpaperctl assign` writes to), and the FR-005/006
   resolution rule (explicit override > toggle > unassigned).
 - **`crossfade.rs`** — `CrossfadeTransition`'s progress math (FR-001/002/004/011) *and*
-  `CrossfadePipeline`, the real two-texture WGSL blend (`shaders/crossfade.wgsl`),
-  "Fill" (cover) scaling per texture. Pixel-verified on real hardware.
+  `CrossfadePipeline`, the real two-texture WGSL blend (`shaders/crossfade.wgsl`), all
+  four `ScalingMode`s — Fill/Fit/Stretch/Center (FR-005), each texture scaled
+  independently per its own pack's `image_scaling`/`fallback_color`. Pixel-verified on
+  real hardware, including Fit/Center's letterboxing (`sample_or_fallback` in the
+  shader, substituting `fallback_color` where the transformed UV falls outside `[0,
+  1]`). **A real bug found by the GPU pixel test, not the pure-math unit tests**: an
+  initial version of `fit_uv_transform`/`center_uv_transform` reused `fill_uv_transform`'s
+  crop-direction formula (self-consistent enough that hand-derived-the-same-wrong-way
+  unit tests still passed), which can structurally never produce an out-of-bounds UV —
+  so no letterboxing ever actually happened. Only the offscreen GPU test (expecting
+  `fallback_color` at a known letterboxed pixel) caught it. Fixed with the correct
+  inverse relationship — see `crossfade.rs`'s `letterbox_scale_offset` doc comment for
+  the full derivation.
 - **`gpu.rs`** — `wgpu` instance/adapter/device setup, automatic Vulkan/GL backend
   selection.
 - **`texture.rs`** — full-resolution image decode (`image` crate) + GPU texture upload.
@@ -31,13 +50,65 @@ progress 0.0/0.5/1.0.
   demand, and draws/presents frames — including the frame-callback-paced draw loop
   during an active crossfade (subscribes only while animating, per FR-003/FR-004).
 - **`config.rs`** — reading `RendererConfig` + spec 4's `LocationSource` via
-  `cosmic-config`, and `Coalescer` (FR-014's debounce).
+  `cosmic-config`, and `Coalescer` (FR-014's debounce), including `earliest_pending`
+  (peeked, not drained — feeds the idle-wait timer's wake computation).
 - **`scheduler_bridge.rs`** — ties assignment + a loaded pack + location into spec 1's
   `ScheduleQueryResult`, with the location-required-panic fix described below.
 - **`dbus_types.rs`** — `QueryResponse`, the pure data-mapping half of spec 4's D-Bus
   interface.
+- **`dbus_service.rs`** — the live `zbus` server (T049/T053/T054, FR-016):
+  `QueryOutput`/`QueryAll`/`Reevaluate`/`ReevaluateAll` exactly matching
+  `specs/004-cli-control-surface/contracts/wallpaperd-dbus-interface.md`, integrated
+  into `wallpaperd.rs`'s `calloop` loop via `internal_executor(false)` + `EventLoop::
+  block_on` (no extra thread for this daemon's own code — see the module doc for the
+  full integration story, including why `DbusState` is `Arc<Mutex<_>>` rather than
+  `Rc<RefCell<_>>`). Live-verified against `crates/wallpaperctl/src/dbus_client.rs`
+  (unchanged) — `wallpaperctl list outputs`/`query`/`reevaluate` all get real answers
+  now, including the `InvalidArgs`→`CliError::OutputNotFound` mapping round-tripping
+  for an unmanaged output name. **One honest caveat**: `zbus`'s `async-io` backend
+  keeps one lazy background OS thread alive for its own reactor regardless of
+  `internal_executor(false)` (a property of the `async-io` crate itself) — inert w.r.t.
+  Wayland/wgpu state (never touches it), confirmed live: instantaneous CPU usage settles
+  to 0% once idle (checked via `/proc/[pid]/stat` deltas, not just `ps`'s
+  lifetime-averaged `%CPU` column, which is misleading right after the GPU/Vulkan
+  startup burst).
 - **`src/bin/wallpaperd.rs`** — the actual daemon binary: connects to Wayland, loads
-  config, runs the `calloop` event loop.
+  config, runs the `calloop` event loop, wires up the two live `cosmic-config`
+  watches below, and serves the D-Bus service.
+- **Precise idle-wait timer** (T021) — `WallpaperDaemon::reschedule_idle_timer`
+  replaces every managed output on a flat 5s poll with a single `calloop`
+  `Timer::from_deadline` computed from `next_wake()` (the real next-transition
+  instant) and `Coalescer::earliest_pending()` (so a pending config change is never
+  serviced later than its own 2s deadline), rescheduled after every timer fire, every
+  live config/location change, and every output's first `configure`. Live-verified:
+  logged deadlines track real solar-schedule instants tens of minutes out, not a flat
+  5s/60s cadence.
+- **Live config-watch** (T028/T033/T050) — `cosmic_config::calloop::ConfigWatchSource`
+  (wired in `wallpaperd.rs`) watches both `RendererConfig` and `LocationSource` for
+  changes, feeding `Coalescer` via `WallpaperDaemon::on_renderer_config_changed`/
+  `on_location_changed`. A `wallpaperctl assign`/`location set` while `wallpaperd` is
+  running now takes effect within ~2s with **no restart** — live-verified against a
+  real two-output session (assigning a pack to a previously-unassigned output, and
+  changing location, both observed taking effect without restarting the daemon).
+- **Hotplug resize/rescale + fractional scale** (T040) — `OutputHandler::update_output`
+  now compares an output's current logical size against `LayerShellHandler::configure`'s
+  own cached size and calls a shared `reconfigure_output` helper (the two handlers'
+  previously-separate logic factored into one) when they differ, so a `wl_output`-level
+  metadata change that doesn't also trigger a fresh layer-surface `configure` (e.g. a
+  scale-only change) isn't silently dropped. `wp_fractional_scale_manager_v1` is now
+  bound (optional/soft — degrades to a log line, doesn't fail the daemon, if a
+  compositor doesn't advertise it) and a real `Dispatch<WpFractionalScaleV1, _>` handles
+  its `preferred_scale` event (unlike `wp_viewporter`, which is purely imperative and
+  safely `delegate_noop!`'d). **Live-verified further than expected**: this dev
+  environment's real `cosmic-comp` *does* implement the protocol — binding succeeded and
+  real `preferred_scale` events (120 = 1×) arrived for both managed outputs, confirmed
+  via logs, with no regression to the existing single/multi-output behavior. **What's
+  still not live-verified**: an actual logical-size change firing `update_output`'s
+  reconfigure branch — this dev environment has no way to trigger a real resolution/scale
+  change on its physical displays, so that branch is structurally correct and
+  code-reviewed (same FR-013 per-output containment pattern as `configure`) but not
+  exercised against a real event, the same honest caveat `T039`/`T043` already carry for
+  hotplug disconnect.
 
 **Real cross-spec bug found and fixed** in `scheduler_bridge.rs`: spec 1's
 `ValidatedPack::query` panics if called with `location: None` on a solar-anchored pack
@@ -67,33 +138,6 @@ once a specific serialization format's own semantics enter the picture.
 
 ## What's simplified or not implemented
 
-- **Idle-wait timer**: `wallpaperd.rs` currently re-evaluates every managed output on a
-  flat 5-second `calloop` timer tick, rather than computing the exact next-transition
-  instant per output (`WallpaperDaemon::next_wake` exists and is correct, just not yet
-  wired into a precise single-shot timer per output). Functionally correct (FR-003's
-  *result* — idle between transitions, no per-frame redraw — holds either way, verified
-  during live testing) but not maximally efficient; a real T021 finishes this by
-  scheduling to the exact instant instead of polling every 5s.
-- **Live config-watch**: `RendererConfig`/`LocationSource` are read once at startup
-  (and via `reload_all_assignments()`, which nothing calls yet) rather than watched via
-  `cosmic-config`'s `notify`-backed mechanism (T028's watch half, T050). A config
-  change while `wallpaperd` is running today needs a restart to take effect.
-  `Coalescer` (FR-014's debounce logic) is implemented and tested but not yet wired to
-  a live watch source.
-- **Hotplug resize/rescale**: `OutputHandler::update_output` is a no-op (T040) — a
-  runtime resolution/scale change isn't reconfigured without a restart. `new_output`/
-  `output_destroyed` (connect/disconnect) *are* wired (T037-T039's core), verified
-  structurally but not exercised against a real hotplug event in this pass.
-  `wp_fractional_scale_v1` isn't wired either — only `wp_viewporter`'s destination-size
-  path, which is enough for integer-scale correctness but not fractional scaling.
-- **The live D-Bus service** (`dbus_service.rs`, T049/T053/T054) — not implemented.
-  `wallpaperctl query`/`reevaluate`/`list outputs` (spec 4) correctly report "daemon
-  unreachable" until this lands. `dbus_types::QueryResponse`'s data mapping is done and
-  tested, ready for a `zbus` server to use.
-- **Per-image scaling overrides**: only "Fill" (cover) scaling is implemented in the
-  shader; `pack-loader`'s `ScalingMode::Fit`/`Stretch`/`Center` aren't wired into
-  `crossfade.rs`'s UV transform yet (`fill_uv_transform` would need siblings for the
-  other three modes).
 - **Overlapping-transition GPU resource cleanup** (T030): a new `CrossfadeTransition`
   value cleanly *replaces* the old one in this crate's data model (verified, see
   `crossfade.rs`'s tests) and old textures simply stay in the per-output cache for
@@ -118,7 +162,7 @@ should already have the real `-dev` package and need no workaround.
 ## Testing
 
 ```sh
-cargo test --package renderer            # 26 tests: pure logic + a real offscreen GPU render
+cargo test --package renderer            # 43 tests: pure logic + real offscreen GPU renders
 cargo llvm-cov --package renderer --summary-only
 ```
 
