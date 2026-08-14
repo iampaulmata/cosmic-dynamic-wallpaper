@@ -1,6 +1,6 @@
 //! `wallpaperd` — the wallpaper renderer daemon (T020). Connects to Wayland, loads
 //! config, manages every output's crossfade/idle-wait lifecycle via a `calloop` event
-//! loop, live-watches `RendererConfig`/`LocationSource` for changes (no restart
+//! loop, live-watches `RendererConfig`/`LocationConfigEntry` for changes (no restart
 //! needed), and serves a live D-Bus service for `wallpaperctl query`/`reevaluate`/
 //! `list outputs` (FR-016). See `crates/renderer/README.md` for what this binary does
 //! and doesn't cover yet.
@@ -14,7 +14,7 @@ use pack_loader::Registry;
 use renderer::dbus_service::{self, DaemonInterface};
 use renderer::portal_location::{self, PortalEvent};
 use renderer::surface::WallpaperDaemon;
-use renderer::{effective_location, LocationMode, LocationSource, RendererConfig};
+use renderer::{effective_location, LocationMode, LocationConfigEntry, RendererConfig};
 
 fn main() {
     tracing_subscriber::fmt::init();
@@ -36,11 +36,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let pack_registry = Registry::open().map_err(|e| format!("pack registry: {e}"))?;
     let renderer_config_store = RendererConfig::open()?;
     let renderer_config = RendererConfig::load(&renderer_config_store);
-    let location_store = LocationSource::open()?;
-    let initial_location_entry = LocationSource::load(&location_store);
+    let location_store = LocationConfigEntry::open()?;
+    let initial_location_entry = LocationConfigEntry::load(&location_store);
     // spec 6 Cross-Spec Dependency (plan.md): scheduling reads the *effective* location
     // — the resolved automatic value when automatic mode is active, falling back to the
-    // manual value — never `LocationSource.location` directly, or automatic mode would
+    // manual value — never `LocationConfigEntry.location` directly, or automatic mode would
     // be silently ignored by actual scheduling even though the config value is
     // correctly persisted.
     let location = effective_location(&initial_location_entry);
@@ -56,7 +56,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut daemon = WallpaperDaemon::new(&globals, &qh, pack_registry, renderer_config, location)?;
     daemon.set_loop_handle(event_loop.handle());
 
-    // Live config-watch (T028/T033/T050): a `RendererConfig`/`LocationSource` change
+    // Live config-watch (T028/T033/T050): a `RendererConfig`/`LocationConfigEntry` change
     // written by `wallpaperctl` is picked up without restarting this daemon — each
     // watch feeds `Coalescer` (FR-014's 2s debounce) via `on_renderer_config_changed`/
     // `on_location_changed`, which also reschedules the idle-wait timer below so the
@@ -104,7 +104,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             let location_store = location_store.clone();
             move |event, _, daemon: &mut WallpaperDaemon| {
                 let calloop::channel::Event::Msg(portal_event) = event else { return };
-                let mut entry = LocationSource::load(&location_store);
+                let mut entry = LocationConfigEntry::load(&location_store);
                 match portal_event {
                     PortalEvent::Reading(reading) => portal_location::apply_reading(&mut entry, reading),
                     PortalEvent::Failure(reason) => portal_location::apply_failure(&mut entry, reason),
@@ -126,7 +126,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     event_loop
         .handle()
         .insert_source(location_watch, move |(config, _changed_keys), _, daemon: &mut WallpaperDaemon| {
-            let entry = LocationSource::load(&config);
+            let entry = LocationConfigEntry::load(&config);
             spawn_portal_task_if_needed(entry.mode, &mut portal_task_spawned);
             daemon.on_location_changed(effective_location(&entry));
         })

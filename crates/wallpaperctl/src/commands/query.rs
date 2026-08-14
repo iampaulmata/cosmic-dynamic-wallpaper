@@ -1,6 +1,6 @@
 //! `wallpaperctl query [--output <id>]` (FR-009).
 
-use crate::dbus_client::{DbusClient, QueryEntry};
+use wallpaper_ipc::{DbusClient, QueryEntry};
 use crate::error::CliError;
 use crate::output;
 
@@ -38,7 +38,7 @@ mod tests {
     use super::*;
 
     /// Scenario 3: querying with no daemon running fails immediately with a clear
-    /// error rather than hanging — real, not mocked (see dbus_client.rs's rationale).
+    /// error rather than hanging — real, not mocked (see wallpaper_ipc::dbus_client's rationale).
     #[test]
     fn fails_fast_without_a_daemon() {
         if zbus::blocking::Connection::session().is_err() {

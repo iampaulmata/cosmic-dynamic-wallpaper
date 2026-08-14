@@ -5,7 +5,7 @@
 use pack_loader::Registry;
 use serde::Serialize;
 
-use crate::dbus_client::DbusClient;
+use wallpaper_ipc::DbusClient;
 use crate::error::CliError;
 use crate::output;
 
@@ -89,7 +89,7 @@ mod tests {
 
     /// Scenario 4: `list outputs` fails fast with `DaemonUnreachable` when no daemon is
     /// running — real (not mocked), since no service is registered in any test
-    /// environment (see dbus_client.rs's own test for the rationale). Skips (rather
+    /// environment (see wallpaper_ipc::dbus_client's own test for the rationale). Skips (rather
     /// than asserting) only if this host has no session bus at all to connect to.
     #[test]
     fn list_outputs_fails_fast_without_a_daemon() {

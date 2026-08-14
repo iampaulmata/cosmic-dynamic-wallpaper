@@ -19,8 +19,8 @@ pub mod scheduler_bridge;
 pub mod surface;
 pub mod texture;
 
-pub use config::{effective_location, AutomaticStatus, LocationMode, LocationSource, LOCATION_CONFIG_ID, RENDERER_CONFIG_ID};
+pub use config::{effective_location, LocationConfigEntry, LocationMode, ResolutionStatus, LOCATION_CONFIG_ID};
 pub use crossfade::CrossfadeTransition;
 pub use dbus_types::QueryResponse;
 pub use error::RendererError;
-pub use output::{effective_pack, resolve_assignment, IdleWaitState, OutputAssignment, OutputId, RendererConfig, RendererState};
+pub use output::{effective_pack, resolve_assignment, IdleWaitState, OutputAssignment, OutputId, RendererConfig, RendererState, RENDERER_CONFIG_ID};

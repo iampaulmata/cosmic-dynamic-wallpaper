@@ -1,0 +1,26 @@
+[package]
+name = "wallpaper-settings"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Standalone libcosmic settings GUI for the dynamic wallpaper daemon"
+rust-version = "1.97"
+
+[[bin]]
+name = "wallpaper-settings"
+path = "src/main.rs"
+
+[dependencies]
+schedule-engine = { path = "../schedule-engine" }
+pack-loader = { path = "../pack-loader" }
+wallpaper-ipc = { path = "../wallpaper-ipc" }
+# Same git pin as cosmic-config elsewhere in this workspace (spec 7 research.md R1) —
+# constitution Principle IX requires any settings GUI to use libcosmic widgets/theme
+# tokens, not GTK/Qt/a raw web view. Deliberately NOT a dependency on crates/renderer
+# (plan.md Constitution Check finding 1) — this crate never links wgpu/
+# smithay-client-toolkit/wayland-client.
+libcosmic = { git = "https://github.com/pop-os/libcosmic", features = ["wgpu", "wayland", "winit", "tokio", "xdg-portal", "a11y", "multi-window"] }
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"

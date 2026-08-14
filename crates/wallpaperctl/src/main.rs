@@ -5,7 +5,6 @@
 
 mod commands;
 mod config;
-mod dbus_client;
 mod error;
 mod output;
 mod pack_ref;
@@ -89,6 +88,9 @@ enum LocationAction {
     Clear,
     /// Enable automatic location via the portal (spec 6 FR-001/002/003). Idempotent.
     Auto,
+    /// Enable IP-geolocation via a bundled offline database (spec 7 FR-012/013/014).
+    /// Idempotent.
+    Ip,
     /// Switch back to manual mode using whatever value is already stored, no re-entry
     /// required (spec 6 FR-007/009).
     Manual,
@@ -152,6 +154,7 @@ fn run(cli: Cli) -> Result<String, CliError> {
                 }
                 LocationAction::Clear => commands::location::clear(&config, json),
                 LocationAction::Auto => commands::location::auto(&config, json),
+                LocationAction::Ip => commands::location::ip(&config, json),
                 LocationAction::Manual => commands::location::manual(&config, json),
             }
         }

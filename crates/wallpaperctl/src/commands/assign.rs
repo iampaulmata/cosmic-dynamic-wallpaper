@@ -7,7 +7,7 @@ use cosmic_config::Config;
 use pack_loader::Registry;
 
 use crate::config::RendererConfig;
-use crate::dbus_client::DbusClient;
+use wallpaper_ipc::DbusClient;
 use crate::error::CliError;
 use crate::output::{self, Ack};
 use crate::pack_ref::find_registered;

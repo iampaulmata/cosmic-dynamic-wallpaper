@@ -9,6 +9,7 @@ rust-version = "1.97"
 [dependencies]
 schedule-engine = { path = "../schedule-engine" }
 pack-loader = { path = "../pack-loader" }
+wallpaper-ipc = { path = "../wallpaper-ipc" }
 serde = { version = "1.0", features = ["derive"] }
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 cosmic-config = { git = "https://github.com/pop-os/libcosmic", default-features = false, features = ["macro", "calloop"] }
@@ -33,9 +34,18 @@ ashpd = { version = "0.13", default-features = false, features = ["location", "a
 async-io = "2"
 futures-lite = "2"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
+# IP-geolocation (spec 7 US3, research.md R3/R4): maxminddb reads the bundled DB-IP
+# Lite .mmdb database; stunclient discovers this machine's own public IP (the one
+# external touchpoint an offline database can't supply on its own).
+maxminddb = "0.30"
+stunclient = "0.4"
 
 [dev-dependencies]
 tempfile = "3.27"
+# Mock hotplug test harness only (spec 7 US4, research.md R7) — a minimal in-process
+# fake Wayland compositor driving the real, unmodified SCTK client code under test.
+# Never shipped in the wallpaperd binary.
+wayland-server = "0.31"
 
 [lints.clippy]
 unwrap_used = "deny"
@@ -52,6 +62,11 @@ your location, or a fully custom location-free manual schedule, crossfading smoo
 images. Ships wallpaperd (the renderer daemon) and wallpaperctl (its CLI control surface), \
 plus a systemd user unit so wallpaperd autostarts with your COSMIC session."""
 depends = "$auto"
+# Soft dependency only (spec 6 research.md R2, applied here per spec 7 research.md R8):
+# automatic portal-based location (spec 6) works correctly without GeoClue2 installed
+# (FR-005's graceful degrade), but a fresh install offers it out of the box on distros
+# that carry the package.
+recommends = "geoclue-2.0"
 section = "x11"
 priority = "optional"
 assets = [

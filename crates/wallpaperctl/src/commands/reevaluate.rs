@@ -1,6 +1,6 @@
 //! `wallpaperctl reevaluate [--output <id>]` (FR-010).
 
-use crate::dbus_client::DbusClient;
+use wallpaper_ipc::DbusClient;
 use crate::error::CliError;
 use crate::output::{self, Ack};
 
