@@ -5,7 +5,7 @@
 use cosmic_config::Config;
 use schedule_engine::Location;
 use serde::Serialize;
-use wallpaper_ipc::{effective_location, LocationConfigEntry, LocationMode, ResolutionStatus};
+use wallpaper_ipc::{effective_location, LocationConfigEntry, LocationMode, ResolutionStatus, IP_GEOLOCATION_DISCLOSURE};
 
 use crate::error::CliError;
 use crate::output::{self, Ack};
@@ -59,12 +59,6 @@ fn current_status(state: &LocationConfigEntry) -> ResolutionStatus {
         LocationMode::IpGeolocation => state.ip_status.clone(),
     }
 }
-
-/// STUN-disclosure copy FR-014 requires before a user opts into IP-geolocation
-/// (spec 7 research.md R4) — surfaced directly in `location ip`'s own output and
-/// reused by the GUI's Location page (T054) so the two control surfaces show identical
-/// wording.
-pub const IP_GEOLOCATION_DISCLOSURE: &str = "uses a bundled offline database for the location lookup; briefly asks a STUN server what this machine's public IP address is, since that's not something a bundled database can tell you on its own";
 
 #[derive(Debug, Serialize)]
 struct LocationGetResponse {
@@ -153,7 +147,7 @@ pub fn ip(config: &Config, json: bool) -> Result<String, CliError> {
     let mut state = LocationConfigEntry::load(config);
     state.mode = LocationMode::IpGeolocation;
     state.save(config)?;
-    Ok(output::render(json, &Ack::ok(), || format!("IP-geolocation enabled ({IP_GEOLOCATION_DISCLOSURE}) — resolving…")))
+    Ok(output::render(json, &Ack::ok(), || format!("Enabled — {IP_GEOLOCATION_DISCLOSURE} Resolving…")))
 }
 
 /// Switches back to manual mode using whatever value is already stored in `location`,

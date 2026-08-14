@@ -59,7 +59,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
         }
     }
     let refresh = widget::button::standard("Refresh").on_press(Message::Refresh);
-    widget::column::with_capacity(2).push(refresh).push(section).into()
+    widget::scrollable(widget::column::with_capacity(2).push(refresh).push(section)).into()
 }
 
 #[cfg(test)]
