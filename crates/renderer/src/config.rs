@@ -1,13 +1,14 @@
 //! `cosmic-config` reading for [`crate::output::RendererConfig`] and
-//! [`LocationSource`] (FR-007, FR-015, research.md R4/R7), plus [`PendingChange`]
+//! [`LocationSource`] (FR-007, FR-015, research.md R4/R7), plus [`Coalescer`]
 //! coalescing (FR-014).
 //!
 //! **Scope note**: the real daemon watches these entries for live changes via
-//! `cosmic-config`'s `notify`-backed watch mechanism, feeding detected changes into
-//! `Coalescer`'s coalescing. That watch wiring (needs the `calloop` event loop — see
-//! `README.md`) isn't implemented here; what's implemented is everything
-//! watch-independent: reading the current value, and the coalescing logic itself,
-//! which is pure and fully testable without any event loop at all.
+//! `cosmic-config`'s `notify`-backed watch mechanism (`cosmic_config::calloop::
+//! ConfigWatchSource`, wired into the event loop in `src/bin/wallpaperd.rs`), feeding
+//! detected changes into [`Coalescer`]. This module itself stays event-loop-agnostic:
+//! reading the current value and the coalescing logic are both pure and fully
+//! testable without any event loop at all — everything watch-*dependent* lives in
+//! `wallpaperd.rs`/`surface.rs` instead.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -123,6 +124,13 @@ impl Coalescer {
     pub fn is_pending(&self, output: &OutputId) -> bool {
         self.pending.contains_key(output)
     }
+
+    /// The earliest pending deadline, if any — peeked without draining, so the
+    /// idle-wait timer's wake computation can ensure it fires no later than any
+    /// pending coalesced change, without consuming it (unlike [`Coalescer::due`]).
+    pub fn earliest_pending(&self) -> Option<Instant> {
+        self.pending.values().min().copied()
+    }
 }
 
 #[cfg(test)]
@@ -210,5 +218,22 @@ mod tests {
         let due = coalescer.due(now + REEVALUATION_DEADLINE);
         assert_eq!(due, vec![OutputId::new("DP-3")]);
         assert!(!coalescer.is_pending(&OutputId::new("eDP-1")));
+    }
+
+    /// `earliest_pending` peeks the minimum deadline without draining it — used by the
+    /// idle-wait timer's wake computation.
+    #[test]
+    fn earliest_pending_reports_the_soonest_deadline_without_draining() {
+        let mut coalescer = Coalescer::new();
+        assert_eq!(coalescer.earliest_pending(), None);
+
+        let now = Instant::now();
+        coalescer.record_change(OutputId::new("DP-3"), now + Duration::from_secs(5));
+        coalescer.record_change(OutputId::new("eDP-1"), now);
+
+        assert_eq!(coalescer.earliest_pending(), Some(now + REEVALUATION_DEADLINE));
+        // Peeking doesn't consume — both entries are still pending afterward.
+        assert!(coalescer.is_pending(&OutputId::new("DP-3")));
+        assert!(coalescer.is_pending(&OutputId::new("eDP-1")));
     }
 }

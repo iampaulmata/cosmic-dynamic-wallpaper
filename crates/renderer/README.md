@@ -31,13 +31,30 @@ progress 0.0/0.5/1.0.
   demand, and draws/presents frames — including the frame-callback-paced draw loop
   during an active crossfade (subscribes only while animating, per FR-003/FR-004).
 - **`config.rs`** — reading `RendererConfig` + spec 4's `LocationSource` via
-  `cosmic-config`, and `Coalescer` (FR-014's debounce).
+  `cosmic-config`, and `Coalescer` (FR-014's debounce), including `earliest_pending`
+  (peeked, not drained — feeds the idle-wait timer's wake computation).
 - **`scheduler_bridge.rs`** — ties assignment + a loaded pack + location into spec 1's
   `ScheduleQueryResult`, with the location-required-panic fix described below.
 - **`dbus_types.rs`** — `QueryResponse`, the pure data-mapping half of spec 4's D-Bus
   interface.
 - **`src/bin/wallpaperd.rs`** — the actual daemon binary: connects to Wayland, loads
-  config, runs the `calloop` event loop.
+  config, runs the `calloop` event loop, and wires up the two live `cosmic-config`
+  watches below.
+- **Precise idle-wait timer** (T021) — `WallpaperDaemon::reschedule_idle_timer`
+  replaces every managed output on a flat 5s poll with a single `calloop`
+  `Timer::from_deadline` computed from `next_wake()` (the real next-transition
+  instant) and `Coalescer::earliest_pending()` (so a pending config change is never
+  serviced later than its own 2s deadline), rescheduled after every timer fire, every
+  live config/location change, and every output's first `configure`. Live-verified:
+  logged deadlines track real solar-schedule instants tens of minutes out, not a flat
+  5s/60s cadence.
+- **Live config-watch** (T028/T033/T050) — `cosmic_config::calloop::ConfigWatchSource`
+  (wired in `wallpaperd.rs`) watches both `RendererConfig` and `LocationSource` for
+  changes, feeding `Coalescer` via `WallpaperDaemon::on_renderer_config_changed`/
+  `on_location_changed`. A `wallpaperctl assign`/`location set` while `wallpaperd` is
+  running now takes effect within ~2s with **no restart** — live-verified against a
+  real two-output session (assigning a pack to a previously-unassigned output, and
+  changing location, both observed taking effect without restarting the daemon).
 
 **Real cross-spec bug found and fixed** in `scheduler_bridge.rs`: spec 1's
 `ValidatedPack::query` panics if called with `location: None` on a solar-anchored pack
@@ -67,19 +84,6 @@ once a specific serialization format's own semantics enter the picture.
 
 ## What's simplified or not implemented
 
-- **Idle-wait timer**: `wallpaperd.rs` currently re-evaluates every managed output on a
-  flat 5-second `calloop` timer tick, rather than computing the exact next-transition
-  instant per output (`WallpaperDaemon::next_wake` exists and is correct, just not yet
-  wired into a precise single-shot timer per output). Functionally correct (FR-003's
-  *result* — idle between transitions, no per-frame redraw — holds either way, verified
-  during live testing) but not maximally efficient; a real T021 finishes this by
-  scheduling to the exact instant instead of polling every 5s.
-- **Live config-watch**: `RendererConfig`/`LocationSource` are read once at startup
-  (and via `reload_all_assignments()`, which nothing calls yet) rather than watched via
-  `cosmic-config`'s `notify`-backed mechanism (T028's watch half, T050). A config
-  change while `wallpaperd` is running today needs a restart to take effect.
-  `Coalescer` (FR-014's debounce logic) is implemented and tested but not yet wired to
-  a live watch source.
 - **Hotplug resize/rescale**: `OutputHandler::update_output` is a no-op (T040) — a
   runtime resolution/scale change isn't reconfigured without a restart. `new_output`/
   `output_destroyed` (connect/disconnect) *are* wired (T037-T039's core), verified
@@ -118,7 +122,7 @@ should already have the real `-dev` package and need no workaround.
 ## Testing
 
 ```sh
-cargo test --package renderer            # 26 tests: pure logic + a real offscreen GPU render
+cargo test --package renderer            # 27 tests: pure logic + a real offscreen GPU render
 cargo llvm-cov --package renderer --summary-only
 ```
 
