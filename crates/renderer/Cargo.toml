@@ -83,6 +83,12 @@ priority = "optional"
 assets = [
     ["target/release/wallpaperd", "usr/bin/", "755"],
     ["target/release/wallpaperctl", "usr/bin/", "755"],
+    # The GUI (spec 7 US1) — real gap found and fixed 2026-08-14 (release-prep pass):
+    # this binary and its .desktop entry were missing from the package entirely, so
+    # wallpaper-settings never actually appeared in an app launcher despite the root
+    # README describing that workflow.
+    ["target/release/wallpaper-settings", "usr/bin/", "755"],
+    ["../../packaging/desktop/com.system76.CosmicWallpaperSettings.desktop", "usr/share/applications/com.system76.CosmicWallpaperSettings.desktop", "644"],
     ["../../packaging/systemd/wallpaperd.service", "usr/lib/systemd/user/wallpaperd.service", "644"],
     # Bundled starter pack (spec 7 US2, FR-008) — static, checked-in assets (T043,
     # tools/generate-starter-pack). `wallpaperd`'s own first-run self-registration
