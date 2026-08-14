@@ -1,0 +1,7 @@
+#!/bin/sh
+set -e
+# No config to remove — this package introduces no cosmic-config entries of its own
+# (data-model.md), and any user pack registry / assignment data (specs 2-3) is left alone
+# on purge, matching Debian convention that a package purge removes the package's own files,
+# not a user's data.
+exit 0

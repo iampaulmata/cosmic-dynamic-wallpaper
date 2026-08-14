@@ -44,9 +44,12 @@ See [`docs/PRD.md`](docs/PRD.md) for the full requirements this project is scope
 
 This project is under active, spec-driven development using [GitHub Spec
 Kit](https://github.com/github/spec-kit) — every feature is written up as a spec, planned,
-and broken into tasks under [`specs/`](specs/) before implementation lands. Specs 1, 2, 3, and
-4 are fully implemented and tested, with spec 3's Wayland/GPU rendering live-verified against
-a real COSMIC session (including multi-output, hotplug, and fractional-scale handling). A real
+and broken into tasks under [`specs/`](specs/) before implementation lands. Specs 1–5 are
+fully implemented and tested, with spec 3's Wayland/GPU rendering live-verified against a
+real COSMIC session (including multi-output, hotplug, and fractional-scale handling) and
+spec 5's systemd unit + Debian packaging live-verified against the same session (autostart,
+clean stop, bounded crash-restart all demonstrated live — see spec 5's tasks.md for the
+real `StartLimitIntervalSec` placement bug found and fixed during that verification). A real
 image pack applied and crossfaded on-screen via `wallpaperctl` + `wallpaperd`, end to end.
 
 | # | Spec | Status |
@@ -55,8 +58,9 @@ image pack applied and crossfaded on-screen via `wallpaperctl` + `wallpaperd`, e
 | 2 | [Pack format & loading](specs/002-pack-format-loading/) — manifest schema, pack directory loading, `cosmic-config` registry | **Implemented** — `crates/pack-loader` |
 | 3 | [Renderer](specs/003-wallpaper-renderer/) — Wayland layer-shell client, GPU crossfade, multi-output | **Implemented, live-verified** — `crates/renderer` (`wallpaperd` binary). Config is live-watched (no restart needed), the idle-wait timer is precise (schedule-driven, not a flat poll), the live D-Bus service backs `wallpaperctl query`/`reevaluate`/`list outputs`, all four scaling modes (Fill/Fit/Stretch/Center) are implemented and pixel-verified, and hotplug resize/rescale + fractional-scale are wired up (this dev environment's real `cosmic-comp` does support `wp_fractional_scale_v1` — live-verified). See [`crates/renderer/README.md`](crates/renderer/README.md) for the couple of caveats that remain unverified against real hotplug/resize events (no way to trigger those on this dev machine). |
 | 4 | [CLI control surface](specs/004-cli-control-surface/) | **Implemented** — `crates/wallpaperctl` (binary: `wallpaperctl`) |
-| 5 | Session integration & packaging | Not started |
-| 6 | Location portal integration | Not started |
+| 5 | [Session integration & packaging](specs/005-session-integration-packaging/) — systemd user unit, Debian package | **Implemented, live-verified** — [`packaging/`](packaging/). Autostart/clean-stop/bounded-crash-restart all demonstrated live via a local dry run; `cosmic-bg` confirmed to never double-render (it's unconditionally spawned by `cosmic-session` with no way for any package to disable it — `wallpaperd`'s own exclusive, opaque background surface is what actually makes it invisible, so install/uninstall need no `cosmic-bg`-specific logic at all). The real `.deb` (`cargo deb -p renderer`) builds and its contents/maintainer-scripts verified; the actual `sudo apt install`/`apt remove` cycle is the one step in this repo that needs a real interactive `sudo` session, so it's a manual step for you to run — see `specs/005-session-integration-packaging/quickstart.md` step 5. |
+| 6 | [Location portal integration](specs/006-location-portal-integration/) | Planned, not yet implemented — see `specs/006-location-portal-integration/tasks.md` |
+| 7 | [V1 completion](specs/007-v1-completion/) — GUI, starter pack, IP-geolocation fallback, gap closure | Planned, not yet implemented — see `specs/007-v1-completion/tasks.md` |
 
 The project's governing principles — exclusive layer-shell ownership, Wayland-native
 rendering with no X11 fallback, GPU-accelerated crossfade, `cosmic-config`-only persistence,
@@ -82,18 +86,23 @@ for the exact shape.
 
 ### Running it today
 
+**Packaged (recommended, spec 5)**: build and install the `.deb` — see
+[`packaging/`](packaging/) and `specs/005-session-integration-packaging/quickstart.md`.
+`wallpaperd` then autostarts with your COSMIC session via the bundled systemd user unit.
+
+**From source, for development**:
+
 1. Author a pack manifest (TOML) pointing at a directory of images, or use a zero-config
    directory of statically-named images.
 2. `wallpaperctl register <path-to-pack>`, then `wallpaperctl assign --output <id> <path>`.
 3. `wallpaperctl location set <lat> <lon>` if the pack uses solar anchors.
-4. Run `wallpaperd` (it reads config once at startup — restart it after further config
-   changes, since live-reload isn't wired up yet).
+4. Run `wallpaperd` — config changes take effect live (no restart needed, spec 3's config
+   watch).
 
 ## Contributing
 
-Not yet open for external contribution while spec 3's remaining gaps and specs 5-6 are still
-being worked through. Build instructions and toolchain requirements live in each crate's own
-README under `crates/`.
+Not yet open for external contribution while specs 6–7 are still being worked through. Build
+instructions and toolchain requirements live in each crate's own README under `crates/`.
 
 ## License
 

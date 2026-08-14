@@ -31,3 +31,23 @@ tempfile = "3.27"
 [lints.clippy]
 unwrap_used = "deny"
 expect_used = "deny"
+
+[package.metadata.deb]
+name = "dynamic-wallpaper"
+maintainer = "iampaulmata <paul.mata42@gmail.com>"
+copyright = "2026, iampaulmata <paul.mata42@gmail.com>"
+extended-description = """\
+A from-scratch, COSMIC-native dynamic wallpaper daemon. Rotates wallpapers across the day \
+following real solar events (sunrise, sunset, civil/astronomical twilight, solar noon) for \
+your location, or a fully custom location-free manual schedule, crossfading smoothly between \
+images. Ships wallpaperd (the renderer daemon) and wallpaperctl (its CLI control surface), \
+plus a systemd user unit so wallpaperd autostarts with your COSMIC session."""
+depends = "$auto"
+section = "x11"
+priority = "optional"
+assets = [
+    ["target/release/wallpaperd", "usr/bin/", "755"],
+    ["target/release/wallpaperctl", "usr/bin/", "755"],
+    ["../../packaging/systemd/wallpaperd.service", "usr/lib/systemd/user/wallpaperd.service", "644"],
+]
+maintainer-scripts = "../../packaging/debian"
