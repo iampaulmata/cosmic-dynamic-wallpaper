@@ -23,6 +23,7 @@ use smithay_client_toolkit::{
         self,
         timer::{TimeoutAction, Timer},
     },
+    reexports::protocols::wp::fractional_scale::v1::client::{wp_fractional_scale_manager_v1, wp_fractional_scale_v1},
     reexports::protocols::wp::viewporter::client::{wp_viewport, wp_viewporter},
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
@@ -34,7 +35,7 @@ use smithay_client_toolkit::{
 use wayland_client::{
     delegate_noop,
     protocol::{wl_output, wl_surface},
-    Connection, Proxy, QueueHandle,
+    Connection, Dispatch, Proxy, QueueHandle,
 };
 
 use pack_loader::{Color, LoadedPack, Registry, ScalingMode};
@@ -60,6 +61,21 @@ struct WallpaperOutput {
     wl_output: wl_output::WlOutput,
     layer: LayerSurface,
     viewport: wp_viewport::WpViewport,
+    /// Kept alive for the `preferred_scale` event stream (T040); unlike `viewport`
+    /// this can't be `delegate_noop!`'d — see [`Dispatch<WpFractionalScaleV1, _>`]'s
+    /// impl below. `None` if the compositor doesn't advertise
+    /// `wp_fractional_scale_manager_v1` at all (an optional/staging protocol —
+    /// unlike `wl_compositor`/layer-shell/`wp_viewporter`, its absence degrades this
+    /// one signal rather than failing the whole daemon to start).
+    fractional_scale: Option<wp_fractional_scale_v1::WpFractionalScaleV1>,
+    /// The last `preferred_scale` reported for this output, 120ths-of-integer per the
+    /// protocol's own convention (`120` = 1×, `180` = 1.5×). `None` until the
+    /// compositor sends a first event — this daemon doesn't currently act on the
+    /// value beyond logging it (see `update_output`'s doc for why: buffer-resolution
+    /// correctness for a fractional-scale change flows through a fresh
+    /// `LayerSurfaceConfigure` instead, per this Wayland surface's own convention of
+    /// receiving physical pixel sizes there).
+    preferred_scale: Option<u32>,
     wgpu_surface: Option<wgpu::Surface<'static>>,
     size: Option<(u32, u32)>,
     loaded_pack: Option<LoadedPack>,
@@ -79,6 +95,9 @@ pub struct WallpaperDaemon {
     compositor_state: CompositorState,
     layer_shell: LayerShell,
     viewporter: wp_viewporter::WpViewporter,
+    /// `None` if the compositor doesn't advertise this optional/staging protocol —
+    /// see [`WallpaperOutput::fractional_scale`]'s doc for the containment posture.
+    fractional_scale_manager: Option<wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1>,
     qh: QueueHandle<Self>,
     instance: wgpu::Instance,
     gpu: Option<GpuContext>,
@@ -131,6 +150,16 @@ impl WallpaperDaemon {
         let viewporter: wp_viewporter::WpViewporter = globals
             .bind(qh, 1..=1, ())
             .map_err(|e| RendererError::OutputProtocolError { reason: format!("wp_viewporter: {e}") })?;
+        // Optional/staging protocol (T040) — logged and degraded, not fatal, if the
+        // compositor doesn't advertise it (see WallpaperOutput::fractional_scale's doc).
+        let fractional_scale_manager: Option<wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1> =
+            match globals.bind(qh, 1..=1, ()) {
+                Ok(manager) => Some(manager),
+                Err(e) => {
+                    tracing::warn!(reason = %e, "wp_fractional_scale_manager_v1 unavailable — fractional-scale-only changes won't be detected without a restart, everything else is unaffected");
+                    None
+                }
+            };
 
         Ok(Self {
             registry_state: RegistryState::new(globals),
@@ -138,6 +167,7 @@ impl WallpaperDaemon {
             compositor_state,
             layer_shell,
             viewporter,
+            fractional_scale_manager,
             qh: qh.clone(),
             instance: crate::gpu::create_instance(),
             gpu: None,
@@ -173,12 +203,15 @@ impl WallpaperDaemon {
         layer.commit();
 
         let viewport = self.viewporter.get_viewport(&wl_surface, &self.qh, ());
+        let fractional_scale = self.fractional_scale_manager.as_ref().map(|manager| manager.get_fractional_scale(&wl_surface, &self.qh, ()));
 
         self.outputs.push(WallpaperOutput {
             id,
             wl_output,
             layer,
             viewport,
+            fractional_scale,
+            preferred_scale: None,
             wgpu_surface: None,
             size: None,
             loaded_pack: None,
@@ -589,6 +622,62 @@ impl WallpaperDaemon {
     }
 }
 
+impl WallpaperDaemon {
+    /// Reconfigure output `index`'s render state for a new logical size — the shared
+    /// core of both `LayerShellHandler::configure` (layer-surface-geometry-driven)
+    /// and `OutputHandler::update_output` (`wl_output`-metadata-driven, e.g. a
+    /// scale-only change with no fresh layer-surface configure) (T040). Idempotent:
+    /// safe to call with an unchanged size (mirrors `ensure_gpu_surface`'s own
+    /// idempotency); a failure here is contained to this one output (FR-013), never
+    /// propagated to affect others.
+    fn reconfigure_output(&mut self, conn: &Connection, index: usize, new_size: (u32, u32)) {
+        self.outputs[index].size = Some(new_size);
+
+        if let Err(e) = self.ensure_gpu_surface(conn, index) {
+            tracing::error!(output = %self.outputs[index].id, error = %e, "GPU surface setup failed for this output");
+            return;
+        }
+        // `ensure_gpu_surface` succeeding guarantees both of these are `Some` — but
+        // matched with `let-else` rather than `unwrap()` (constitution Principle VIII)
+        // so a future refactor that breaks that invariant fails closed, not by panic.
+        let (Some(gpu), Some(wgpu_surface)) = (self.gpu.as_ref(), self.outputs[index].wgpu_surface.as_ref()) else {
+            tracing::error!(output = %self.outputs[index].id, "GPU surface setup reported success but state is missing — skipping reconfigure");
+            return;
+        };
+
+        let caps = wgpu_surface.get_capabilities(&gpu.adapter);
+        let format = caps.formats[0];
+        let surface_config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format,
+            width: new_size.0,
+            height: new_size.1,
+            present_mode: wgpu::PresentMode::Fifo,
+            alpha_mode: caps.alpha_modes[0],
+            view_formats: vec![],
+            desired_maximum_frame_latency: 2,
+        };
+        wgpu_surface.configure(&gpu.device, &surface_config);
+
+        if self.pipeline.is_none() {
+            if let Some(gpu) = self.gpu.as_ref() {
+                self.pipeline = Some(CrossfadePipeline::new(&gpu.device, format));
+            }
+        }
+
+        if self.outputs[index].loaded_pack.is_none() {
+            self.load_pack_for(index);
+        }
+        self.evaluate_output(index, chrono::Local::now());
+        self.draw(index);
+        // The output's real next-transition instant may have just changed (a newly
+        // (re)configured output starts contributing to `next_wake()` for the first
+        // time, or a resize can change which pack/schedule applies) — resync the
+        // idle-wait timer rather than leaving it on a stale deadline.
+        self.reschedule_idle_timer();
+    }
+}
+
 impl CompositorHandler for WallpaperDaemon {
     fn scale_factor_changed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: i32) {}
     fn frame(&mut self, _: &Connection, _: &QueueHandle<Self>, surface: &wl_surface::WlSurface, _: u32) {
@@ -612,8 +701,21 @@ impl OutputHandler for WallpaperDaemon {
             self.add_output(wl_output, info);
         }
     }
-    fn update_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {
-        // T040 (resize/rescale reconfiguration): not implemented this pass — see README.md.
+    fn update_output(&mut self, conn: &Connection, _: &QueueHandle<Self>, wl_output: wl_output::WlOutput) {
+        // T040: `LayerShellHandler::configure` already handles the common resize case
+        // (a fresh `LayerSurfaceConfigure` isn't gated to first-configure-only) — this
+        // exists specifically for `wl_output`-level metadata changes that don't also
+        // trigger one (e.g. a pure integer-scale change with no logical-size change),
+        // so it only acts when the logical size genuinely differs from what's cached;
+        // the common case is a correct no-op.
+        let Some(index) = self.outputs.iter().position(|o| o.wl_output == wl_output) else { return };
+        let Some(info) = self.output_state.info(&wl_output) else { return };
+        let Some((w, h)) = info.logical_size else { return };
+        let new_size = (w.max(0) as u32, h.max(0) as u32);
+        if self.outputs[index].size != Some(new_size) {
+            tracing::info!(output = %self.outputs[index].id, ?new_size, "output metadata changed logical size — reconfiguring");
+            self.reconfigure_output(conn, index, new_size);
+        }
     }
     fn output_destroyed(&mut self, _: &Connection, _: &QueueHandle<Self>, wl_output: wl_output::WlOutput) {
         self.remove_output(&wl_output);
@@ -627,51 +729,27 @@ impl LayerShellHandler for WallpaperDaemon {
 
     fn configure(&mut self, conn: &Connection, _: &QueueHandle<Self>, layer: &LayerSurface, configure: LayerSurfaceConfigure, _: u32) {
         let Some(index) = self.outputs.iter().position(|o| &o.layer == layer) else { return };
-        let (w, h) = configure.new_size;
-        self.outputs[index].size = Some((w, h));
+        self.reconfigure_output(conn, index, configure.new_size);
+    }
+}
 
-        if let Err(e) = self.ensure_gpu_surface(conn, index) {
-            tracing::error!(output = %self.outputs[index].id, error = %e, "GPU surface setup failed for this output");
-            return;
-        }
-        // `ensure_gpu_surface` succeeding guarantees both of these are `Some` — but
-        // matched with `let-else` rather than `unwrap()` (constitution Principle VIII)
-        // so a future refactor that breaks that invariant fails closed, not by panic.
-        let (Some(gpu), Some(wgpu_surface)) = (self.gpu.as_ref(), self.outputs[index].wgpu_surface.as_ref()) else {
-            tracing::error!(output = %self.outputs[index].id, "GPU surface setup reported success but state is missing — skipping configure");
-            return;
-        };
-
-        let caps = wgpu_surface.get_capabilities(&gpu.adapter);
-        let format = caps.formats[0];
-        let surface_config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format,
-            width: w,
-            height: h,
-            present_mode: wgpu::PresentMode::Fifo,
-            alpha_mode: caps.alpha_modes[0],
-            view_formats: vec![],
-            desired_maximum_frame_latency: 2,
-        };
-        wgpu_surface.configure(&gpu.device, &surface_config);
-
-        if self.pipeline.is_none() {
-            if let Some(gpu) = self.gpu.as_ref() {
-                self.pipeline = Some(CrossfadePipeline::new(&gpu.device, format));
-            }
-        }
-
-        if self.outputs[index].loaded_pack.is_none() {
-            self.load_pack_for(index);
-        }
-        self.evaluate_output(index, chrono::Local::now());
-        self.draw(index);
-        // This output's pack (and therefore its real next-transition instant) may
-        // have just become known for the first time — resync the idle-wait timer so
-        // it doesn't keep running on the startup fallback deadline (`next_wake_instant`
-        // computed before any output existed) until that fallback happens to fire.
-        self.reschedule_idle_timer();
+/// `wp_fractional_scale_v1` (unlike `wp_viewporter`/`wp_viewport`, both purely
+/// imperative "set and forget" objects safely `delegate_noop!`'d above) emits a real
+/// `preferred_scale` event the client must handle — this is that real `Dispatch` impl
+/// (T040).
+impl Dispatch<wp_fractional_scale_v1::WpFractionalScaleV1, ()> for WallpaperDaemon {
+    fn event(
+        state: &mut Self,
+        proxy: &wp_fractional_scale_v1::WpFractionalScaleV1,
+        event: wp_fractional_scale_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let wp_fractional_scale_v1::Event::PreferredScale { scale } = event else { return };
+        let Some(index) = state.outputs.iter().position(|o| o.fractional_scale.as_ref() == Some(proxy)) else { return };
+        state.outputs[index].preferred_scale = Some(scale);
+        tracing::debug!(output = %state.outputs[index].id, scale_120ths = scale, "fractional scale preference changed");
     }
 }
 
@@ -681,6 +759,7 @@ delegate_layer!(WallpaperDaemon);
 delegate_registry!(WallpaperDaemon);
 delegate_noop!(WallpaperDaemon: wp_viewporter::WpViewporter);
 delegate_noop!(WallpaperDaemon: wp_viewport::WpViewport);
+delegate_noop!(WallpaperDaemon: wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1);
 
 impl ProvidesRegistryState for WallpaperDaemon {
     fn registry(&mut self) -> &mut RegistryState {

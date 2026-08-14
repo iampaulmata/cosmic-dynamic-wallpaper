@@ -123,8 +123,23 @@ Fill-mode pack (no regression — `wallpaperctl query` against a live `wallpaper
 matched expected state); a dedicated live Fit/Center pack wasn't set up, but the
 offscreen GPU tests already prove pixel-level correctness for those modes.
 
-See `crates/renderer/README.md` for the current up-to-date breakdown. Only hotplug
-resize/rescale remains from the original 5-gap list.
+Same pass, last: T040 (hotplug resize/rescale + fractional scale) also closed — a
+shared `reconfigure_output` helper factored out of `LayerShellHandler::configure`
+(which already handled the common resize case) is now also called from
+`OutputHandler::update_output` when an output's logical size genuinely changes, and
+`wp_fractional_scale_manager_v1` is bound (soft-optional, degrading to a log line
+rather than failing the daemon if a compositor doesn't support it) with a real
+`Dispatch` impl for its `preferred_scale` event. **Live-verified further than
+expected**: this dev environment's real `cosmic-comp` does implement the protocol —
+real `preferred_scale` events arrived for both managed outputs during manual QA. The
+one honest gap left: the actual resize-triggering branch of `update_output` itself
+isn't live-tested (no way to trigger a real display resolution/scale change on this
+dev machine), same posture as T039's already-documented disconnect caveat.
+
+All 5 of spec 3's originally-documented gaps are now closed as of this follow-up pass
+(2026-08-14, branch `003-close-renderer-gaps`) — see `crates/renderer/README.md` for
+the current, authoritative breakdown of what's implemented vs. what still carries a
+live-verification caveat.
 
 ---
 
@@ -279,15 +294,24 @@ running and unaffected outputs are undisturbed (quickstart.md manual smoke check
 
 ### Implementation for User Story 6
 
-- [~] T037 [US6] Implement SCTK's `OutputHandler` for `new_output`/`output_destroyed`/`update_output` events in `crates/renderer/src/output.rs` (FR-008, research.md R1; depends on T008) — landed in `surface.rs` (alongside the `WallpaperDaemon` it operates on, rather than `output.rs`'s pure types). `new_output`/`output_destroyed` have real logic (`add_output`/`remove_output`, live-verified: `eDP-1` was detected and managed correctly on startup); `update_output` is a documented no-op stub — see T040.
+- [X] T037 [US6] Implement SCTK's `OutputHandler` for `new_output`/`output_destroyed`/`update_output` events in `crates/renderer/src/output.rs` (FR-008, research.md R1; depends on T008) — landed in `surface.rs` (alongside the `WallpaperDaemon` it operates on, rather than `output.rs`'s pure types). `new_output`/`output_destroyed` have real logic (`add_output`/`remove_output`, live-verified: this dev environment now has two real outputs, `eDP-1` + `HDMI-A-1`, both detected and managed correctly on startup — see T039's updated note). `update_output` is also now real (2026-08-14 follow-up pass) — see T040.
 - [X] T038 [US6] On `new_output`: create a `ManagedOutput`, resolve its `OutputAssignment` (FR-009's well-defined-state requirement), and reach a stable state within 2 seconds without disrupting existing outputs (FR-009; depends on T025, T034, T037) — `add_output` creates the layer surface immediately; `resolve_assignment` + texture loading happen in `LayerShellHandler::configure` once the compositor acks the surface — live-verified as effectively immediate (well under the 2s bound) for `eDP-1`.
-- [~] T039 [US6] On `output_destroyed`: release that output's render state, timer, and any in-progress crossfade without affecting other outputs (FR-010; depends on T025, T037) — `remove_output` removes the `WallpaperOutput` from the managed `Vec`, whose `Drop` (layer surface, `wgpu::Surface`, cached textures) releases its resources; not live-tested against a real disconnect event, since this dev environment has only one output to test with (same caveat as T025).
-- [ ] T040 [US6] On `update_output` (resize/rescale): reconfigure that output's `wp_viewporter`/fractional-scale setup and continue rendering correctly at the new resolution/scale without a restart (FR-008 Scenario 3; depends on T013, T037) — genuinely not implemented; `OutputHandler::update_output` is an explicit no-op in `surface.rs`.
+- [~] T039 [US6] On `output_destroyed`: release that output's render state, timer, and any in-progress crossfade without affecting other outputs (FR-010; depends on T025, T037) — `remove_output` removes the `WallpaperOutput` from the managed `Vec`, whose `Drop` (layer surface, `wgpu::Surface`, cached textures) releases its resources. **Updated 2026-08-14**: this dev environment now has two real outputs (`eDP-1` + `HDMI-A-1`), both live-verified managed correctly simultaneously (multi-output is no longer untested) — but a real *disconnect* event specifically still wasn't exercised (no way to physically unplug a display in this session), so that half of this task's caveat still stands.
+- [X] T040 [US6] On `update_output` (resize/rescale): reconfigure that output's `wp_viewporter`/fractional-scale setup and continue rendering correctly at the new resolution/scale without a restart (FR-008 Scenario 3; depends on T013, T037) — implemented 2026-08-14: `update_output` compares the output's current logical size against a new shared `reconfigure_output` helper (factored out of `LayerShellHandler::configure`, which already handled the common resize case — a fresh `LayerSurfaceConfigure` isn't gated to first-configure-only) and reconfigures only when they differ, so a metadata change that doesn't also trigger a fresh `configure` isn't silently dropped. `wp_fractional_scale_manager_v1` is bound (soft-optional — degrades to a log line, not fatal, if unsupported) with a real `Dispatch<WpFractionalScaleV1, _>` for its `preferred_scale` event (unlike `wp_viewporter`, purely imperative and `delegate_noop!`'d). **Live-verified further than expected**: this dev environment's real `cosmic-comp` does implement the protocol — binding succeeded, real `preferred_scale` events (120 = 1×) arrived for both managed outputs. **Honest caveat**: the actual logical-size-change branch of `update_output` itself wasn't exercised against a real resize/rescale event (no way to trigger one on this dev machine's physical displays) — structurally correct and code-reviewed (same FR-013 containment pattern as `configure`), not live-verified, same posture as T039's disconnect caveat.
 - [X] T041 [US6] Implement overlapping-transition supersession — if a new transition trigger fires for an output already mid-crossfade, cleanly cancel the in-progress blend and start the new one rather than stacking (FR-011; depends on T016, T017) — `evaluate_output`'s `already_this_pair` check replaces `CrossfadeTransition` wholesale on a new outgoing/incoming pair, the same mechanism FR-011's own unit tests cover. **One caveat worth flagging**: the per-output texture cache (`HashMap<ImageId, GpuTexture>`) only ever grows — old images' GPU textures aren't evicted when superseded, so a pack that cycles through many distinct images over a long uptime accumulates GPU memory rather than reclaiming it. Not a dangling-resource *bug* (`wgpu`'s own reference counting frees a texture correctly once genuinely dropped) but a real follow-up: this cache needs an eviction policy.
 - [X] T042 [US6] Implement invalid/unreadable-pack degradation — if an assigned pack becomes invalid after assignment, hold that output's last-known-good frame without affecting others (FR-013, constitution Principle VIII; depends on T017, T025) — `load_pack_for` logs and explicitly does *not* clear `loaded_pack` on a `pack_loader::load_pack` failure, leaving the prior (working) pack and its already-uploaded textures in place — exactly "hold the last-known-good frame." Not live-tested against a real mid-session pack corruption, but the code path is direct and was reviewed carefully given constitution Principle VIII's weight.
 - [ ] T043 [P] [US6] Pure unit tests for hotplug lifecycle bookkeeping — new/destroyed output entries added/removed from the managed set — using a fake/mock output source, in `crates/renderer/tests/renderer_state.rs` (depends on T037) — not implemented; `WallpaperOutput`/`WallpaperDaemon` are tightly coupled to real SCTK/`wgpu` types with no fake output source to test lifecycle bookkeeping against in isolation.
 
-**Checkpoint**: Hotplug *connect* (T038) is implemented and live-verified; *disconnect* (T039) and transition/pack-failure containment (T041, T042) are implemented and code-reviewed but not live-tested against real hotplug/failure events in this single-output, single-pack-validity dev environment. Resize/rescale (T040) and a mock-based hotplug test harness (T043) remain genuinely unimplemented.
+**Checkpoint**: Hotplug *connect* (T038) is implemented and live-verified — as of the
+2026-08-14 follow-up pass, against a genuinely multi-output session (`eDP-1` +
+`HDMI-A-1`), not just a single output. *Disconnect* (T039) and transition/pack-failure
+containment (T041, T042) are implemented and code-reviewed but not live-tested against
+real disconnect/failure events in this dev environment (no way to physically unplug a
+display here). Resize/rescale (T040) is now implemented (same follow-up pass, including
+a working `wp_fractional_scale_v1` binding, live-verified against this dev environment's
+real `cosmic-comp` — see T040's own note) but its logical-size-change branch itself
+isn't live-tested for the same reason (no way to trigger a real resolution/scale
+change here). A mock-based hotplug test harness (T043) remains genuinely unimplemented.
 
 ---
 
