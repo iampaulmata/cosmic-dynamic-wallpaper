@@ -4,12 +4,20 @@
 //! (no photography, no third-party content — spec.md FR-009) spanning a full
 //! solar-anchored day cycle, plus the `manifest.toml` referencing them (spec 2's
 //! existing pack format, reused unchanged — no new pack-format code anywhere). Run
-//! once; its output is checked into `assets/starter-pack/` (T043) and never
-//! regenerated at install/runtime — this binary is not a dependency of `wallpaperd`/
-//! `wallpaperctl`/`wallpaper-settings` (not a workspace member any of them depend on).
+//! once; its own output is not a dependency of `wallpaperd`/`wallpaperctl`/
+//! `wallpaper-settings` at build or runtime.
+//!
+//! **Note**: `assets/starter-pack/` is no longer this tool's own output — it was
+//! deliberately swapped post-launch (2026-08-14) for a hand-authored illustrated
+//! "Mountains" pack the project maintainer supplied directly, which better matches the
+//! project's intended look than the placeholder gradients this tool produces. This
+//! tool is kept as a working fallback-generator (e.g. if the bundled pack's licensing
+//! or sourcing ever needs revisiting), not as the source of the currently-shipped
+//! asset — don't assume re-running it reproduces `assets/starter-pack/`'s current
+//! contents.
 //!
 //! ```sh
-//! cargo run -p generate-starter-pack -- assets/starter-pack
+//! cargo run -p generate-starter-pack -- /some/output/dir
 //! ```
 
 use std::path::{Path, PathBuf};
