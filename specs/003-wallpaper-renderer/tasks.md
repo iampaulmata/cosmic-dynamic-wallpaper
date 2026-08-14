@@ -104,8 +104,27 @@ code, not discovered by a failed build. Live-verified against the real, unmodifi
 error path); idle CPU confirmed genuinely 0% via `/proc/[pid]/stat` deltas (`ps`'s
 lifetime-averaged `%CPU` was misleading right after the GPU/Vulkan startup burst).
 
+Same pass, next: T015's remaining scope (non-Fill scaling modes) also closed —
+`crossfade.rs` gained `fit_uv_transform`/`stretch_uv_transform`/`center_uv_transform`
+plus a `uv_transform` dispatcher, and the shader gained `sample_or_fallback` (a bounds
+check substituting a per-texture `fallback_color` uniform where the transformed UV
+falls outside `[0, 1]` — the actual letterboxing mechanism; `AddressMode::ClampToEdge`
+alone can't express "show a color instead"). **A real bug found by the new GPU pixel
+tests, not the pure-math unit tests**, worth calling out as a general lesson: the
+initial `fit_uv_transform`/`center_uv_transform` reused `fill_uv_transform`'s
+crop-direction formula (only relabeling which axis letterboxes), which is
+self-consistent enough that hand-derived-the-same-wrong-way unit tests still passed —
+but that formula can structurally never produce an out-of-bounds UV, so no
+letterboxing ever actually happened. Only `tests/gpu_render.rs`'s actual offscreen
+pixel readback (expecting `fallback_color` at a known letterboxed coordinate) caught
+it. Fixed with the correct inverse relationship, documented at length in `crossfade.rs`'s
+new `letterbox_scale_offset` doc comment. Live-verified with the real, currently-deployed
+Fill-mode pack (no regression — `wallpaperctl query` against a live `wallpaperd`
+matched expected state); a dedicated live Fit/Center pack wasn't set up, but the
+offscreen GPU tests already prove pixel-level correctness for those modes.
+
 See `crates/renderer/README.md` for the current up-to-date breakdown. Only hotplug
-resize/rescale and non-Fill scaling modes remain from the original 5-gap list.
+resize/rescale remains from the original 5-gap list.
 
 ---
 
@@ -159,7 +178,7 @@ above):
 - [X] T012 [US1] Implement the `raw-window-handle` bridge from SCTK's `wl_surface`/`wl_display` to `wgpu::Surface` creation in `crates/renderer/src/gpu.rs` (research.md R3's flagged integration risk — smoke-test this early; depends on T011) — landed in `surface.rs::ensure_gpu_surface` rather than `gpu.rs`, since it needs the specific output's `LayerSurface`/`Connection`, which `gpu.rs` doesn't otherwise depend on. De-risked *first*, before writing anything else, via a standalone throwaway probe — confirmed working before this crate's real integration was written.
 - [X] T013 [US1] Implement per-output `wlr-layer-shell-unstable-v1` background surface creation (background layer, full-output anchor) plus `wp_viewporter` setup in `crates/renderer/src/surface.rs` (FR-001, constitution Principle I, research.md R1; depends on T008, T012) — accepted by `cosmic-comp` at the real output's resolution (1920x1080) in live testing. Follows `cosmic-bg`'s own proven registry/output/compositor/layer-shell/viewporter setup pattern (same `smithay-client-toolkit` version) — the deliberate divergence is the render path itself: `cosmic-bg` draws CPU-side into an SHM buffer (and has no crossfade at all); this daemon renders via `wgpu` per constitution Principle III.
 - [X] T014 [US1] Implement full-resolution image decode (via `image`) and GPU texture upload via `wgpu::Queue::write_texture` in `crates/renderer/src/texture.rs` (FR-001, research.md R5; depends on T011)
-- [X] T015 [US1] Implement the WGSL two-texture crossfade blend pipeline (vertex/fragment shaders, progress uniform) in `crates/renderer/src/crossfade.rs` (FR-001, FR-002 fixed 45s default; depends on T009, T011) — `shaders/crossfade.wgsl`; pixel-verified exact (not just visually) via `tests/gpu_render.rs`'s offscreen render + readback (progress 0.0/0.5/1.0 all within rounding tolerance of the true blend). Only "Fill" (cover) scaling is implemented — see `crates/renderer/README.md`'s "What's simplified" section for `Fit`/`Stretch`/`Center`.
+- [X] T015 [US1] Implement the WGSL two-texture crossfade blend pipeline (vertex/fragment shaders, progress uniform) in `crates/renderer/src/crossfade.rs` (FR-001, FR-002 fixed 45s default; depends on T009, T011) — `shaders/crossfade.wgsl`; pixel-verified exact (not just visually) via `tests/gpu_render.rs`'s offscreen render + readback (progress 0.0/0.5/1.0 all within rounding tolerance of the true blend). All four `ScalingMode`s (Fill/Fit/Stretch/Center) now implemented (2026-08-14 follow-up pass, see status note at top of this file) — a real math bug in the initial Fit/Center formulas was caught by the GPU pixel test (not the pure unit tests, which were self-consistently wrong the same way), fixed and documented in `crossfade.rs`'s `letterbox_scale_offset`.
 - [X] T016 [US1] Implement the frame-callback-paced draw loop — subscribe to `wl_surface.frame` only during an active `CrossfadeTransition`, recompute progress from `started_at`/`duration` each callback, unsubscribe immediately on completion — in `crates/renderer/src/crossfade.rs` (FR-001, FR-004, constitution Principle II/III; depends on T013, T015) — landed in `surface.rs::draw`/`CompositorHandler::frame` (the frame-callback re-entry point) rather than `crossfade.rs`, since it needs the per-output `WallpaperOutput` state `crossfade.rs` doesn't hold. Live-verified: subscribes only while `CrossfadeTransition::is_complete_at` is false, stops on completion.
 - [X] T017 [US1] Wire spec 1's `ScheduleQueryResult` into transition triggering: when a scheduled transition instant is reached for an output, build a `CrossfadeTransition` from the outgoing/incoming images and hand it to the draw loop, in `crates/renderer/src/crossfade.rs` (FR-001; depends on T014, T016) — landed as `surface.rs::evaluate_output`, calling `scheduler_bridge::evaluate` then building/replacing the output's `CrossfadeTransition`. Live-verified across a real scheduled transition (35s test run spanning a 45s crossfade window, no crash).
 - [X] T018 [US1] Implement the degenerate single-image/static-mode case — no crossfade ever triggers, the one image is simply displayed continuously (spec.md US1 Scenario 3) in `crates/renderer/src/crossfade.rs` (depends on T017) — falls out of spec 1's own `ValidatedPack` contract (`transition: None` always for a static pack) reaching `surface.rs::draw`'s `else if let Some(active_image)` branch (progress pinned to `1.0`, same texture as both "outgoing" and "incoming" — `mix(x, x, p) == x` for any `p`, so no separate static-mode shader path was needed).

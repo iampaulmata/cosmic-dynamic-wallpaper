@@ -19,8 +19,19 @@ progress 0.0/0.5/1.0.
   `cosmic-config` schema `wallpaperctl assign` writes to), and the FR-005/006
   resolution rule (explicit override > toggle > unassigned).
 - **`crossfade.rs`** — `CrossfadeTransition`'s progress math (FR-001/002/004/011) *and*
-  `CrossfadePipeline`, the real two-texture WGSL blend (`shaders/crossfade.wgsl`),
-  "Fill" (cover) scaling per texture. Pixel-verified on real hardware.
+  `CrossfadePipeline`, the real two-texture WGSL blend (`shaders/crossfade.wgsl`), all
+  four `ScalingMode`s — Fill/Fit/Stretch/Center (FR-005), each texture scaled
+  independently per its own pack's `image_scaling`/`fallback_color`. Pixel-verified on
+  real hardware, including Fit/Center's letterboxing (`sample_or_fallback` in the
+  shader, substituting `fallback_color` where the transformed UV falls outside `[0,
+  1]`). **A real bug found by the GPU pixel test, not the pure-math unit tests**: an
+  initial version of `fit_uv_transform`/`center_uv_transform` reused `fill_uv_transform`'s
+  crop-direction formula (self-consistent enough that hand-derived-the-same-wrong-way
+  unit tests still passed), which can structurally never produce an out-of-bounds UV —
+  so no letterboxing ever actually happened. Only the offscreen GPU test (expecting
+  `fallback_color` at a known letterboxed pixel) caught it. Fixed with the correct
+  inverse relationship — see `crossfade.rs`'s `letterbox_scale_offset` doc comment for
+  the full derivation.
 - **`gpu.rs`** — `wgpu` instance/adapter/device setup, automatic Vulkan/GL backend
   selection.
 - **`texture.rs`** — full-resolution image decode (`image` crate) + GPU texture upload.
@@ -106,10 +117,6 @@ once a specific serialization format's own semantics enter the picture.
   structurally but not exercised against a real hotplug event in this pass.
   `wp_fractional_scale_v1` isn't wired either — only `wp_viewporter`'s destination-size
   path, which is enough for integer-scale correctness but not fractional scaling.
-- **Per-image scaling overrides**: only "Fill" (cover) scaling is implemented in the
-  shader; `pack-loader`'s `ScalingMode::Fit`/`Stretch`/`Center` aren't wired into
-  `crossfade.rs`'s UV transform yet (`fill_uv_transform` would need siblings for the
-  other three modes).
 - **Overlapping-transition GPU resource cleanup** (T030): a new `CrossfadeTransition`
   value cleanly *replaces* the old one in this crate's data model (verified, see
   `crossfade.rs`'s tests) and old textures simply stay in the per-output cache for
@@ -134,7 +141,7 @@ should already have the real `-dev` package and need no workaround.
 ## Testing
 
 ```sh
-cargo test --package renderer            # 31 tests: pure logic + a real offscreen GPU render
+cargo test --package renderer            # 43 tests: pure logic + real offscreen GPU renders
 cargo llvm-cov --package renderer --summary-only
 ```
 

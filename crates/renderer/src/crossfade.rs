@@ -6,6 +6,8 @@
 
 use std::time::{Duration, Instant};
 
+use pack_loader::{Color, ScalingMode};
+
 use crate::texture::GpuTexture;
 
 /// The active-transition state for one output (data-model.md `CrossfadeTransition`).
@@ -49,15 +51,31 @@ impl CrossfadeTransition {
     }
 }
 
+// Field order/padding matter here: this must byte-for-byte match `shaders/
+// crossfade.wgsl`'s `Uniforms` struct under WGSL's uniform-address-space layout
+// rules (`vec4<f32>` needs 16-byte alignment, `vec2<f32>` needs 8-byte alignment, and
+// the struct's total size must round up to its largest member's alignment). The two
+// `vec4<f32>` fallback-color fields are placed right after `progress` (with explicit
+// padding to reach the required 16-byte boundary) rather than appended at the end, so
+// the whole layout falls out of simple sequential field placement with no trailing
+// padding — verified byte-for-byte by `tests::uniforms_layout_matches_wgsl_alignment`.
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct Uniforms {
     progress: f32,
-    _pad0: f32,
+    _pad0: [f32; 3],
+    outgoing_fallback: [f32; 4],
+    incoming_fallback: [f32; 4],
     outgoing_scale: [f32; 2],
     outgoing_offset: [f32; 2],
     incoming_scale: [f32; 2],
     incoming_offset: [f32; 2],
+}
+
+/// `pack_loader::Color`'s 0-255 `u8` channels, normalized to WGSL's expected `[0.0,
+/// 1.0]` `vec4<f32>` range.
+fn color_to_f32(c: Color) -> [f32; 4] {
+    [c.r as f32 / 255.0, c.g as f32 / 255.0, c.b as f32 / 255.0, c.a as f32 / 255.0]
 }
 
 /// "Fill" (cover) scaling (FR-005's default): scale/offset such that sampling
@@ -74,6 +92,97 @@ fn fill_uv_transform(image_w: u32, image_h: u32, output_w: u32, output_h: u32) -
         let scale_y = image_aspect / output_aspect;
         ([1.0, scale_y], [0.0, (1.0 - scale_y) / 2.0])
     }
+}
+
+/// "Stretch" scaling: the image is scaled to exactly match the output, aspect ratio
+/// ignored — the fullscreen UV range already spans the whole image 1:1, so this is
+/// the identity transform.
+fn stretch_uv_transform() -> ([f32; 2], [f32; 2]) {
+    ([1.0, 1.0], [0.0, 0.0])
+}
+
+/// Given `frac` (the fraction of the output's extent along one axis that the image
+/// actually occupies once positioned/sized — always centered), the `(scale, offset)`
+/// pair that maps *output* UV to *image* UV on that axis.
+///
+/// This is deliberately the **inverse** relationship of [`fill_uv_transform`]'s: Fill
+/// only ever needs to select a *smaller* sub-range of the image's own UV space (a
+/// crop), so multiplying by a `<= 1.0` scale is enough and the result never leaves
+/// `[0, 1]`. Fit/Center instead need to detect when an *output* pixel falls outside
+/// the region the image actually covers (a letterbar) — which means the transform
+/// must *expand* image-UV beyond `[0, 1]` at the output's edges whenever `frac < 1.0`,
+/// the exact opposite direction. Deriving it: the image covers output-UV range
+/// `[offset_out, offset_out + frac]` where `offset_out = (1 - frac) / 2` (centered);
+/// solving `image_uv = (output_uv - offset_out) / frac` for the linear-map coefficients
+/// gives `scale = 1 / frac`, `offset = -offset_out / frac`. Sanity checks: `frac ==
+/// 1.0` (aspect/size matches exactly) gives the identity `(1.0, 0.0)`; `frac < 1.0`
+/// (image smaller than its output extent) gives `scale > 1.0`, pushing `image_uv`
+/// outside `[0, 1]` for output UVs beyond the covered region — a letterbox; `frac >
+/// 1.0` (image *larger* than its output extent, e.g. Center with an oversized image)
+/// gives `scale < 1.0`, which crops instead — the same general formula handles both
+/// without a separate branch, this is not incidental.
+///
+/// **Found by the offscreen GPU pixel test, not the pure-math unit tests below**: an
+/// earlier version of this function reused `fill_uv_transform`'s crop-direction
+/// formula verbatim for Fit/Center (just relabeling which axis is "letterboxed"),
+/// which is self-consistent enough that pure unit tests checking scale/offset against
+/// hand-derived-the-same-wrong-way expected values still passed — only
+/// `tests/gpu_render.rs`'s actual pixel readback (expecting `fallback_color` at a
+/// letterboxed coordinate) caught that the transformed UV never actually left `[0,
+/// 1]`, because the crop-direction formula can't produce out-of-bounds values at all.
+fn letterbox_scale_offset(frac: f32) -> (f32, f32) {
+    let offset_out = (1.0 - frac) / 2.0;
+    (1.0 / frac, -offset_out / frac)
+}
+
+/// "Fit" scaling: the image is scaled to fit entirely *within* the output (aspect
+/// ratio preserved), letterboxing whichever axis has leftover space. See
+/// [`letterbox_scale_offset`] for the scale/offset derivation.
+fn fit_uv_transform(image_w: u32, image_h: u32, output_w: u32, output_h: u32) -> ([f32; 2], [f32; 2]) {
+    let image_aspect = image_w as f32 / image_h as f32;
+    let output_aspect = output_w as f32 / output_h as f32;
+    if image_aspect > output_aspect {
+        // Image relatively wider than the output: full width, letterbox top/bottom.
+        let (scale_y, offset_y) = letterbox_scale_offset(output_aspect / image_aspect);
+        ([1.0, scale_y], [0.0, offset_y])
+    } else {
+        // Image relatively taller than (or equal to) the output: full height,
+        // letterbox left/right.
+        let (scale_x, offset_x) = letterbox_scale_offset(image_aspect / output_aspect);
+        ([scale_x, 1.0], [offset_x, 0.0])
+    }
+}
+
+/// "Center" scaling: the image is displayed at its native size, centered, with no
+/// scaling at all — `frac` per axis is simply the image's size as a fraction of the
+/// output's size (see [`letterbox_scale_offset`] for the scale/offset derivation).
+/// Unlike Fill/Fit (which always preserve aspect ratio and only ever shrink-to-fit),
+/// an axis where the image is *larger* than the output gets `frac > 1.0`, which
+/// `letterbox_scale_offset`'s general formula correctly turns into a crop (no
+/// special-casing needed here — it falls out of the general rule).
+fn center_uv_transform(image_w: u32, image_h: u32, output_w: u32, output_h: u32) -> ([f32; 2], [f32; 2]) {
+    let (scale_x, offset_x) = letterbox_scale_offset(image_w as f32 / output_w as f32);
+    let (scale_y, offset_y) = letterbox_scale_offset(image_h as f32 / output_h as f32);
+    ([scale_x, scale_y], [offset_x, offset_y])
+}
+
+/// Dispatch to the transform matching `mode` (FR-005).
+fn uv_transform(mode: ScalingMode, image_w: u32, image_h: u32, output_w: u32, output_h: u32) -> ([f32; 2], [f32; 2]) {
+    match mode {
+        ScalingMode::Fill => fill_uv_transform(image_w, image_h, output_w, output_h),
+        ScalingMode::Fit => fit_uv_transform(image_w, image_h, output_w, output_h),
+        ScalingMode::Stretch => stretch_uv_transform(),
+        ScalingMode::Center => center_uv_transform(image_w, image_h, output_w, output_h),
+    }
+}
+
+/// One texture's scaling mode plus the fallback color to show outside its
+/// transformed bounds (Fit/Center letterboxing) — bundled so [`CrossfadePipeline::
+/// render`] takes one parameter per texture instead of two more loose ones.
+#[derive(Debug, Clone, Copy)]
+pub struct ImageScaling {
+    pub mode: ScalingMode,
+    pub fallback_color: Color,
 }
 
 /// The GPU crossfade blend pipeline (T015) — one instance shared across every managed
@@ -159,8 +268,9 @@ impl CrossfadePipeline {
     }
 
     /// Render one frame of the blend between `outgoing` and `incoming` at `progress`
-    /// into `target`, sized `output_size` — both textures use "Fill" (cover) scaling
-    /// against the output (FR-005's default).
+    /// into `target`, sized `output_size` — each texture scaled per its own
+    /// `ImageScaling` (FR-005; independently, since the outgoing/incoming images can
+    /// belong to different packs with different scaling modes).
     #[allow(clippy::too_many_arguments)]
     pub fn render(
         &self,
@@ -168,14 +278,19 @@ impl CrossfadePipeline {
         queue: &wgpu::Queue,
         target: &wgpu::TextureView,
         outgoing: &GpuTexture,
+        outgoing_scaling: ImageScaling,
         incoming: &GpuTexture,
+        incoming_scaling: ImageScaling,
         progress: f32,
         output_size: (u32, u32),
     ) {
-        let (outgoing_scale, outgoing_offset) = fill_uv_transform(outgoing.width, outgoing.height, output_size.0, output_size.1);
-        let (incoming_scale, incoming_offset) = fill_uv_transform(incoming.width, incoming.height, output_size.0, output_size.1);
+        let (outgoing_scale, outgoing_offset) = uv_transform(outgoing_scaling.mode, outgoing.width, outgoing.height, output_size.0, output_size.1);
+        let (incoming_scale, incoming_offset) = uv_transform(incoming_scaling.mode, incoming.width, incoming.height, output_size.0, output_size.1);
+        let outgoing_fallback = color_to_f32(outgoing_scaling.fallback_color);
+        let incoming_fallback = color_to_f32(incoming_scaling.fallback_color);
 
-        let uniforms = Uniforms { progress, _pad0: 0.0, outgoing_scale, outgoing_offset, incoming_scale, incoming_offset };
+        let uniforms =
+            Uniforms { progress, _pad0: [0.0; 3], outgoing_fallback, incoming_fallback, outgoing_scale, outgoing_offset, incoming_scale, incoming_offset };
         let uniform_buffer = wgpu::util::DeviceExt::create_buffer_init(
             device,
             &wgpu::util::BufferInitDescriptor { label: Some("crossfade-uniforms"), contents: bytemuck::bytes_of(&uniforms), usage: wgpu::BufferUsages::UNIFORM },
@@ -299,5 +414,136 @@ mod tests {
         assert!(scale[1] < 1.0);
         assert_eq!(offset[0], 0.0);
         assert!((offset[1] - (1.0 - scale[1]) / 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn stretch_transform_is_always_identity() {
+        assert_eq!(stretch_uv_transform(), ([1.0, 1.0], [0.0, 0.0]));
+    }
+
+    #[test]
+    fn fit_transform_letterboxes_top_bottom_for_a_wider_image() {
+        // A 2:1 image on a 16:9 output is relatively wider — full width, letterbox
+        // top/bottom. Unlike Fill's crop-direction scale (< 1.0), a letterboxed axis's
+        // scale is *> 1.0* here (see `letterbox_scale_offset`'s doc for why) — hand-
+        // computed independent of the implementation: frac = output_aspect/image_aspect
+        // = (1920/1080)/(2000/1000) = 0.888..., scale_y = 1/frac = 1.125, offset_y =
+        // -((1-frac)/2)/frac = -0.0625.
+        let (scale, offset) = fit_uv_transform(2000, 1000, 1920, 1080);
+        assert_eq!(scale[0], 1.0);
+        assert!((scale[1] - 1.125).abs() < 1e-5, "scale[1] = {}", scale[1]);
+        assert_eq!(offset[0], 0.0);
+        assert!((offset[1] - (-0.0625)).abs() < 1e-5, "offset[1] = {}", offset[1]);
+
+        // The transformed UV must actually leave [0, 1] near the output's top/bottom
+        // edges — that's the signal the shader's bounds check substitutes
+        // `fallback_color` on (this is the exact bug a prior, crop-direction version
+        // of this formula had: it was self-consistent with hand-derived-the-same-wrong-
+        // way expected values, but could never produce an out-of-bounds UV at all —
+        // only caught by `tests/gpu_render.rs`'s actual pixel readback).
+        let top_edge_uv = 0.0 * scale[1] + offset[1];
+        let bottom_edge_uv = 1.0 * scale[1] + offset[1];
+        assert!(!(0.0..=1.0).contains(&top_edge_uv), "top edge uv {top_edge_uv} should be out of bounds");
+        assert!(!(0.0..=1.0).contains(&bottom_edge_uv), "bottom edge uv {bottom_edge_uv} should be out of bounds");
+    }
+
+    #[test]
+    fn fit_transform_letterboxes_left_right_for_a_taller_image() {
+        // A 1:1 image on a 16:9 output is relatively taller — full height, letterbox
+        // left/right. frac = image_aspect/output_aspect = 1.0/(1920/1080) = 0.5625,
+        // scale_x = 1/frac = 1.77778, offset_x = -((1-frac)/2)/frac = -0.388889.
+        let (scale, offset) = fit_uv_transform(1000, 1000, 1920, 1080);
+        assert!((scale[0] - 1.777778).abs() < 1e-4, "scale[0] = {}", scale[0]);
+        assert_eq!(scale[1], 1.0);
+        assert!((offset[0] - (-0.388889)).abs() < 1e-4, "offset[0] = {}", offset[0]);
+        assert_eq!(offset[1], 0.0);
+
+        let left_edge_uv = 0.0 * scale[0] + offset[0];
+        let right_edge_uv = 1.0 * scale[0] + offset[0];
+        assert!(!(0.0..=1.0).contains(&left_edge_uv), "left edge uv {left_edge_uv} should be out of bounds");
+        assert!(!(0.0..=1.0).contains(&right_edge_uv), "right edge uv {right_edge_uv} should be out of bounds");
+    }
+
+    #[test]
+    fn fit_transform_is_identity_for_matching_aspect_ratio() {
+        let (scale, offset) = fit_uv_transform(1920, 1080, 1920, 1080);
+        assert_eq!(scale, [1.0, 1.0]);
+        assert_eq!(offset, [0.0, 0.0]);
+    }
+
+    #[test]
+    fn center_transform_is_identity_at_native_size() {
+        let (scale, offset) = center_uv_transform(1920, 1080, 1920, 1080);
+        assert_eq!(scale, [1.0, 1.0]);
+        assert_eq!(offset, [0.0, 0.0]);
+    }
+
+    #[test]
+    fn center_transform_scale_exceeds_one_and_letterboxes_a_smaller_image() {
+        // A 960x540 image (half the output's linear size) at native size on a
+        // 1920x1080 output: frac = 0.5 on both axes, so scale = 1/frac = 2.0 (*not*
+        // 0.5 — the letterbox-detecting scale is the inverse of the image's on-screen
+        // size fraction, see `letterbox_scale_offset`'s doc), offset = -0.5, centered.
+        let (scale, offset) = center_uv_transform(960, 540, 1920, 1080);
+        assert_eq!(scale, [2.0, 2.0]);
+        assert_eq!(offset, [-0.5, -0.5]);
+
+        // The transformed UV must actually leave [0, 1] near the output's edges (the
+        // corner especially) — the shader's cue to substitute `fallback_color`.
+        let corner_uv = 0.0 * scale[0] + offset[0];
+        let center_uv = 0.5 * scale[0] + offset[0];
+        assert!(!(0.0..=1.0).contains(&corner_uv), "corner uv {corner_uv} should be out of bounds");
+        assert!((0.0..=1.0).contains(&center_uv), "center uv {center_uv} should be in bounds");
+    }
+
+    #[test]
+    fn center_transform_scale_is_below_one_and_crops_an_oversized_image() {
+        // A 3840x2160 image (double the output's linear size) at native size on a
+        // 1920x1080 output: frac = 2.0 on both axes, so scale = 1/frac = 0.5 — the same
+        // general formula naturally produces a crop (never leaves [0, 1]) rather than a
+        // letterbox for an oversized image, with no special-casing needed.
+        let (scale, offset) = center_uv_transform(3840, 2160, 1920, 1080);
+        assert_eq!(scale, [0.5, 0.5]);
+        assert_eq!(offset, [0.25, 0.25]);
+
+        let left_edge_uv = 0.0 * scale[0] + offset[0];
+        let right_edge_uv = 1.0 * scale[0] + offset[0];
+        assert!((0.0..=1.0).contains(&left_edge_uv), "left edge uv {left_edge_uv} should stay in bounds (crop, not letterbox)");
+        assert!((0.0..=1.0).contains(&right_edge_uv), "right edge uv {right_edge_uv} should stay in bounds (crop, not letterbox)");
+    }
+
+    #[test]
+    fn uv_transform_dispatches_to_the_matching_mode() {
+        assert_eq!(uv_transform(ScalingMode::Stretch, 1000, 1000, 1920, 1080), stretch_uv_transform());
+        assert_eq!(uv_transform(ScalingMode::Fill, 1000, 1000, 1920, 1080), fill_uv_transform(1000, 1000, 1920, 1080));
+        assert_eq!(uv_transform(ScalingMode::Fit, 1000, 1000, 1920, 1080), fit_uv_transform(1000, 1000, 1920, 1080));
+        assert_eq!(uv_transform(ScalingMode::Center, 1000, 1000, 1920, 1080), center_uv_transform(1000, 1000, 1920, 1080));
+    }
+
+    #[test]
+    fn color_to_f32_normalizes_u8_channels_to_the_zero_one_range() {
+        assert_eq!(color_to_f32(Color { r: 0, g: 0, b: 0, a: 0 }), [0.0, 0.0, 0.0, 0.0]);
+        assert_eq!(color_to_f32(Color { r: 255, g: 255, b: 255, a: 255 }), [1.0, 1.0, 1.0, 1.0]);
+        assert_eq!(color_to_f32(Color { r: 128, g: 0, b: 0, a: 255 }), [128.0 / 255.0, 0.0, 0.0, 1.0]);
+    }
+
+    /// The `Uniforms` struct must byte-for-byte match `shaders/crossfade.wgsl`'s
+    /// `Uniforms` struct under WGSL's uniform-address-space alignment rules
+    /// (`vec4<f32>` 16-byte aligned, `vec2<f32>` 8-byte aligned, total size a multiple
+    /// of the largest member's alignment) — catches a silent GPU-side corruption bug
+    /// (wrong bytes landing in the wrong shader field) at `cargo test` time rather
+    /// than only visually, the way the RON-parsing bug documented in `config.rs`/
+    /// `README.md` was originally missed.
+    #[test]
+    fn uniforms_layout_matches_wgsl_alignment() {
+        assert_eq!(std::mem::offset_of!(Uniforms, progress), 0);
+        assert_eq!(std::mem::offset_of!(Uniforms, outgoing_fallback), 16);
+        assert_eq!(std::mem::offset_of!(Uniforms, incoming_fallback), 32);
+        assert_eq!(std::mem::offset_of!(Uniforms, outgoing_scale), 48);
+        assert_eq!(std::mem::offset_of!(Uniforms, outgoing_offset), 56);
+        assert_eq!(std::mem::offset_of!(Uniforms, incoming_scale), 64);
+        assert_eq!(std::mem::offset_of!(Uniforms, incoming_offset), 72);
+        assert_eq!(std::mem::size_of::<Uniforms>(), 80);
+        assert_eq!(std::mem::size_of::<Uniforms>() % 16, 0);
     }
 }
