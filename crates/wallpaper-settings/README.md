@@ -20,26 +20,50 @@ itself uses), ran stably for 6+ seconds with no panic, and shut down cleanly on
 portal's `Screenshot` call needs interactive user consent, the same non-interactive
 limitation spec 5's own README already documents for this project.
 
+**Spec 008 re-verification (same date, after implementing US1–US6)**: re-launched
+against the same live session — a real registered pack ("Mountains", with a genuine
+solar-noon-anchored image) and two real connected displays (`eDP-1`, `HDMI-A-1`, via
+`wallpaperctl list outputs`) were present, so the default Packs page rendered a real
+`widget::image` thumbnail on startup, not a placeholder. Ran stably for 8+ seconds
+with no panic, and exited cleanly. **Not verified in this non-interactive pass**:
+actually clicking the file-chooser buttons, the removal confirmation dialog, the
+Assignment toggle/dropdowns, or the Location hover tooltip/info icon — none of those
+are scriptable without a real pointer/keyboard driving the window, so they remain
+manual QA for the user to run via quickstart.md's six smoke checks, same posture this
+project uses for every other interactive Wayland-adjacent surface.
+
 ## Pages
 
 Five pages (`src/pages/`), sidebar navigation (`src/app.rs`) — each holds its own pure
 view-state/mapping logic (unit-tested, independent of rendering) plus a `view()`
 function building the real widgets:
 
-- **Packs** (FR-002) — browse already-registered packs via `pack_loader::Registry`.
-  Registration itself remains `wallpaperctl register`'s job (contracts/
-  gui-application.md's own explicit non-scope: "browse registered packs", not
-  "register new ones").
-- **Assignment** (FR-003) — per-output / same-pack-everywhere, writing the identical
-  `wallpaper_ipc::RendererConfig` shape `wallpaperctl assign` does.
-- **Location** (FR-004) — manual/automatic/IP-geolocation mode switch, writing the
-  identical `wallpaper_ipc::LocationConfigEntry` shape `wallpaperctl location`'s
-  subcommands do. Shows the STUN-disclosure copy (FR-014) when IP-geolocation mode is
-  selected — the identical wording `wallpaperctl location ip` itself surfaces
-  (duplicated as a literal string constant in each binary, not a shared dependency —
-  this is UI copy, not a schema, so the cross-crate-drift risk `wallpaper-ipc`
-  specifically exists to prevent doesn't apply here; cross-referenced via doc comments
-  in both places instead).
+- **Packs** (FR-001–FR-004, FR-012, FR-018–FR-020, spec 008) — browse, add, and remove
+  registered packs via `pack_loader::Registry`, each shown by its resolved name and a
+  thumbnail preview (the solar-noon-anchored image, or the first image, spec 008
+  research.md R7) rather than a raw file path. Adding uses the native file/folder
+  picker (`cosmic::dialog::file_chooser`); removing requires confirming in a dialog
+  (`Application::dialog()`). Supersedes spec 7's original "browse registered packs,
+  not register new ones" scope note — `wallpaperctl register`/`remove` remain fully
+  supported alongside the GUI, neither replaces the other.
+- **Assignment** (FR-003, FR-010–FR-011, FR-013–FR-017, spec 008) — a "same pack
+  everywhere" toggle (on by default) plus, when off, an independent per-display
+  dropdown, writing the identical `wallpaper_ipc::RendererConfig` shape
+  `wallpaperctl assign` does. Every dropdown option is labeled by the pack's resolved
+  name, not its path. Switching the toggle on clears any existing per-display
+  assignments so it applies unconditionally — a deliberate GUI-specific behavior;
+  `wallpaperctl assign --same-everywhere` itself is unchanged (spec 008 research.md
+  R6). Supersedes spec 7's "assigns the first registered pack" simplification.
+- **Location** (FR-004, FR-007–FR-009, spec 008) — manual/automatic/IP-geolocation
+  mode switch, writing the identical `wallpaper_ipc::LocationConfigEntry` shape
+  `wallpaperctl location`'s subcommands do. The STUN-disclosure copy is discoverable
+  by hovering the IP-geolocation option (`widget::tooltip`) or tapping its persistent
+  info icon, *before* that option is selected, not only after (spec 008 US3 —
+  supersedes spec 7's post-selection-only placement). The disclosure text itself now
+  lives in `wallpaper_ipc::IP_GEOLOCATION_DISCLOSURE` — a real, single shared constant
+  (spec 008 research.md R4), not the two independently-duplicated copies this crate
+  and `wallpaperctl` each carried before despite a doc comment here claiming they were
+  kept in sync.
 - **Timeline** (FR-005) — today's schedule via `wallpaper_ipc::DbusClient`, read-only,
   same "daemon unreachable" fallback UX `wallpaperctl query` uses.
 - **Crossfade** (FR-006) — `RendererConfig.crossfade_duration_secs`, the field this
@@ -53,15 +77,6 @@ finding 1, the same bug class `wallpaper-ipc`'s own extraction already fixed onc
 
 ## What's simplified
 
-- **Packs page preview**: shown as a file path (`widget::text::caption`), not a
-  rendered `<image>` thumbnail — contracts/gui-application.md's own text only
-  requires "browse... with preview", not a specific rendering; a real thumbnail is a
-  reasonable follow-up, not required here.
-- **Assignment page pack picker**: assigns the *first* registered pack
-  (`available_packs[0]`) rather than a full dropdown/picker widget — this page's
-  actual contract requirement is writing the identical `RendererConfig` shape
-  `wallpaperctl assign` does (verified, `pages/assignment.rs`'s own unit tests), not a
-  complete picker UX.
 - **No live-refresh subscription**: pages reload their state on navigation and via an
   explicit "Refresh" button (Packs, Timeline) rather than subscribing to
   `cosmic_config`'s live-watch mechanism or polling on a timer — a config change made
@@ -75,7 +90,9 @@ finding 1, the same bug class `wallpaper-ipc`'s own extraction already fixed onc
 cargo test --package wallpaper-settings
 ```
 
-11 tests — each page's pure view-state/mapping logic (T019–T023), independent of
-`libcosmic` rendering. The actual rendered window is manual QA against a real COSMIC
-session (see `specs/007-v1-completion/quickstart.md`'s "Manual smoke check 1"), same
-posture as this project's other Wayland-adjacent crates (`renderer`).
+29 tests — each page's pure view-state/mapping logic, plus `pack_display`'s name/
+thumbnail resolution, independent of `libcosmic` rendering. The actual rendered
+window (dialogs, tooltips, dropdowns, scrolling) is manual QA against a real COSMIC
+session — see `specs/007-v1-completion/quickstart.md`'s "Manual smoke check 1" and
+`specs/008-gui-usability-improvements/quickstart.md`'s six smoke checks, same posture
+as this project's other Wayland-adjacent crates (`renderer`).

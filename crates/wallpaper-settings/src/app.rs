@@ -5,12 +5,12 @@
 //! convention — plan.md Constitution Check finding 1).
 
 use cosmic::app::Task;
-use cosmic::widget::nav_bar;
+use cosmic::widget::{self, nav_bar};
 use cosmic::{executor, Core, Element};
 use schedule_engine::Location;
 use wallpaper_ipc::{LocationConfigEntry, RendererConfig};
 
-use crate::pages;
+use crate::{pack_display, pages};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Page {
@@ -144,23 +144,74 @@ impl cosmic::Application for App {
             Message::Packs(pages::packs::Message::Refresh) => {
                 self.packs = pages::packs::State::load(&mut self.pack_registry);
             }
-            Message::Assignment(pages::assignment::Message::AssignFirstPackToOutput(output)) => {
-                if let Some(source) = self.assignment.available_packs.first().cloned() {
-                    pages::assignment::apply_assignment(
-                        &mut self.assignment.current_config,
-                        &pages::assignment::AssignTarget::Output(output),
-                        source,
-                    );
-                    if let Err(e) = self.assignment.current_config.save(&self.renderer_config_store) {
-                        tracing::error!(error = %e, "failed to save output assignment");
+            Message::Packs(pages::packs::Message::AddFolderRequested) => {
+                pages::packs::request_add(&mut self.packs);
+                return cosmic::task::future(async move {
+                    use cosmic::dialog::file_chooser;
+                    match file_chooser::open::Dialog::new().title("Choose a pack folder").open_folder().await {
+                        Ok(response) => match response.url().to_file_path() {
+                            Ok(path) => Message::Packs(pages::packs::Message::AddResult(Ok(path))),
+                            Err(()) => Message::Packs(pages::packs::Message::AddResult(Err(
+                                "the selected folder has no local file path".to_string(),
+                            ))),
+                        },
+                        Err(file_chooser::Error::Cancelled) => Message::Packs(pages::packs::Message::AddCancelled),
+                        Err(e) => Message::Packs(pages::packs::Message::AddResult(Err(e.to_string()))),
                     }
+                });
+            }
+            Message::Packs(pages::packs::Message::AddFileRequested) => {
+                pages::packs::request_add(&mut self.packs);
+                return cosmic::task::future(async move {
+                    use cosmic::dialog::file_chooser;
+                    match file_chooser::open::Dialog::new().title("Choose an image file").open_file().await {
+                        Ok(response) => match response.url().to_file_path() {
+                            Ok(path) => Message::Packs(pages::packs::Message::AddResult(Ok(path))),
+                            Err(()) => Message::Packs(pages::packs::Message::AddResult(Err(
+                                "the selected file has no local file path".to_string(),
+                            ))),
+                        },
+                        Err(file_chooser::Error::Cancelled) => Message::Packs(pages::packs::Message::AddCancelled),
+                        Err(e) => Message::Packs(pages::packs::Message::AddResult(Err(e.to_string()))),
+                    }
+                });
+            }
+            Message::Packs(pages::packs::Message::AddCancelled) => {
+                // A cancelled file-chooser dialog is a no-op, not an error
+                // (research.md R1) — nothing to do.
+            }
+            Message::Packs(pages::packs::Message::AddResult(result)) => {
+                pages::packs::apply_add_result(&mut self.packs, &mut self.pack_registry, result);
+            }
+            Message::Packs(pages::packs::Message::RemoveRequested(source)) => {
+                pages::packs::request_removal(&mut self.packs, source);
+            }
+            Message::Packs(pages::packs::Message::RemoveConfirmed) => {
+                pages::packs::confirm_removal(&mut self.packs, &mut self.pack_registry);
+            }
+            Message::Packs(pages::packs::Message::RemoveCancelled) => {
+                pages::packs::cancel_removal(&mut self.packs);
+            }
+            Message::Assignment(pages::assignment::Message::ToggleSameEverywhere(toggled_on)) => {
+                let default_pack = self.assignment.available_packs.first().cloned();
+                pages::assignment::set_same_everywhere_enabled(&mut self.assignment.current_config, toggled_on, default_pack);
+                if let Err(e) = self.assignment.current_config.save(&self.renderer_config_store) {
+                    tracing::error!(error = %e, "failed to save same-pack-everywhere toggle");
                 }
             }
-            Message::Assignment(pages::assignment::Message::SetFirstPackSameEverywhere) => {
-                if let Some(source) = self.assignment.available_packs.first().cloned() {
+            Message::Assignment(pages::assignment::Message::SameEverywherePackSelected(index)) => {
+                if let Some(source) = self.assignment.available_packs.get(index).cloned() {
                     pages::assignment::apply_assignment(&mut self.assignment.current_config, &pages::assignment::AssignTarget::SameEverywhere, source);
                     if let Err(e) = self.assignment.current_config.save(&self.renderer_config_store) {
                         tracing::error!(error = %e, "failed to save same-pack-everywhere assignment");
+                    }
+                }
+            }
+            Message::Assignment(pages::assignment::Message::OutputPackSelected(output, index)) => {
+                if let Some(source) = self.assignment.available_packs.get(index).cloned() {
+                    pages::assignment::apply_assignment(&mut self.assignment.current_config, &pages::assignment::AssignTarget::Output(output), source);
+                    if let Err(e) = self.assignment.current_config.save(&self.renderer_config_store) {
+                        tracing::error!(error = %e, "failed to save output assignment");
                     }
                 }
             }
@@ -169,6 +220,9 @@ impl cosmic::Application for App {
                 if let Err(e) = self.location.entry.save(&self.location_config_store) {
                     tracing::error!(error = %e, "failed to save location mode");
                 }
+            }
+            Message::Location(pages::location::Message::ToggleIpDisclosure) => {
+                self.location.show_ip_disclosure = !self.location.show_ip_disclosure;
             }
             Message::Location(pages::location::Message::LatitudeChanged(v)) => {
                 self.location.latitude_input = v;
@@ -201,6 +255,28 @@ impl cosmic::Application for App {
             }
         }
         Task::none()
+    }
+
+    /// The removal confirmation dialog (spec 008 US1, research.md R3) — rendered as a
+    /// modal overlay exactly when `packs.pending_removal.is_some()`, titled with the
+    /// pack's resolved name so the confirmation itself never shows a raw path either.
+    fn dialog(&self) -> Option<Element<'_, Self::Message>> {
+        let source = self.packs.pending_removal.as_ref()?;
+        let name = pack_display::resolve_pack_name(source).unwrap_or_else(|| "(unnamed pack)".to_string());
+        Some(
+            widget::dialog()
+                .title("Remove pack?")
+                .body(format!("Remove {name}? This cannot be undone."))
+                .primary_action(
+                    widget::button::destructive("Remove")
+                        .on_press(Message::Packs(pages::packs::Message::RemoveConfirmed)),
+                )
+                .secondary_action(
+                    widget::button::standard("Cancel")
+                        .on_press(Message::Packs(pages::packs::Message::RemoveCancelled)),
+                )
+                .into(),
+        )
     }
 
     fn view(&self) -> Element<'_, Self::Message> {

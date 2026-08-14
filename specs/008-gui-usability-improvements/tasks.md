@@ -42,7 +42,7 @@ No new workspace members. Every task touches one already-shipped crate: `wallpap
 **Purpose**: Baseline sanity check only — research.md confirms this spec adds zero new Cargo
 dependencies and zero new workspace members, so there is no scaffolding to do.
 
-- [ ] T001 Confirm `cargo build --workspace && cargo test --workspace` passes cleanly on `main`
+- [X] T001 Confirm `cargo build --workspace && cargo test --workspace` passes cleanly on `main`
       before starting (repo root `Cargo.toml`)
 
 **Checkpoint**: Clean baseline confirmed; no new crates or dependencies needed for this spec.
@@ -58,7 +58,7 @@ US6's own phase — it isn't shared by any other story, so it doesn't block them
 
 **⚠️ CRITICAL**: US1's name display (T006) and all of US5 (T021–T024) depend on this phase.
 
-- [ ] T002 Add `crates/wallpaper-settings/src/pack_display.rs` implementing `resolve_pack_name(
+- [X] T002 Add `crates/wallpaper-settings/src/pack_display.rs` implementing `resolve_pack_name(
       source: &PackSource) -> Option<String>` (data-model.md: `pack_loader::load_pack`'s manifest
       `name` for a directory pack, its filename with the extension stripped via
       `Path::file_stem()` for a static-file pack, `None` if `load_pack` fails) with unit tests
@@ -80,47 +80,47 @@ same page and confirm it disappears.
 
 ### Tests for User Story 1
 
-- [ ] T003 [US1] Unit test: `AddResult(Ok(path))` calls `pack_loader::Registry::register`, is a
+- [X] T003 [US1] Unit test: `AddResult(Ok(path))` calls `pack_loader::Registry::register`, is a
       no-op (not a duplicate) when the path is already registered, and refreshes `rows` with
       `pack_display::resolve_pack_name`-derived names (spec.md Acceptance Scenarios 1, 4) in
       `crates/wallpaper-settings/src/pages/packs.rs`
-- [ ] T004 [US1] Unit test: `AddResult(Err(reason))` leaves `rows` unchanged and sets `add_error`
+- [X] T004 [US1] Unit test: `AddResult(Err(reason))` leaves `rows` unchanged and sets `add_error`
       to the specific failure reason — no partial registration (spec.md Acceptance Scenario 3) in
       `crates/wallpaper-settings/src/pages/packs.rs`
-- [ ] T005 [US1] Unit test: the removal state machine — `RemoveRequested(source)` sets
+- [X] T005 [US1] Unit test: the removal state machine — `RemoveRequested(source)` sets
       `pending_removal`; `RemoveConfirmed` calls `pack_loader::Registry::remove` and clears it;
       `RemoveCancelled` clears it with no registry change (data-model.md state transitions;
       spec.md Acceptance Scenario 2) in `crates/wallpaper-settings/src/pages/packs.rs`
 
 ### Implementation for User Story 1
 
-- [ ] T006 [US1] Replace `rows_from_registry`'s path-based `PackRow.name` with
+- [X] T006 [US1] Replace `rows_from_registry`'s path-based `PackRow.name` with
       `pack_display::resolve_pack_name(&entry.source).unwrap_or_else(|| "(unnamed
       pack)".to_string())` (FR-012) in `crates/wallpaper-settings/src/pages/packs.rs` (depends on
       T002)
-- [ ] T007 [US1] Add `pending_removal: Option<PackSource>` and `add_error: Option<String>` to
+- [X] T007 [US1] Add `pending_removal: Option<PackSource>` and `add_error: Option<String>` to
       `packs::State`, and the `AddFolderRequested` / `AddFileRequested` / `AddResult(Result
       <PathBuf, String>)` / `RemoveRequested(PackSource)` / `RemoveConfirmed` / `RemoveCancelled`
       variants to `packs::Message` (data-model.md) in
       `crates/wallpaper-settings/src/pages/packs.rs` (depends on T006; makes T003–T005 compile)
-- [ ] T008 [P] [US1] Add "Add pack folder…" and "Add image file…" buttons, an error row bound to
+- [X] T008 [P] [US1] Add "Add pack folder…" and "Add image file…" buttons, an error row bound to
       `add_error`, and a per-row "Remove" button to `packs::view`
       (contracts/gui-usability-improvements.md) in
       `crates/wallpaper-settings/src/pages/packs.rs` (depends on T007)
-- [ ] T009 [P] [US1] Wire `AddFolderRequested`/`AddFileRequested` to `cosmic::Task`s running
+- [X] T009 [P] [US1] Wire `AddFolderRequested`/`AddFileRequested` to `cosmic::Task`s running
       `cosmic::dialog::file_chooser::open::Dialog::new().open_folder()` /`.open_file()`, mapping a
       cancelled dialog to a no-op and any other outcome to
       `Message::Packs(packs::Message::AddResult(...))` (research.md R1) in
       `crates/wallpaper-settings/src/app.rs` (depends on T007)
-- [ ] T010 [US1] Handle `AddResult` / `RemoveRequested` / `RemoveConfirmed` / `RemoveCancelled` in
+- [X] T010 [US1] Handle `AddResult` / `RemoveRequested` / `RemoveConfirmed` / `RemoveCancelled` in
       `App::update`, calling `pack_loader::Registry::register`/`remove` and refreshing
       `packs::State` (contracts/gui-usability-improvements.md) in
       `crates/wallpaper-settings/src/app.rs` (depends on T009)
-- [ ] T011 [US1] Override `cosmic::Application::dialog(&self)` to render the removal confirmation
+- [X] T011 [US1] Override `cosmic::Application::dialog(&self)` to render the removal confirmation
       dialog (`widget::dialog::dialog()`, primary "Remove" / secondary "Cancel") when
       `packs.pending_removal.is_some()`, titled with the pack's `resolve_pack_name` result
       (research.md R3, data-model.md) in `crates/wallpaper-settings/src/app.rs` (depends on T010)
-- [ ] T012 [P] [US1] Update the "registration is out of this spec's GUI scope" note in
+- [X] T012 [P] [US1] Update the "registration is out of this spec's GUI scope" note in
       `crates/wallpaper-settings/README.md` to reflect that add/remove is now supported
       (contracts/gui-usability-improvements.md) (depends on T011)
 
@@ -143,16 +143,16 @@ manual smoke check 2 (Polish phase).
 
 ### Implementation for User Story 2
 
-- [ ] T013 [P] [US2] Wrap `packs::view`'s returned column in `widget::scrollable(...)` in
+- [X] T013 [P] [US2] Wrap `packs::view`'s returned column in `widget::scrollable(...)` in
       `crates/wallpaper-settings/src/pages/packs.rs` (research.md R5; depends on T008 — after
       US1's packs.rs view changes land)
-- [ ] T014 [P] [US2] Wrap `assignment::view`'s returned column in `widget::scrollable(...)` in
+- [X] T014 [P] [US2] Wrap `assignment::view`'s returned column in `widget::scrollable(...)` in
       `crates/wallpaper-settings/src/pages/assignment.rs` (research.md R5)
-- [ ] T015 [P] [US2] Wrap `location::view`'s returned column in `widget::scrollable(...)` in
+- [X] T015 [P] [US2] Wrap `location::view`'s returned column in `widget::scrollable(...)` in
       `crates/wallpaper-settings/src/pages/location.rs` (research.md R5)
-- [ ] T016 [P] [US2] Wrap `timeline::view`'s returned column in `widget::scrollable(...)` in
+- [X] T016 [P] [US2] Wrap `timeline::view`'s returned column in `widget::scrollable(...)` in
       `crates/wallpaper-settings/src/pages/timeline.rs` (research.md R5)
-- [ ] T017 [P] [US2] Wrap `crossfade::view`'s returned column in `widget::scrollable(...)` in
+- [X] T017 [P] [US2] Wrap `crossfade::view`'s returned column in `widget::scrollable(...)` in
       `crates/wallpaper-settings/src/pages/crossfade.rs` (research.md R5)
 
 **Checkpoint**: Every page's controls are reachable at default size and when the window is
@@ -172,36 +172,36 @@ the toggle back on and confirm a single chosen pack applies to every display.
 
 ### Tests for User Story 5
 
-- [ ] T018 [US5] Unit test: `set_same_everywhere_enabled(config, true, default)` clears
+- [X] T018 [US5] Unit test: `set_same_everywhere_enabled(config, true, default)` clears
       `config.overrides` and sets `config.same_pack_everywhere` to `default` only if it was
       already `None` (FR-014, FR-015, data-model.md) in
       `crates/wallpaper-settings/src/pages/assignment.rs`
-- [ ] T019 [US5] Unit test: `set_same_everywhere_enabled(config, false, _)` sets
+- [X] T019 [US5] Unit test: `set_same_everywhere_enabled(config, false, _)` sets
       `config.same_pack_everywhere = None` and leaves `config.overrides` untouched (data-model.md)
       in `crates/wallpaper-settings/src/pages/assignment.rs`
-- [ ] T020 [US5] Unit test: `SameEverywherePackSelected`/`OutputPackSelected` write through the
+- [X] T020 [US5] Unit test: `SameEverywherePackSelected`/`OutputPackSelected` write through the
       existing `apply_assignment` (spec 7) with the same `AssignTarget::SameEverywhere`/`Output`
       shapes `wallpaperctl assign` writes (FR-013, FR-017) in
       `crates/wallpaper-settings/src/pages/assignment.rs`
 
 ### Implementation for User Story 5
 
-- [ ] T021 [US5] Add the `set_same_everywhere_enabled` pure helper and the
+- [X] T021 [US5] Add the `set_same_everywhere_enabled` pure helper and the
       `ToggleSameEverywhere(bool)` / `SameEverywherePackSelected(usize)` /
       `OutputPackSelected(String, usize)` variants to `assignment::Message` (data-model.md) in
       `crates/wallpaper-settings/src/pages/assignment.rs` (depends on T014; makes T018–T020
       compile)
-- [ ] T022 [US5] Replace `assignment::view`'s "assigns the first registered pack" buttons with a
+- [X] T022 [US5] Replace `assignment::view`'s "assigns the first registered pack" buttons with a
       `widget::toggler` plus `widget::dropdown`(s) — one when the toggle is on, one per
       `known_outputs` entry when off — option labels via `pack_display::resolve_pack_name`, and
       the FR-016 "register a pack first" message when `available_packs` is empty
       (contracts/gui-usability-improvements.md, research.md R6) in
       `crates/wallpaper-settings/src/pages/assignment.rs` (depends on T021, T002)
-- [ ] T023 [US5] Wire `ToggleSameEverywhere`/`SameEverywherePackSelected`/`OutputPackSelected` in
+- [X] T023 [US5] Wire `ToggleSameEverywhere`/`SameEverywherePackSelected`/`OutputPackSelected` in
       `App::update`, persisting via the same `RendererConfig::save` pattern the existing
       Assignment messages already use, in `crates/wallpaper-settings/src/app.rs` (depends on
       T022)
-- [ ] T024 [P] [US5] Update `crates/wallpaper-settings/README.md`'s "assigns the first registered
+- [X] T024 [P] [US5] Update `crates/wallpaper-settings/README.md`'s "assigns the first registered
       pack" simplification note to describe the real toggle/dropdown assignment
       (contracts/gui-usability-improvements.md) (depends on T023)
 
@@ -221,26 +221,26 @@ predictably; separately, confirm the same text is reachable via the info icon wi
 
 ### Tests for User Story 3
 
-- [ ] T025 [P] [US3] Unit test: `wallpaper_ipc::IP_GEOLOCATION_DISCLOSURE` starts with an
+- [X] T025 [P] [US3] Unit test: `wallpaper_ipc::IP_GEOLOCATION_DISCLOSURE` starts with an
       uppercase letter and ends with terminal punctuation (FR-009) in
       `crates/wallpaper-ipc/src/lib.rs`
-- [ ] T026 [P] [US3] Unit test: `location::Message::ToggleIpDisclosure` flips
+- [X] T026 [P] [US3] Unit test: `location::Message::ToggleIpDisclosure` flips
       `show_ip_disclosure`, independent of `entry.mode` (data-model.md) in
       `crates/wallpaper-settings/src/pages/location.rs`
 
 ### Implementation for User Story 3
 
-- [ ] T027 [US3] Move `IP_GEOLOCATION_DISCLOSURE` into `crates/wallpaper-ipc/src/lib.rs` with the
+- [X] T027 [US3] Move `IP_GEOLOCATION_DISCLOSURE` into `crates/wallpaper-ipc/src/lib.rs` with the
       new sentence-case wording (research.md R4, data-model.md), removing the duplicated copies
       from `crates/wallpaperctl/src/commands/location.rs` and
       `crates/wallpaper-settings/src/pages/location.rs` (depends on T025)
-- [ ] T028 [P] [US3] Update `crates/wallpaperctl/src/commands/location.rs`'s `location ip`
+- [X] T028 [P] [US3] Update `crates/wallpaperctl/src/commands/location.rs`'s `location ip`
       message to import the relocated constant and avoid the "IP-geolocation enabled
       (IP-geolocation…)" repetition (data-model.md) (depends on T027)
-- [ ] T029 [P] [US3] Add `show_ip_disclosure: bool` to `location::State` and the
+- [X] T029 [P] [US3] Add `show_ip_disclosure: bool` to `location::State` and the
       `ToggleIpDisclosure` message to `location::Message`, importing the relocated constant, in
       `crates/wallpaper-settings/src/pages/location.rs` (depends on T027, T015, T026)
-- [ ] T030 [US3] Wrap the IP-geolocation radio row in `widget::tooltip(...)` (FR-007) and add a
+- [X] T030 [US3] Wrap the IP-geolocation radio row in `widget::tooltip(...)` (FR-007) and add a
       persistent `dialog-information-symbolic` info-icon button that toggles
       `show_ip_disclosure` and reveals the same text inline (FR-008), gated on the option not
       being selected yet rather than on `entry.mode == IpGeolocation` (research.md R4) in
@@ -265,7 +265,7 @@ are both `pack_display::resolve_pack_name` results (T022) — there is no remain
 `source.path().display()`/`current.path().display()` anywhere in `assignment::view` for this
 story to separately fix. This phase is a verification step, not new implementation.
 
-- [ ] T031 [US4] Add a doc comment on `assignment::view` (or immediately above the dropdown
+- [X] T031 [US4] Add a doc comment on `assignment::view` (or immediately above the dropdown
       construction) noting explicitly that FR-010/FR-011 are satisfied by US5's dropdown labels,
       so a future reader doesn't look for separate US4 code that doesn't exist; confirm via
       `grep -n 'path().display()' crates/wallpaper-settings/src/pages/assignment.rs` that no
@@ -286,24 +286,24 @@ image; register one without and confirm its first image is shown instead.
 
 ### Tests for User Story 6
 
-- [ ] T032 [US6] Unit test: `resolve_thumbnail_path` returns the solar-noon-anchored image's
+- [X] T032 [US6] Unit test: `resolve_thumbnail_path` returns the solar-noon-anchored image's
       resolved path when the pack has one (spec.md Acceptance Scenario 1, FR-019) in
       `crates/wallpaper-settings/src/pack_display.rs`
-- [ ] T033 [US6] Unit test: `resolve_thumbnail_path` falls back to the first image in manifest
+- [X] T033 [US6] Unit test: `resolve_thumbnail_path` falls back to the first image in manifest
       order when no solar-noon anchor exists, including the static single-image case (spec.md
       Acceptance Scenario 2, FR-019) in `crates/wallpaper-settings/src/pack_display.rs`
-- [ ] T034 [US6] Unit test: `resolve_thumbnail_path` returns `None` when `load_pack` fails
+- [X] T034 [US6] Unit test: `resolve_thumbnail_path` returns `None` when `load_pack` fails
       (spec.md Acceptance Scenario 3, FR-020) in `crates/wallpaper-settings/src/pack_display.rs`
 
 ### Implementation for User Story 6
 
-- [ ] T035 [US6] Add `resolve_thumbnail_path(source: &PackSource) -> Option<PathBuf>` to
+- [X] T035 [US6] Add `resolve_thumbnail_path(source: &PackSource) -> Option<PathBuf>` to
       `crates/wallpaper-settings/src/pack_display.rs` (research.md R7) (depends on T032–T034,
       T002)
-- [ ] T036 [US6] Add `thumbnail: Option<PathBuf>` to `PackRow`, populated via
+- [X] T036 [US6] Add `thumbnail: Option<PathBuf>` to `PackRow`, populated via
       `pack_display::resolve_thumbnail_path` in `rows_from_registry` (FR-018, FR-019) in
       `crates/wallpaper-settings/src/pages/packs.rs` (depends on T035, T013)
-- [ ] T037 [US6] Render each row's thumbnail via `widget::image(path)` in `packs::view`, falling
+- [X] T037 [US6] Render each row's thumbnail via `widget::image(path)` in `packs::view`, falling
       back to the existing "(no preview available)" placeholder posture when `thumbnail` is
       `None` (FR-020) in `crates/wallpaper-settings/src/pages/packs.rs` (depends on T036)
 
@@ -317,11 +317,11 @@ names, Packs shows thumbnails.
 
 **Purpose**: Close out the spec's success criteria and hand off a stable, documented feature set.
 
-- [ ] T038 [P] Run `cargo clippy --workspace -- -D warnings` across every touched crate and fix
+- [X] T038 [P] Run `cargo clippy --workspace -- -D warnings` across every touched crate and fix
       any new lint findings
-- [ ] T039 [P] Run `cargo test --workspace`, confirming both this spec's new tests (T003–T005,
+- [X] T039 [P] Run `cargo test --workspace`, confirming both this spec's new tests (T003–T005,
       T018–T020, T025–T026, T032–T034) and every pre-existing test still pass unchanged
-- [ ] T040 Execute quickstart.md's six manual smoke checks against a real COSMIC session
+- [X] T040 Execute quickstart.md's six manual smoke checks against a real COSMIC session
       (add/remove, scrolling, GUI assignment, hover/tap disclosure, Assignment names, thumbnails)
       and record the results in `crates/wallpaper-settings/README.md`, matching this project's
       established "confirmed live" documentation posture (spec 7 quickstart.md precedent)
