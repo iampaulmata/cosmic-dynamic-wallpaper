@@ -51,6 +51,12 @@ tempfile = "3.27"
 wayland-server = "0.31"
 wayland-protocols = { version = "0.32", features = ["server"] }
 wayland-protocols-wlr = { version = "0.3", features = ["server"] }
+# IP-geolocation fixture tests only (spec 7 US3, T046) — builds a tiny, in-memory-only
+# .mmdb at test time rather than committing any binary fixture to the repo; the real
+# bundled DB-IP Lite database is a release-process download (see README.md), never a
+# build- or test-time dependency.
+mmdb-writer = "0.1"
+ipnet = "2.11"
 
 [lints.clippy]
 unwrap_used = "deny"
@@ -84,5 +90,12 @@ assets = [
     # (STARTER_PACK_SYSTEM_PATH) — not a postinst script write, see that module's doc
     # comment for why.
     ["../../assets/starter-pack/*", "usr/share/dynamic-wallpaper/starter-pack/", "644"],
+    # IP-geolocation database (spec 7 US3, research.md R3, T051) — NOT checked into
+    # this repository (.gitignore'd, `assets/geoip/`). A release-process download step
+    # (README.md's "IP-geolocation database" section) must place a fresh DB-IP Lite
+    # snapshot here before running `cargo deb` — this line intentionally makes
+    # packaging fail loudly if that step was skipped, rather than shipping without it.
+    # Destination matches `ip_geolocation::MMDB_SYSTEM_PATH` exactly.
+    ["../../assets/geoip/dbip-city-lite.mmdb", "usr/share/dynamic-wallpaper/geoip.mmdb", "644"],
 ]
 maintainer-scripts = "../../packaging/debian"

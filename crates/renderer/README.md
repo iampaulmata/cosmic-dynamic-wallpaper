@@ -177,7 +177,54 @@ once a specific serialization format's own semantics enter the picture.
   switches back to manual mode. Documented as harmless (not a correctness gap) in
   `portal_location.rs`'s module doc: `effective_location()` ignores `automatic_location`
   entirely while `mode == Manual`, so a background retry loop simply has no observable
-  effect until automatic mode is re-enabled.
+  effect until automatic mode is re-enabled. The same lifecycle/harmlessness posture
+  applies to `ip_geolocation.rs`'s IpGeolocation-mode task (spec 7).
+- **IP-geolocation's live STUN/database happy path** (spec 7 US3, plan.md finding 2):
+  the pure logic (`.mmdb` lookup, backoff, cache TTL, the `Location`-validation
+  write-back) is fully unit-tested against a dynamically-built fixture database.
+  **STUN discovery itself is live-verified** (2026-08-14, this project's own dev
+  machine, via a throwaway `examples/stun_smoke.rs` harness, deleted after use) — and
+  a real bug was found and fixed doing so: this machine's DNS resolves the default
+  STUN server (`stun.l.google.com:19302`) to an **IPv6** address first, which silently
+  failed against the original IPv4-only wildcard bind with an opaque "UDP socket
+  error" (an address-family mismatch, not a network problem — `discover_public_ip_
+  blocking` now picks an IPv4 result when one exists and binds accordingly). After the
+  fix: a genuine STUN round trip against the real server correctly returned this
+  machine's real public IP. Only the final hop — a real bundled DB-IP Lite lookup — is
+  still a manual-QA item (`specs/007-v1-completion/quickstart.md`), since this dev
+  environment has no `.mmdb` present locally (see "IP-geolocation database" below,
+  which is a release-process download, not something this session fetches). `ip_
+  geolocation.rs` runs STUN discovery on its own dedicated background OS thread — the
+  one deliberate exception to this daemon's single-`calloop`-loop concurrency model
+  elsewhere, called out explicitly in that module's own doc comment (`stunclient`'s
+  only usable API is synchronous; its `async` feature would require `tokio`, a second
+  runtime this project has otherwise avoided throughout).
+
+## IP-geolocation database (spec 7 US3, research.md R3, T051)
+
+`ip_geolocation.rs` reads a bundled offline `.mmdb` database at
+`/usr/share/dynamic-wallpaper/geoip.mmdb` (`ip_geolocation::MMDB_SYSTEM_PATH`) — **not**
+checked into this repository (`.gitignore`'d under `assets/geoip/`) and **not** a
+build- or test-time dependency (this crate's own tests build a tiny fixture `.mmdb` at
+test time instead, via the `mmdb-writer` dev-dependency — see `ip_geolocation.rs`'s
+test module). Before cutting a packaging build (`cargo deb`), the release process must:
+
+1. Download a fresh [DB-IP Lite (City)](https://db-ip.com/db/download/ip-to-city-lite)
+   `.mmdb` snapshot (CC-BY-4.0 — attribution required in release notes/about text, not
+   just this file) — "periodically-updated" (the project's own Clarification wording)
+   means *this step* is repeated before each release, not that `wallpaperd` updates it
+   itself at runtime.
+2. Verify the download (DB-IP publishes an `.mmdb.md5` alongside each snapshot —
+   check it before trusting the file).
+3. Place it at `assets/geoip/dbip-city-lite.mmdb` (relative to the repo root) —
+   `crates/renderer/Cargo.toml`'s `[package.metadata.deb]` assets list references
+   exactly this path and will fail the packaging build loudly if it's missing, by
+   design (T051 — a missing database should never silently ship as "IP-geolocation
+   quietly doesn't work").
+
+No GeoLite2 (MaxMind's own database) alternative is used — it requires a free account
+and license key just to *download*, real friction for a build pipeline that shouldn't
+need a third-party account (research.md R3).
 
 ## Building on a real system
 

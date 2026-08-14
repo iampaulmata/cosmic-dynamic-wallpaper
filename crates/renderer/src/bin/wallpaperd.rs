@@ -12,6 +12,7 @@ use wayland_client::{globals::registry_queue_init, Connection};
 
 use pack_loader::Registry;
 use renderer::dbus_service::{self, DaemonInterface};
+use renderer::ip_geolocation::{self, IpGeoEvent};
 use renderer::portal_location::{self, PortalEvent};
 use renderer::starter_pack;
 use renderer::surface::WallpaperDaemon;
@@ -135,12 +136,50 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         })
         .map_err(|e| format!("failed to insert the portal event channel: {e}"))?;
 
+    // spec 7 US3: IP-geolocation resolution runs on its own dedicated background OS
+    // thread (ip_geolocation.rs's module doc explains why — stunclient's only usable
+    // API is synchronous), spawned once IP-geolocation mode is (or becomes) active,
+    // same "spawned once" posture as the portal task above.
+    let (ip_geo_events_tx, ip_geo_events_rx) = calloop::channel::channel::<IpGeoEvent>();
+    let mut ip_geo_task_spawned = false;
+    let spawn_ip_geo_task_if_needed = {
+        let ip_geo_events_tx = ip_geo_events_tx.clone();
+        move |mode: LocationMode, spawned: &mut bool| {
+            if *spawned || mode != LocationMode::IpGeolocation {
+                return;
+            }
+            ip_geolocation::spawn(std::path::PathBuf::from(ip_geolocation::MMDB_SYSTEM_PATH), ip_geo_events_tx.clone());
+            *spawned = true;
+        }
+    };
+    spawn_ip_geo_task_if_needed(initial_location_entry.mode, &mut ip_geo_task_spawned);
+
+    event_loop
+        .handle()
+        .insert_source(ip_geo_events_rx, {
+            let location_store = location_store.clone();
+            move |event, _, daemon: &mut WallpaperDaemon| {
+                let calloop::channel::Event::Msg(ip_geo_event) = event else { return };
+                let mut entry = LocationConfigEntry::load(&location_store);
+                match ip_geo_event {
+                    IpGeoEvent::Reading(location) => ip_geolocation::apply_reading(&mut entry, location),
+                    IpGeoEvent::Failure(reason) => ip_geolocation::apply_failure(&mut entry, reason),
+                }
+                if let Err(e) = entry.save(&location_store) {
+                    tracing::error!(error = %e, "failed to persist an IP-geolocation resolution");
+                }
+                daemon.on_location_changed(effective_location(&entry));
+            }
+        })
+        .map_err(|e| format!("failed to insert the IP-geolocation event channel: {e}"))?;
+
     let location_watch = ConfigWatchSource::new(&location_store).map_err(|e| format!("failed to watch location config: {e}"))?;
     event_loop
         .handle()
         .insert_source(location_watch, move |(config, _changed_keys), _, daemon: &mut WallpaperDaemon| {
             let entry = LocationConfigEntry::load(&config);
             spawn_portal_task_if_needed(entry.mode, &mut portal_task_spawned);
+            spawn_ip_geo_task_if_needed(entry.mode, &mut ip_geo_task_spawned);
             daemon.on_location_changed(effective_location(&entry));
         })
         .map_err(|e| format!("failed to insert location watch: {e}"))?;
