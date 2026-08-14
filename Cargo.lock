@@ -524,6 +524,7 @@ version = "1.0.0"
 source = "git+https://github.com/pop-os/libcosmic#1f8d8786940cc6db59d412153c5a03f69a20375c"
 dependencies = [
  "atomicwrites",
+ "calloop",
  "cosmic-config-derive",
  "dirs",
  "known-folders",

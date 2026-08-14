@@ -19,6 +19,10 @@ use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
     delegate_compositor, delegate_layer, delegate_output, delegate_registry,
     output::{OutputHandler, OutputInfo, OutputState},
+    reexports::calloop::{
+        self,
+        timer::{TimeoutAction, Timer},
+    },
     reexports::protocols::wp::viewporter::client::{wp_viewport, wp_viewporter},
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
@@ -92,6 +96,16 @@ pub struct WallpaperDaemon {
     pub coalescer: Coalescer,
     /// Set to request the daemon's main loop exit cleanly.
     pub exit: bool,
+    /// Set once at startup ([`WallpaperDaemon::set_loop_handle`]) — lets
+    /// [`WallpaperDaemon::reschedule_idle_timer`] insert/remove the idle-wait timer
+    /// from any method, not just the timer's own callback. `LoopHandle` is
+    /// `Rc`-backed and cheap to clone; calloop's own docs allow inserting sources
+    /// from within a source callback, so storing it on the very `Data` it drives is
+    /// sound.
+    loop_handle: Option<calloop::LoopHandle<'static, WallpaperDaemon>>,
+    /// The currently-registered idle-wait timer's token, if any — removed before a
+    /// fresh one is inserted at a recomputed deadline.
+    idle_timer_token: Option<calloop::RegistrationToken>,
 }
 
 impl WallpaperDaemon {
@@ -128,6 +142,8 @@ impl WallpaperDaemon {
             location,
             coalescer: Coalescer::new(),
             exit: false,
+            loop_handle: None,
+            idle_timer_token: None,
         })
     }
 
@@ -385,6 +401,102 @@ impl WallpaperDaemon {
         }
         self.evaluate_and_draw_all();
     }
+
+    /// Record the `calloop` handle driving this daemon, so any method (not just a
+    /// timer's own callback) can reschedule the idle-wait timer or insert other
+    /// sources. Call once, right after construction.
+    pub fn set_loop_handle(&mut self, handle: calloop::LoopHandle<'static, Self>) {
+        self.loop_handle = Some(handle);
+    }
+
+    /// `min(schedule-driven next_wake, earliest pending coalesced deadline)`,
+    /// converted from `DateTime<Local>`/`Instant` (calendar) domain into `Instant`
+    /// (monotonic) domain relative to *now* — `Instant` has no calendar epoch, so a
+    /// `DateTime` can't be compared to it directly. Falls back to a 60s ceiling if
+    /// nothing is pending at all, so the daemon still wakes periodically rather than
+    /// sleeping forever (e.g. to notice a system clock jump).
+    fn next_wake_instant(&self) -> Instant {
+        let now_local = chrono::Local::now();
+        let from_schedule = self.next_wake().map(|target| {
+            let delta = (target - now_local).to_std().unwrap_or(Duration::ZERO);
+            Instant::now() + delta
+        });
+        let from_coalescer = self.coalescer.earliest_pending();
+
+        match (from_schedule, from_coalescer) {
+            (Some(a), Some(b)) => a.min(b),
+            (Some(a), None) => a,
+            (None, Some(b)) => b,
+            (None, None) => Instant::now() + Duration::from_secs(60),
+        }
+    }
+
+    /// Replace the idle-wait timer with a fresh single-shot deadline computed from
+    /// [`Self::next_wake_instant`] (T021, FR-003). Call this from every place that can
+    /// change what "next wake" should be: the timer's own callback, a config/location
+    /// watch firing, or a coalesced-change drain.
+    pub fn reschedule_idle_timer(&mut self) {
+        let Some(handle) = self.loop_handle.clone() else { return };
+        if let Some(token) = self.idle_timer_token.take() {
+            handle.remove(token);
+        }
+        let deadline = self.next_wake_instant();
+        tracing::debug!(?deadline, "idle-wait timer rescheduled");
+        let timer = Timer::from_deadline(deadline);
+        let result = handle.insert_source(timer, |_deadline, _, daemon: &mut WallpaperDaemon| {
+            daemon.on_idle_timer_fire();
+            // Always fully replaced by the next `reschedule_idle_timer()` call —
+            // never self-renews.
+            TimeoutAction::Drop
+        });
+        match result {
+            Ok(token) => self.idle_timer_token = Some(token),
+            Err(e) => tracing::error!(error = %e, "failed to reschedule idle-wait timer"),
+        }
+    }
+
+    fn on_idle_timer_fire(&mut self) {
+        self.evaluate_and_draw_all();
+        self.drain_coalescer();
+        self.reschedule_idle_timer();
+    }
+
+    /// Re-evaluate+draw every output if any coalesced change is due (FR-014). Cheap
+    /// to call unconditionally: skips `reload_all_assignments`'s O(outputs) work
+    /// entirely when nothing's actually due.
+    fn drain_coalescer(&mut self) {
+        if !self.coalescer.due(Instant::now()).is_empty() {
+            // Reload+draw *all* outputs rather than filtering to just the due ones —
+            // cheap, idempotent, and the accepted posture per tasks.md T031/T036
+            // (targeted per-output re-evaluation is a stretch goal, not required).
+            self.reload_all_assignments();
+        }
+    }
+
+    /// A live `RendererConfig` change was detected ([`cosmic_config::calloop::
+    /// ConfigWatchSource`] firing in `wallpaperd.rs`) — record every managed output as
+    /// changed and reschedule the idle timer so FR-014's 2s coalescing deadline is
+    /// honored even if it's sooner than the next scheduled transition.
+    pub fn on_renderer_config_changed(&mut self, new_config: RendererConfig) {
+        self.renderer_config = new_config;
+        let now = Instant::now();
+        for id in self.output_ids() {
+            self.coalescer.record_change(id, now);
+        }
+        self.reschedule_idle_timer();
+    }
+
+    /// Same shape as [`Self::on_renderer_config_changed`] for spec 4's
+    /// `LocationConfig` (FR-015). Coalesces every managed output rather than only
+    /// solar-anchored ones — the accepted first cut per tasks.md T050's own note.
+    pub fn on_location_changed(&mut self, new_location: Option<Location>) {
+        self.location = new_location;
+        let now = Instant::now();
+        for id in self.output_ids() {
+            self.coalescer.record_change(id, now);
+        }
+        self.reschedule_idle_timer();
+    }
 }
 
 impl CompositorHandler for WallpaperDaemon {
@@ -465,6 +577,11 @@ impl LayerShellHandler for WallpaperDaemon {
         }
         self.evaluate_output(index, chrono::Local::now());
         self.draw(index);
+        // This output's pack (and therefore its real next-transition instant) may
+        // have just become known for the first time — resync the idle-wait timer so
+        // it doesn't keep running on the startup fallback deadline (`next_wake_instant`
+        // computed before any output existed) until that fallback happens to fire.
+        self.reschedule_idle_timer();
     }
 }
 

@@ -11,7 +11,7 @@ schedule-engine = { path = "../schedule-engine" }
 pack-loader = { path = "../pack-loader" }
 serde = { version = "1.0", features = ["derive"] }
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
-cosmic-config = { git = "https://github.com/pop-os/libcosmic", default-features = false, features = ["macro"] }
+cosmic-config = { git = "https://github.com/pop-os/libcosmic", default-features = false, features = ["macro", "calloop"] }
 smithay-client-toolkit = "0.20.0"
 wayland-client = { version = "0.31", features = ["system"] }
 calloop = "0.14"
