@@ -5899,6 +5899,7 @@ name = "wallpaper-settings"
 version = "0.1.0"
 dependencies = [
  "cosmic-config",
+ "image",
  "libcosmic",
  "pack-loader",
  "schedule-engine",

@@ -29,7 +29,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
         format!("Duration: {seconds}s"),
         widget::slider(5.0f32..=120.0, seconds as f32, Message::DurationChanged).step(5.0f32),
     ));
-    widget::column::with_capacity(1).push(section).into()
+    widget::scrollable(widget::column::with_capacity(1).push(section)).into()
 }
 
 #[cfg(test)]

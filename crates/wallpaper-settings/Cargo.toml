@@ -26,6 +26,10 @@ libcosmic = { git = "https://github.com/pop-os/libcosmic", features = ["wgpu", "
 
 [dev-dependencies]
 tempfile = "3.27"
+# Test-fixture-only: writes synthetic PNGs for pack_display.rs's unit tests (spec 008
+# T002/T032-T034) — same version/features wallpaperctl already uses for the same
+# purpose, not a new mechanism this crate depends on at runtime.
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [lints.clippy]
 unwrap_used = "deny"

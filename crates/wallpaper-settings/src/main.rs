@@ -5,6 +5,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 mod app;
+mod pack_display;
 mod pages;
 
 fn main() {
