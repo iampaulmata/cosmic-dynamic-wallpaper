@@ -28,7 +28,9 @@ pub enum RegistryStatus {
 /// (data-model.md `PackRegistryEntry`), independent of whether it's currently loaded.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PackRegistryEntry {
+    /// The pack's identity key (FR-009).
     pub source: PackSource,
+    /// Whether this source was reachable last time it was checked.
     pub status: RegistryStatus,
 }
 

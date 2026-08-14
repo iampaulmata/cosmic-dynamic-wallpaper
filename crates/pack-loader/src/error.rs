@@ -12,30 +12,73 @@ use std::path::PathBuf;
 #[derive(Debug)]
 pub enum ManifestError {
     /// The manifest file couldn't be found where expected.
-    ManifestNotFound { path: PathBuf },
+    ManifestNotFound {
+        /// The manifest path that was expected but not found.
+        path: PathBuf,
+    },
     /// The manifest failed to parse as TOML, or didn't match the expected schema shape.
-    ParseFailure { path: PathBuf, message: String },
+    ParseFailure {
+        /// The manifest file that failed to parse.
+        path: PathBuf,
+        /// The underlying parse error's message.
+        message: String,
+    },
     /// The manifest declared a `schema_version` newer than this loader supports.
-    UnsupportedSchemaVersion { found: u32, max_supported: u32 },
+    UnsupportedSchemaVersion {
+        /// The `schema_version` the manifest declared.
+        found: u32,
+        /// The highest `schema_version` this loader understands.
+        max_supported: u32,
+    },
     /// An image entry's `anchor` string didn't match any recognized anchor grammar.
-    InvalidAnchor { file: String, value: String },
+    InvalidAnchor {
+        /// The image entry's declared `file` name.
+        file: String,
+        /// The offending `anchor` string value.
+        value: String,
+    },
     /// A manifest image entry names a file that isn't present in the pack directory.
-    MissingImageFile { file: String },
+    MissingImageFile {
+        /// The missing file's declared name.
+        file: String,
+    },
     /// An image entry's resolved path falls outside the pack directory (FR-006a).
-    PathEscapesPackDirectory { file: String },
+    PathEscapesPackDirectory {
+        /// The offending entry's declared name.
+        file: String,
+    },
     /// An image file exists but isn't a readable/decodable image.
-    UnreadableImage { file: String, reason: String },
+    UnreadableImage {
+        /// The unreadable file's declared name.
+        file: String,
+        /// Why it couldn't be read (from the underlying image decoder).
+        reason: String,
+    },
     /// A `default_scaling` or per-image `scaling` value wasn't a recognized mode name.
-    InvalidScalingMode { value: String },
+    InvalidScalingMode {
+        /// The offending scaling-mode string value.
+        value: String,
+    },
     /// A `fallback_color` value wasn't a well-formed color.
-    InvalidColor { value: String },
+    InvalidColor {
+        /// The offending color string value.
+        value: String,
+    },
     /// The path (file or directory name) contained invalid (non-UTF-8) characters.
-    NonUtf8Path { path: PathBuf },
+    NonUtf8Path {
+        /// The offending path (as far as it could be represented).
+        path: PathBuf,
+    },
     /// Spec 1's own pack-validation rejected the resolved anchor list (FR-003) — mixed
     /// anchor types, too many anchors, or a duplicate-instant tie.
     InvalidPack(schedule_engine::PackError),
     /// An underlying filesystem operation failed (permission denied, I/O error, etc.).
-    Io { path: PathBuf, message: String },
+    Io {
+        /// The path the failing operation was acting on.
+        path: PathBuf,
+        /// The underlying I/O error's message.
+        message: String,
+    },
 }
 
 impl fmt::Display for ManifestError {
@@ -99,9 +142,15 @@ impl From<schedule_engine::PackError> for ManifestError {
 #[derive(Debug)]
 pub enum RegistryError {
     /// The underlying persistence layer failed to read or write.
-    Storage { message: String },
+    Storage {
+        /// The underlying storage error's message.
+        message: String,
+    },
     /// A registry operation (e.g. `remove`) referenced a source that isn't registered.
-    NotFound { source: String },
+    NotFound {
+        /// The unregistered source that was referenced.
+        source: String,
+    },
 }
 
 impl fmt::Display for RegistryError {
