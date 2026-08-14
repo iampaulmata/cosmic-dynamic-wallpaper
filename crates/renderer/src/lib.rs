@@ -16,6 +16,7 @@ pub mod gpu;
 pub mod output;
 pub mod portal_location;
 pub mod scheduler_bridge;
+pub mod starter_pack;
 pub mod surface;
 pub mod texture;
 

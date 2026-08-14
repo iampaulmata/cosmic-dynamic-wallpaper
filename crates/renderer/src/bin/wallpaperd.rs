@@ -13,8 +13,9 @@ use wayland_client::{globals::registry_queue_init, Connection};
 use pack_loader::Registry;
 use renderer::dbus_service::{self, DaemonInterface};
 use renderer::portal_location::{self, PortalEvent};
+use renderer::starter_pack;
 use renderer::surface::WallpaperDaemon;
-use renderer::{effective_location, LocationMode, LocationConfigEntry, RendererConfig};
+use renderer::{effective_location, LocationConfigEntry, LocationMode, RendererConfig};
 
 fn main() {
     tracing_subscriber::fmt::init();
@@ -33,9 +34,21 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut event_loop: EventLoop<'static, WallpaperDaemon> = EventLoop::try_new()?;
     WaylandSource::new(conn, event_queue).insert(event_loop.handle()).map_err(|e| e.error)?;
 
-    let pack_registry = Registry::open().map_err(|e| format!("pack registry: {e}"))?;
+    let mut pack_registry = Registry::open().map_err(|e| format!("pack registry: {e}"))?;
     let renderer_config_store = RendererConfig::open()?;
-    let renderer_config = RendererConfig::load(&renderer_config_store);
+    let mut renderer_config = RendererConfig::load(&renderer_config_store);
+
+    // spec 7 US2 (FR-008/FR-010/FR-011): self-register the bundled starter pack on a
+    // genuinely fresh install — see starter_pack.rs's module doc for why this happens
+    // here rather than in postinst (a per-user cosmic-config write postinst has no way
+    // to make correctly, running as root with no user context).
+    if starter_pack::maybe_register(std::path::Path::new(starter_pack::STARTER_PACK_SYSTEM_PATH), &mut pack_registry, &mut renderer_config) {
+        if let Err(e) = renderer_config.save(&renderer_config_store) {
+            tracing::error!(error = %e, "failed to persist the starter pack's default assignment");
+        }
+        tracing::info!("registered and assigned the bundled starter pack (fresh install)");
+    }
+
     let location_store = LocationConfigEntry::open()?;
     let initial_location_entry = LocationConfigEntry::load(&location_store);
     // spec 6 Cross-Spec Dependency (plan.md): scheduling reads the *effective* location
