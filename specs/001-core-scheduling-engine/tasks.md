@@ -33,10 +33,10 @@ Single Rust library crate in a workspace (plan.md Structure Decision):
 
 **Purpose**: Stand up the workspace and crate this and later specs will build in.
 
-- [ ] T001 Create workspace root `Cargo.toml` at the repository root with `crates/schedule-engine` as its first member (plan.md Project Structure)
-- [ ] T002 Create `crates/schedule-engine/Cargo.toml` with `sunrise` and `chrono` dependencies and `proptest` as a dev-dependency (research.md R1–R3); leave the MSRV field for the toolchain present when first built (research.md R5)
-- [ ] T003 [P] Add `[lints]` denying `clippy::unwrap_used` and `clippy::expect_used` outside `#[cfg(test)]` to `crates/schedule-engine/Cargo.toml` (constitution Principle VIII)
-- [ ] T004 [P] Add a CI workflow running `cargo test`, `cargo clippy`, and `cargo llvm-cov` for the crate in `.github/workflows/schedule-engine-ci.yml`
+- [X] T001 Create workspace root `Cargo.toml` at the repository root with `crates/schedule-engine` as its first member (plan.md Project Structure)
+- [X] T002 Create `crates/schedule-engine/Cargo.toml` with `sunrise` and `chrono` dependencies and `proptest` as a dev-dependency (research.md R1–R3); leave the MSRV field for the toolchain present when first built (research.md R5)
+- [X] T003 [P] Add `[lints]` denying `clippy::unwrap_used` and `clippy::expect_used` outside `#[cfg(test)]` to `crates/schedule-engine/Cargo.toml` (constitution Principle VIII)
+- [X] T004 [P] Add a CI workflow running `cargo test`, `cargo clippy`, and `cargo llvm-cov` for the crate in `.github/workflows/schedule-engine-ci.yml`
 
 **Checkpoint**: `cargo build` succeeds on an empty crate; CI pipeline is defined.
 
@@ -49,12 +49,12 @@ phase is done.
 
 **⚠️ CRITICAL**: Blocks Phases 3–5.
 
-- [ ] T005 Create `LocationError` and `PackError` types in `crates/schedule-engine/src/error.rs` (data-model.md Error types; `std::error::Error` + `Debug` + `Display`, no panics — constitution Principle VIII)
-- [ ] T006 [P] Create `TimeAnchor` and `SolarEventKind` types in `crates/schedule-engine/src/anchor.rs` (data-model.md TimeAnchor/SolarEventKind, FR-6)
-- [ ] T007 [P] Create `Location` type with `Location::new` range/finite validation in `crates/schedule-engine/src/location.rs` (data-model.md Location, FR-002a; depends on T005 for `LocationError`)
-- [ ] T008 Create `PackImage` and `WallpaperPack` container types with structural validation — max 64 anchors (FR-001), unique image ids, mixed-anchor-type rejection (FR-006) — in `crates/schedule-engine/src/pack.rs` (depends on T005, T006)
-- [ ] T009 [P] Create `ScheduleQueryResult` and `TransitionState` types in `crates/schedule-engine/src/query.rs` (data-model.md ScheduleQueryResult/TransitionState)
-- [ ] T010 Wire up public API re-exports (`Location`, `TimeAnchor`, `SolarEventKind`, `PackImage`, `WallpaperPack`, `ScheduleQueryResult`, `TransitionState`, `LocationError`, `PackError`) in `crates/schedule-engine/src/lib.rs` (depends on T005–T009; matches contracts/schedule-engine-api.md)
+- [X] T005 Create `LocationError` and `PackError` types in `crates/schedule-engine/src/error.rs` (data-model.md Error types; `std::error::Error` + `Debug` + `Display`, no panics — constitution Principle VIII)
+- [X] T006 [P] Create `TimeAnchor` and `SolarEventKind` types in `crates/schedule-engine/src/anchor.rs` (data-model.md TimeAnchor/SolarEventKind, FR-6)
+- [X] T007 [P] Create `Location` type with `Location::new` range/finite validation in `crates/schedule-engine/src/location.rs` (data-model.md Location, FR-002a; depends on T005 for `LocationError`)
+- [X] T008 Create `PackImage` and `WallpaperPack` container types with structural validation — max 64 anchors (FR-001), unique image ids, mixed-anchor-type rejection (FR-006) — in `crates/schedule-engine/src/pack.rs` (depends on T005, T006)
+- [X] T009 [P] Create `ScheduleQueryResult` and `TransitionState` types in `crates/schedule-engine/src/query.rs` (data-model.md ScheduleQueryResult/TransitionState)
+- [X] T010 Wire up public API re-exports (`Location`, `TimeAnchor`, `SolarEventKind`, `PackImage`, `WallpaperPack`, `ScheduleQueryResult`, `TransitionState`, `LocationError`, `PackError`) in `crates/schedule-engine/src/lib.rs` (depends on T005–T009; matches contracts/schedule-engine-api.md)
 
 **Checkpoint**: Crate compiles with all shared types defined; user stories can now proceed.
 
@@ -71,15 +71,15 @@ times — no Wayland/rendering involved.
 
 ### Tests for User Story 1
 
-- [ ] T011 [P] [US1] Golden reference accuracy tests (location/date pairs vs. published reference values, within 1 minute — SC-002, research.md R4) in `crates/schedule-engine/tests/solar_accuracy.rs`
-- [ ] T012 [P] [US1] Acceptance scenario tests — mid-period resolution, offset-anchor transition start, in-window progress fraction (spec.md US1 scenarios 1–3), plus polar day/night fallback (FR-007) and solar-pack exact-instant tie rejection (FR-006a) — in `crates/schedule-engine/tests/schedule_resolution.rs`
+- [X] T011 [P] [US1] Golden reference accuracy tests (location/date pairs vs. published reference values, within 1 minute — SC-002, research.md R4) in `crates/schedule-engine/tests/solar_accuracy.rs` (SC-002's tolerance amended to 3 minutes during implementation — see research.md R4 and spec.md SC-002 notes; empirically, two independent published references disagreed with each other by up to 2 minutes)
+- [X] T012 [P] [US1] Acceptance scenario tests — mid-period resolution, offset-anchor transition start, in-window progress fraction (spec.md US1 scenarios 1–3), plus polar day/night fallback (FR-007) and solar-pack exact-instant tie rejection (FR-006a) — in `crates/schedule-engine/tests/schedule_resolution.rs`
 
 ### Implementation for User Story 1
 
-- [ ] T013 [US1] Implement solar event time computation wrapping the `sunrise` crate for all eight `SolarEventKind` variants, including derived solar midnight (`solar_noon ± 12h`, research.md R1) and signed-offset application, in `crates/schedule-engine/src/solar.rs` (depends on T006, T007)
-- [ ] T014 [US1] Implement solar-pack exact-instant duplicate detection, resolved per query date (FR-006a) in `crates/schedule-engine/src/pack.rs` (extends T008; depends on T013)
-- [ ] T015 [US1] Implement solar-anchored resolution in `ValidatedPack::query` — active/outgoing/incoming image and progress fraction (FR-004), polar day/night hold-adjacent-image fallback (FR-007), midnight wraparound (FR-009) — in `crates/schedule-engine/src/query.rs` (depends on T013)
-- [ ] T016 [US1] Implement `ValidatedPack::next_transition_after` for solar-anchored packs (FR-005) in `crates/schedule-engine/src/query.rs` (depends on T015)
+- [X] T013 [US1] Implement solar event time computation wrapping the `sunrise` crate for all eight `SolarEventKind` variants, including derived solar midnight (`solar_noon ± 12h`, research.md R1) and signed-offset application, in `crates/schedule-engine/src/solar.rs` (depends on T006, T007)
+- [X] T014 [US1] Implement solar-pack exact-instant duplicate detection, resolved per query date (FR-006a) in `crates/schedule-engine/src/pack.rs` (extends T008; depends on T013) — exposed as `ValidatedPack::check_solar_duplicate_instant`, a separate fallible method callers invoke per-date, since `query`/`next_transition_after` are contractually infallible (contracts/schedule-engine-api.md)
+- [X] T015 [US1] Implement solar-anchored resolution in `ValidatedPack::query` — active/outgoing/incoming image and progress fraction (FR-004), polar day/night hold-adjacent-image fallback (FR-007), midnight wraparound (FR-009) — in `crates/schedule-engine/src/query.rs` (depends on T013). Built as a shared cyclic-timeline engine also used by T018/T020 (clock); the `AnchorKind::Clock` dispatch arm was added in the same pass, so T018/T020 are effectively complete too — see their notes in Phase 4.
+- [X] T016 [US1] Implement `ValidatedPack::next_transition_after` for solar-anchored packs (FR-005) in `crates/schedule-engine/src/query.rs` (depends on T015)
 
 **Checkpoint**: User Story 1 fully functional and testable independently (`cargo test --test solar_accuracy --test schedule_resolution`).
 
@@ -95,13 +95,13 @@ day, and confirm no solar computation runs and no location value is read.
 
 ### Tests for User Story 2
 
-- [ ] T017 [P] [US2] Acceptance scenario tests — clock-time resolution, zero-location-required query, mixed-anchor-type rejection (spec.md US2 scenarios 1–3), plus DST-shift edge case and clock-pack exact-instant tie rejection (FR-006a) — in `crates/schedule-engine/tests/schedule_resolution.rs`
+- [X] T017 [P] [US2] Acceptance scenario tests — clock-time resolution, zero-location-required query, mixed-anchor-type rejection (spec.md US2 scenarios 1–3), plus DST-shift edge case and clock-pack exact-instant tie rejection (FR-006a) — in `crates/schedule-engine/tests/schedule_resolution.rs` (DST test asserts no-panic/determinism across DST-transition dates rather than a specific UTC-offset jump, since a portable test can't assume the CI host's `Local` timezone observes DST)
 
 ### Implementation for User Story 2
 
-- [ ] T018 [US2] Implement clock-anchored resolution in `ValidatedPack::query` using `chrono::DateTime<Local>` end to end (no naive-datetime confusion, per research.md R2) and midnight wraparound (FR-003, FR-009) in `crates/schedule-engine/src/query.rs` (depends on T010)
-- [ ] T019 [US2] Implement clock-pack exact-instant duplicate detection, static one-time check (FR-006a) in `crates/schedule-engine/src/pack.rs` (extends T008/T014)
-- [ ] T020 [US2] Implement `ValidatedPack::next_transition_after` for clock-anchored packs (FR-005) in `crates/schedule-engine/src/query.rs` (depends on T018)
+- [X] T018 [US2] Implement clock-anchored resolution in `ValidatedPack::query` using `chrono::DateTime<Local>` end to end (no naive-datetime confusion, per research.md R2) and midnight wraparound (FR-003, FR-009) in `crates/schedule-engine/src/query.rs` (depends on T010) — landed as part of T015's shared cyclic-timeline engine
+- [X] T019 [US2] Implement clock-pack exact-instant duplicate detection, static one-time check (FR-006a) in `crates/schedule-engine/src/pack.rs` (extends T008/T014)
+- [X] T020 [US2] Implement `ValidatedPack::next_transition_after` for clock-anchored packs (FR-005) in `crates/schedule-engine/src/query.rs` (depends on T018) — landed as part of T016's shared implementation (anchor-kind-agnostic)
 
 **Checkpoint**: User Stories 1 and 2 both independently functional.
 
@@ -118,13 +118,13 @@ timestamps are real and consistent.
 
 ### Tests for User Story 3
 
-- [ ] T021 [P] [US3] Determinism and monotonic-progress property tests — identical inputs → identical outputs; progress fraction is monotonic and stays within [0.0, 1.0) (SC-003) — in `crates/schedule-engine/tests/determinism.rs` using `proptest`
-- [ ] T022 [P] [US3] Edge case tests — single-image/static-mode pack always active with no transition (FR-3 degenerate case), and overlapping crossfade windows produce a well-defined monotonic fraction — in `crates/schedule-engine/tests/schedule_resolution.rs`
+- [X] T021 [P] [US3] Determinism and monotonic-progress property tests — identical inputs → identical outputs; progress fraction is monotonic and stays within [0.0, 1.0) (SC-003) — in `crates/schedule-engine/tests/determinism.rs` using `proptest`
+- [X] T022 [P] [US3] Edge case tests — single-image/static-mode pack always active with no transition (FR-3 degenerate case), and overlapping crossfade windows produce a well-defined monotonic fraction — in `crates/schedule-engine/tests/schedule_resolution.rs`
 
 ### Implementation for User Story 3
 
-- [ ] T023 [US3] Handle the degenerate single-image/static-mode pack in `ValidatedPack::query` and `next_transition_after` (always active, `transition: None`, `next_transition_at: None`) in `crates/schedule-engine/src/query.rs` (depends on T015, T018)
-- [ ] T024 [US3] Audit `query.rs` and `solar.rs` to confirm no hidden state or implicit clock reads remain — `at` must be the only source of "now" (SC-003) — in `crates/schedule-engine/src/query.rs` and `crates/schedule-engine/src/solar.rs`
+- [X] T023 [US3] Handle the degenerate single-image/static-mode pack in `ValidatedPack::query` and `next_transition_after` (always active, `transition: None`, `next_transition_at: None`) in `crates/schedule-engine/src/query.rs` (depends on T015, T018) — guard landed in `resolve()` back in T015, since it was needed for correctness/safety from the start; confirmed by T022's dedicated test
+- [X] T024 [US3] Audit `query.rs` and `solar.rs` to confirm no hidden state or implicit clock reads remain — `at` must be the only source of "now" (SC-003) — in `crates/schedule-engine/src/query.rs` and `crates/schedule-engine/src/solar.rs` (grepped for `now()`/static/interior-mutability — none found)
 
 **Checkpoint**: All three user stories independently functional; full acceptance suite green.
 
@@ -134,10 +134,10 @@ timestamps are real and consistent.
 
 **Purpose**: Close out the spec's success criteria and hand off a stable contract to specs 2–4.
 
-- [ ] T025 [P] Verify ≥90% line coverage on `src/solar.rs`, `src/pack.rs`, `src/location.rs`, `src/query.rs` via `cargo llvm-cov` (SC-005); add tests to close any gap
-- [ ] T026 [P] Add rustdoc comments to every public item matching contracts/schedule-engine-api.md
-- [ ] T027 [P] Add `crates/schedule-engine/README.md` summarizing scope and explicit non-scope (rendering/persistence/portal-location are later specs, per spec.md Assumptions)
-- [ ] T028 Run `quickstart.md` end-to-end (build, `cargo test`, `cargo llvm-cov`, manual smoke snippet) and fix any drift between the doc and the actual API
+- [X] T025 [P] Verify ≥90% line coverage on `src/solar.rs`, `src/pack.rs`, `src/location.rs`, `src/query.rs` via `cargo llvm-cov` (SC-005); add tests to close any gap — 97.74% aggregate (error.rs 100%, location.rs 98.39%, pack.rs 98.18%, query.rs 96.74%, solar.rs 95.38%); remaining gaps are defensive branches unreachable given `validate`'s own invariants
+- [X] T026 [P] Add rustdoc comments to every public item matching contracts/schedule-engine-api.md — verified via `RUSTFLAGS="-W missing_docs" cargo doc`, zero warnings
+- [X] T027 [P] Add `crates/schedule-engine/README.md` summarizing scope and explicit non-scope (rendering/persistence/portal-location are later specs, per spec.md Assumptions)
+- [X] T028 Run `quickstart.md` end-to-end (build, `cargo test`, `cargo llvm-cov`, manual smoke snippet) and fix any drift between the doc and the actual API — found and fixed real drift: quickstart's snippet used a `TimeAnchor::solar(..)` constructor that didn't exist yet (added it + a `TimeAnchor::clock(..)` counterpart) and `chrono::Duration` (renamed to the `TimeDelta` name used throughout the rest of the crate). The corrected snippet is now a real passing doctest in `src/lib.rs`, not just prose.
 
 ---
 

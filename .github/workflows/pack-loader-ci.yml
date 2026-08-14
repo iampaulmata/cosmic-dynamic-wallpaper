@@ -1,0 +1,52 @@
+name: pack-loader CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "crates/pack-loader/**"
+      - "crates/schedule-engine/**"
+      - "Cargo.toml"
+      - ".github/workflows/pack-loader-ci.yml"
+  pull_request:
+    paths:
+      - "crates/pack-loader/**"
+      - "crates/schedule-engine/**"
+      - "Cargo.toml"
+      - ".github/workflows/pack-loader-ci.yml"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: cargo test
+        run: cargo test --package pack-loader --all-targets
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: cargo clippy
+        run: cargo clippy --package pack-loader --all-targets -- -D warnings
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - name: cargo llvm-cov
+        run: cargo llvm-cov --package pack-loader --fail-under-lines 85

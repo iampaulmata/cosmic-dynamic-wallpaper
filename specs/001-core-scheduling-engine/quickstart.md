@@ -34,17 +34,22 @@ spec.md's three user stories:
 ## Check coverage (SC-005: ≥90% line coverage on pure logic)
 
 ```sh
-cargo llvm-cov --html
+cargo install cargo-llvm-cov --locked   # one-time
+rustup component add llvm-tools-preview # one-time
+cargo llvm-cov --package schedule-engine --summary-only
 ```
 
-Open the generated report and confirm `src/solar.rs`, `src/pack.rs`, `src/location.rs`, and
-`src/query.rs` each meet the 90% threshold.
+Confirm the `TOTAL` line coverage is at or above 90%. (As of this writing it's ~97.7%
+aggregate; the two source files with any gaps at all — `pack.rs`, `query.rs` — are both
+individually above 96%, and the handful of uncovered lines are defensive branches that
+are unreachable given `WallpaperPack::validate`'s own invariants, e.g. a `Clock` anchor
+inside an already-validated all-`Solar` pack.)
 
 ## Manual smoke check
 
 ```rust
 use schedule_engine::{Location, WallpaperPack, PackImage, TimeAnchor, SolarEventKind};
-use chrono::{Local, Duration};
+use chrono::{Local, TimeDelta};
 
 let loc = Location::new(51.5072, -0.1276)?;               // London
 let pack = WallpaperPack::validate(vec![
@@ -53,13 +58,19 @@ let pack = WallpaperPack::validate(vec![
     PackImage::new("dusk.jpg", TimeAnchor::solar(SolarEventKind::Sunset, None)),
 ])?;
 
-let result = pack.query(Some(&loc), Local::now(), Duration::seconds(60));
+let result = pack.query(Some(&loc), Local::now(), TimeDelta::seconds(60));
 println!("{result:?}");
 ```
 
 Expected outcome: prints a `ScheduleQueryResult` naming whichever of the three images is
 active right now in London, with a `transition` field populated only if the query happens to
 land inside a 60-second window around sunrise, solar noon, or sunset.
+
+This exact snippet now lives as a runnable doctest in `crates/schedule-engine/src/lib.rs`
+(`cargo test --package schedule-engine --doc`) — verified passing 2026-08-13 (T028). Note
+it uses `TimeAnchor::solar(..)`/`TimeAnchor::clock(..)` convenience constructors and
+`chrono::TimeDelta` (not the originally-drafted `Duration` alias name), added/corrected
+during implementation to match this doc rather than the other way around.
 
 ## What "done" looks like for this spec
 

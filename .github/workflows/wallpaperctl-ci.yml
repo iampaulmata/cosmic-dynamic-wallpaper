@@ -1,0 +1,65 @@
+name: wallpaperctl CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "crates/wallpaperctl/**"
+      - "crates/schedule-engine/**"
+      - "crates/pack-loader/**"
+      - "Cargo.toml"
+      - ".github/workflows/wallpaperctl-ci.yml"
+  pull_request:
+    paths:
+      - "crates/wallpaperctl/**"
+      - "crates/schedule-engine/**"
+      - "crates/pack-loader/**"
+      - "Cargo.toml"
+      - ".github/workflows/wallpaperctl-ci.yml"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # A session bus is required even for the "no daemon running" tests (they
+      # connect to a real bus and expect no wallpaperd service registered on it —
+      # see dbus_client.rs's test rationale).
+      - name: Start a D-Bus session bus
+        run: |
+          dbus-daemon --session --fork --address=unix:path=/tmp/dbus-session
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/tmp/dbus-session" >> "$GITHUB_ENV"
+      - name: cargo test
+        run: cargo test --package wallpaperctl --all-targets
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: cargo clippy
+        run: cargo clippy --package wallpaperctl --all-targets -- -D warnings
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Start a D-Bus session bus
+        run: |
+          dbus-daemon --session --fork --address=unix:path=/tmp/dbus-session
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/tmp/dbus-session" >> "$GITHUB_ENV"
+      - name: cargo llvm-cov
+        run: cargo llvm-cov --package wallpaperctl --fail-under-lines 75

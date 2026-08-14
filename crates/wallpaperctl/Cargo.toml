@@ -1,0 +1,29 @@
+[package]
+name = "wallpaperctl"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "CLI control surface for the dynamic wallpaper daemon"
+rust-version = "1.97"
+
+[[bin]]
+name = "wallpaperctl"
+path = "src/main.rs"
+
+[dependencies]
+schedule-engine = { path = "../schedule-engine" }
+pack-loader = { path = "../pack-loader" }
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+cosmic-config = { git = "https://github.com/pop-os/libcosmic", default-features = false, features = ["macro"] }
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
+
+[dev-dependencies]
+tempfile = "3.27"
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"

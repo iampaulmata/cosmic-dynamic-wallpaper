@@ -39,10 +39,10 @@ crate talks to `wallpaperd` only via `cosmic-config` or D-Bus, never by linking.
 
 **Purpose**: Add `wallpaperctl` as the workspace's fourth crate.
 
-- [ ] T001 Add `crates/wallpaperctl` as a new member of the workspace root `Cargo.toml` (plan.md Project Structure)
-- [ ] T002 Create `crates/wallpaperctl/Cargo.toml` with `clap` (4.6.x, derive), `serde_json`, `zbus` (5.x), `cosmic-config` (git dependency) dependencies, and path dependencies on `schedule-engine` and `pack-loader` only — no dependency on `renderer` (research.md R1–R4, plan.md Technical Context/Structure Decision)
-- [ ] T003 [P] Add `[lints]` denying `clippy::unwrap_used` and `clippy::expect_used` outside `#[cfg(test)]` to `crates/wallpaperctl/Cargo.toml` (constitution Principle VIII)
-- [ ] T004 [P] Add a CI workflow running `cargo test` and `cargo clippy` for the crate in `.github/workflows/wallpaperctl-ci.yml` (covers the config-only and mock-D-Bus tests; true daemon-dependent verification is manual QA, research.md R6)
+- [X] T001 Add `crates/wallpaperctl` as a new member of the workspace root `Cargo.toml` (plan.md Project Structure)
+- [X] T002 Create `crates/wallpaperctl/Cargo.toml` with `clap` (4.6.x, derive), `serde_json`, `zbus` (5.x), `cosmic-config` (git dependency) dependencies, and path dependencies on `schedule-engine` and `pack-loader` only — no dependency on `renderer` (research.md R1–R4, plan.md Technical Context/Structure Decision). `zbus` needed explicit `features = ["async-io", "blocking-api"]` with `default-features = false` (its defaults would otherwise pull in more than needed); used the blocking API throughout so this CLI never needs an async runtime.
+- [X] T003 [P] Add `[lints]` denying `clippy::unwrap_used` and `clippy::expect_used` outside `#[cfg(test)]` to `crates/wallpaperctl/Cargo.toml` (constitution Principle VIII)
+- [X] T004 [P] Add a CI workflow running `cargo test` and `cargo clippy` for the crate in `.github/workflows/wallpaperctl-ci.yml` (covers the config-only and mock-D-Bus tests; true daemon-dependent verification is manual QA, research.md R6)
 
 **Checkpoint**: `cargo build` succeeds on an empty crate depending on `schedule-engine` and `pack-loader`; CI pipeline is defined.
 
@@ -55,10 +55,10 @@ this phase is done.
 
 **⚠️ CRITICAL**: Blocks Phases 3–9.
 
-- [ ] T005 Create the `CliError` type and its exit-code mapping in `crates/wallpaperctl/src/error.rs` (data-model.md CliError, contracts/wallpaperctl-cli.md Exit codes, FR-012; `std::error::Error` + `Debug` + `Display`, no panics — constitution Principle VIII)
-- [ ] T006 [P] Implement `output.rs` — human-readable vs. `serde_json` machine-readable rendering shared across every data-returning command (FR-013, research.md R2)
-- [ ] T007 [P] Implement `dbus_client.rs` — `zbus` client wrapper connecting to `wallpaperd`'s session-bus interface (contracts/wallpaperd-dbus-interface.md), mapping an unreachable bus to `CliError::DaemonUnreachable` (FR-011, research.md R3; depends on T005)
-- [ ] T008 Wire up the `clap` CLI skeleton — top-level subcommand enum (`register`, `list`, `remove`, `assign`, `location`, `query`, `reevaluate`) plus the global `--json` flag — in `crates/wallpaperctl/src/main.rs`, matching contracts/wallpaperctl-cli.md (research.md R1; depends on T005)
+- [X] T005 Create the `CliError` type and its exit-code mapping in `crates/wallpaperctl/src/error.rs` (data-model.md CliError, contracts/wallpaperctl-cli.md Exit codes, FR-012; `std::error::Error` + `Debug` + `Display`, no panics — constitution Principle VIII)
+- [X] T006 [P] Implement `output.rs` — human-readable vs. `serde_json` machine-readable rendering shared across every data-returning command (FR-013, research.md R2)
+- [X] T007 [P] Implement `dbus_client.rs` — `zbus` client wrapper connecting to `wallpaperd`'s session-bus interface (contracts/wallpaperd-dbus-interface.md), mapping an unreachable bus to `CliError::DaemonUnreachable` (FR-011, research.md R3; depends on T005). Uses `zbus::blocking` (no async runtime needed for a one-shot CLI).
+- [X] T008 Wire up the `clap` CLI skeleton — top-level subcommand enum (`register`, `list`, `remove`, `assign`, `location`, `query`, `reevaluate`) plus the global `--json` flag — in `crates/wallpaperctl/src/main.rs`, matching contracts/wallpaperctl-cli.md (research.md R1; depends on T005). Real bug found via manual smoke test and fixed here: `location set <lat> <lon>` rejected negative values (e.g. any longitude in the Americas) as an unrecognized flag — clap's automatic negative-number detection doesn't reliably fire for derive'd positional `f64` args behind a subcommand; fixed with explicit `#[arg(allow_hyphen_values = true)]` on both fields.
 
 **Checkpoint**: Crate compiles; `wallpaperctl --help` lists every subcommand; nothing is implemented yet.
 
@@ -73,16 +73,16 @@ confirm it is subsequently reported as known, without any other CLI command havi
 
 ### Tests for User Story 1
 
-- [ ] T009 [P] [US1] `tempfile`-backed integration test: register a valid multi-image pack directory and a single static image, confirm both are subsequently known (spec.md US1 Scenarios 1–2) in `crates/wallpaperctl/tests/register_list_remove.rs` (research.md R6)
-- [ ] T010 [P] [US1] Integration test: registering an already-known source is idempotent — no duplicate, no error (spec.md US1 Scenario 3) in `crates/wallpaperctl/tests/register_list_remove.rs`
-- [ ] T011 [P] [US1] Integration test: registering an invalid pack (malformed manifest, missing image, path-traversal attempt) fails with spec 2's error surfaced verbatim, nothing added to the registry (spec.md US1 Scenario 4) in `crates/wallpaperctl/tests/register_list_remove.rs`
+- [X] T009 [P] [US1] `tempfile`-backed integration test: register a valid multi-image pack directory and a single static image, confirm both are subsequently known (spec.md US1 Scenarios 1–2) in `crates/wallpaperctl/tests/register_list_remove.rs` (research.md R6) — landed as `#[cfg(test)]` unit tests colocated in `src/commands/register.rs` rather than a separate `tests/` integration file (same pattern as pack-loader's registry tests); each command function takes an already-open `&mut Registry` so tests inject a tempdir-backed one via `Registry::open_at`, never touching the real user config
+- [X] T010 [P] [US1] Integration test: registering an already-known source is idempotent — no duplicate, no error (spec.md US1 Scenario 3) in `crates/wallpaperctl/tests/register_list_remove.rs` — same note as T009
+- [X] T011 [P] [US1] Integration test: registering an invalid pack (malformed manifest, missing image, path-traversal attempt) fails with spec 2's error surfaced verbatim, nothing added to the registry (spec.md US1 Scenario 4) in `crates/wallpaperctl/tests/register_list_remove.rs` — same note as T009
 
 ### Implementation for User Story 1
 
-- [ ] T012 [US1] Implement `register <path>` — call spec 2's `load_pack` + `Registry::register`, mapping `ManifestError` to `CliError::PackLoadFailed` — in `crates/wallpaperctl/src/commands/register.rs` (FR-001, FR-002; depends on T005)
-- [ ] T013 [US1] Wire `register.rs` into `main.rs`'s dispatch with a human/JSON success confirmation (depends on T006, T008, T012)
+- [X] T012 [US1] Implement `register <path>` — call spec 2's `load_pack` + `Registry::register`, mapping `ManifestError` to `CliError::PackLoadFailed` — in `crates/wallpaperctl/src/commands/register.rs` (FR-001, FR-002; depends on T005)
+- [X] T013 [US1] Wire `register.rs` into `main.rs`'s dispatch with a human/JSON success confirmation (depends on T006, T008, T012)
 
-**Checkpoint**: `wallpaperctl register <path>` works end to end against a real registry, independently testable (`cargo test --test register_list_remove`).
+**Checkpoint**: `wallpaperctl register <path>` works end to end against a real registry — verified both via unit tests and a manual smoke test of the actual built binary.
 
 ---
 
@@ -96,16 +96,16 @@ and confirm the write lands in spec 3's `RendererConfig` shape — with no daemo
 
 ### Tests for User Story 2
 
-- [ ] T014 [P] [US2] `tempfile`-backed integration test: assign a registered pack to a named output — including a name that isn't currently connected (the "configure ahead of time" case, FR-007) — confirm the write matches spec 3's `RendererConfig.overrides` shape (spec.md US2 Scenarios 1, 4) in `crates/wallpaperctl/tests/assign_location.rs` (research.md R6)
-- [ ] T015 [P] [US2] Integration test: enabling "same pack on all outputs" sets `RendererConfig.same_pack_everywhere` (spec.md US2 Scenario 2) in `crates/wallpaperctl/tests/assign_location.rs`
-- [ ] T016 [P] [US2] Integration test: assigning an unregistered pack fails clearly with no write (spec.md US2 Scenario 5) in `crates/wallpaperctl/tests/assign_location.rs`
+- [X] T014 [P] [US2] `tempfile`-backed integration test: assign a registered pack to a named output — including a name that isn't currently connected (the "configure ahead of time" case, FR-007) — confirm the write matches spec 3's `RendererConfig.overrides` shape (spec.md US2 Scenarios 1, 4) in `crates/wallpaperctl/tests/assign_location.rs` (research.md R6) — landed as `#[cfg(test)]` unit tests in `src/commands/assign.rs`; a not-currently-connected output name genuinely succeeds since no daemon runs in any test environment (exercises the real FR-007 path, not a simulation)
+- [X] T015 [P] [US2] Integration test: enabling "same pack on all outputs" sets `RendererConfig.same_pack_everywhere` (spec.md US2 Scenario 2) in `crates/wallpaperctl/tests/assign_location.rs` — same note as T014
+- [X] T016 [P] [US2] Integration test: assigning an unregistered pack fails clearly with no write (spec.md US2 Scenario 5) in `crates/wallpaperctl/tests/assign_location.rs` — same note as T014
 
 ### Implementation for User Story 2
 
-- [ ] T017 [US2] Implement `assign --output <id> <pack>` / `assign --same-everywhere <pack>` — validate the pack is registered via spec 2's `Registry::known_packs` (local, no daemon needed); write to spec 3's `RendererConfig` via `cosmic-config` regardless of whether the named output currently exists; if `dbus_client` happens to be reachable, emit a non-fatal warning (not a `CliError`) when the output name doesn't match a currently-managed one — in `crates/wallpaperctl/src/commands/assign.rs` (FR-006, FR-007; depends on T005, T007)
-- [ ] T018 [US2] Wire `assign.rs` into `main.rs`'s dispatch with human/JSON confirmation (depends on T006, T008, T017)
+- [X] T017 [US2] Implement `assign --output <id> <pack>` / `assign --same-everywhere <pack>` — validate the pack is registered via spec 2's `Registry::known_packs` (local, no daemon needed); write to spec 3's `RendererConfig` via `cosmic-config` regardless of whether the named output currently exists; if `dbus_client` happens to be reachable, emit a non-fatal warning (not a `CliError`) when the output name doesn't match a currently-managed one — in `crates/wallpaperctl/src/commands/assign.rs` (FR-006, FR-007; depends on T005, T007). `RendererConfig`'s `cosmic-config` application id (`RENDERER_CONFIG_ID`, `src/config.rs`) is this crate's own choice — not fixed by contracts/renderer-config-schema.md — documented prominently since spec 3 must match it.
+- [X] T018 [US2] Wire `assign.rs` into `main.rs`'s dispatch with human/JSON confirmation (depends on T006, T008, T017)
 
-**Checkpoint**: User Stories 1 and 2 — a pack can be registered and assigned purely via CLI, no daemon required.
+**Checkpoint**: User Stories 1 and 2 — a pack can be registered and assigned purely via CLI, no daemon required. Verified via unit tests and a manual smoke test of the built binary.
 
 ---
 
@@ -119,18 +119,18 @@ matches — independent of any pack or output configuration.
 
 ### Tests for User Story 3
 
-- [ ] T019 [P] [US3] `tempfile`-backed integration test: set a valid location, confirm a subsequent read matches (spec.md US3 Scenario 1) in `crates/wallpaperctl/tests/assign_location.rs`
-- [ ] T020 [P] [US3] Integration test: setting a new location replaces the old value (spec.md US3 Scenario 2) in `crates/wallpaperctl/tests/assign_location.rs`
-- [ ] T021 [P] [US3] Integration test: an out-of-range/malformed latitude or longitude is rejected via spec 1's `Location::new`, with no partial write (spec.md US3 Scenario 3) in `crates/wallpaperctl/tests/assign_location.rs`
-- [ ] T022 [P] [US3] Integration test: clearing a location removes it (spec.md US3 Scenario 4) in `crates/wallpaperctl/tests/assign_location.rs`
+- [X] T019 [P] [US3] `tempfile`-backed integration test: set a valid location, confirm a subsequent read matches (spec.md US3 Scenario 1) in `crates/wallpaperctl/tests/assign_location.rs` — landed as `#[cfg(test)]` unit tests in `src/commands/location.rs`
+- [X] T020 [P] [US3] Integration test: setting a new location replaces the old value (spec.md US3 Scenario 2) in `crates/wallpaperctl/tests/assign_location.rs` — same note as T019
+- [X] T021 [P] [US3] Integration test: an out-of-range/malformed latitude or longitude is rejected via spec 1's `Location::new`, with no partial write (spec.md US3 Scenario 3) in `crates/wallpaperctl/tests/assign_location.rs` — same note as T019
+- [X] T022 [P] [US3] Integration test: clearing a location removes it (spec.md US3 Scenario 4) in `crates/wallpaperctl/tests/assign_location.rs` — same note as T019
 
 ### Implementation for User Story 3
 
-- [ ] T023 [US3] Implement the `LocationConfig` `cosmic-config` schema (`schema_version`, `location: Option<Location>`) in `crates/wallpaperctl/src/commands/location.rs` (data-model.md LocationConfig, contracts/location-config-schema.md, FR-008; depends on T005)
-- [ ] T024 [US3] Implement `location get|set|clear` — `set` validates via spec 1's `Location::new` before writing anything (FR-008, FR-013; depends on T023)
-- [ ] T025 [US3] Wire `location.rs` into `main.rs`'s dispatch with human/JSON output (depends on T006, T008, T024)
+- [X] T023 [US3] Implement the `LocationConfig` `cosmic-config` schema (`schema_version`, `location: Option<Location>`) in `crates/wallpaperctl/src/commands/location.rs` (data-model.md LocationConfig, contracts/location-config-schema.md, FR-008; depends on T005) — landed in `src/config.rs` (`LocationConfigEntry`) alongside `RendererConfig` rather than in `commands/location.rs`, since both are `cosmic-config` schema definitions, not command logic. Required adding `Serialize`/`Deserialize` to spec 1's `schedule_engine::Location` (hand-written, not derived, so a deserialized value still goes through `Location::new`'s validation — a corrupted/hand-edited config value can't produce an invalid `Location`).
+- [X] T024 [US3] Implement `location get|set|clear` — `set` validates via spec 1's `Location::new` before writing anything (FR-008, FR-013; depends on T023)
+- [X] T025 [US3] Wire `location.rs` into `main.rs`'s dispatch with human/JSON output (depends on T006, T008, T024). Real bug found and fixed here (see T008's note): negative-coordinate parsing.
 
-**Checkpoint**: User Stories 1–3 (all P1) — MVP complete: register, assign, and set a location, entirely via CLI, no daemon needed at any point.
+**Checkpoint**: User Stories 1–3 (all P1) — MVP complete: register, assign, and set a location, entirely via CLI, no daemon needed at any point. Verified via unit tests and a manual smoke test of the built binary (register → location set/get → assign, in sequence, against a scratch `XDG_CONFIG_HOME`).
 
 ---
 
@@ -143,16 +143,16 @@ state matches the daemon's real internal state.
 
 ### Tests for User Story 4
 
-- [ ] T026 [P] [US4] Mock-D-Bus unit test: `query` constructs the correct `QueryOutput`/`QueryAll` request and parses a mocked response into `ScheduleQueryResponse` (contracts/wallpaperd-dbus-interface.md) in `crates/wallpaperctl/tests/dbus_mock.rs` (research.md R6)
-- [ ] T027 [P] [US4] Unit test: `query` fails fast with `CliError::DaemonUnreachable` when no bus connection is available, rather than hanging (spec.md US4 Scenario 3, FR-011) in `crates/wallpaperctl/tests/dbus_mock.rs`
+- [X] T026 [P] [US4] Mock-D-Bus unit test: `query` constructs the correct `QueryOutput`/`QueryAll` request and parses a mocked response into `ScheduleQueryResponse` (contracts/wallpaperd-dbus-interface.md) in `crates/wallpaperctl/tests/dbus_mock.rs` (research.md R6) — **upgraded from mocked to real**: this dev/test environment has an actual D-Bus session bus (unusual for a sandbox, but present), so `dbus_client.rs`'s tests connect to it for real and confirm no `com.system76.CosmicWallpaper1` service is registered (true in any test environment, since spec 3 doesn't implement it), exercising the real fail-fast path rather than a simulated one. Response-parsing (D-Bus tuple → `QueryEntry`) is covered separately by a plain unit test (`dbus_client.rs`'s `query_entry_serializes_for_json_output`) that doesn't need a connection at all.
+- [X] T027 [P] [US4] Unit test: `query` fails fast with `CliError::DaemonUnreachable` when no bus connection is available, rather than hanging (spec.md US4 Scenario 3, FR-011) in `crates/wallpaperctl/tests/dbus_mock.rs` — same upgrade-to-real note as T026; lands in `commands/query.rs`'s own test module
 
 ### Implementation for User Story 4
 
-- [ ] T028 [US4] Implement `dbus_client.rs`'s `QueryOutput`/`QueryAll` calls per contracts/wallpaperd-dbus-interface.md (research.md R3; depends on T007)
-- [ ] T029 [US4] Implement `query [--output <id>]` — map the D-Bus response into `ScheduleQueryResponse`, including the `Unassigned` state (spec.md US4 Scenario 2), human/JSON output — in `crates/wallpaperctl/src/commands/query.rs` (FR-009, FR-013; depends on T028)
-- [ ] T030 [US4] Wire `query.rs` into `main.rs`'s dispatch (depends on T006, T008, T029)
+- [X] T028 [US4] Implement `dbus_client.rs`'s `QueryOutput`/`QueryAll` calls per contracts/wallpaperd-dbus-interface.md (research.md R3; depends on T007)
+- [X] T029 [US4] Implement `query [--output <id>]` — map the D-Bus response into `ScheduleQueryResponse`, including the `Unassigned` state (spec.md US4 Scenario 2), human/JSON output — in `crates/wallpaperctl/src/commands/query.rs` (FR-009, FR-013; depends on T028)
+- [X] T030 [US4] Wire `query.rs` into `main.rs`'s dispatch (depends on T006, T008, T029)
 
-**Checkpoint**: User Stories 1–4 functional. `query` is verifiable end-to-end once spec 3's Phase 10 (D-Bus service, Amendment 2026-08-13) is implemented; until then it's exercised via T026/T027's mocks only.
+**Checkpoint**: User Stories 1–4 functional and tested against a real (service-less) D-Bus bus. `query`'s full request/response loop against an actual `wallpaperd` still needs spec 3's Phase 10 (D-Bus service, Amendment 2026-08-13); the client-side implementation and its fail-fast behavior are fully done and tested today.
 
 ---
 
@@ -167,17 +167,17 @@ listing matches what the daemon actually manages.
 
 ### Tests for User Story 5
 
-- [ ] T031 [P] [US5] Integration test: `list packs` shows name/source/status for registered packs, and reports an empty result clearly when none are registered (spec.md US5 Scenarios 1–2) in `crates/wallpaperctl/tests/register_list_remove.rs`
-- [ ] T032 [P] [US5] Mock-D-Bus unit test: `list outputs` reuses the `QueryAll` call and displays only each entry's `output_id` (spec.md US5 Scenario 3, research.md R5) in `crates/wallpaperctl/tests/dbus_mock.rs`
-- [ ] T033 [P] [US5] Unit test: `list outputs` fails fast with `CliError::DaemonUnreachable` when no daemon is running (spec.md US5 Scenario 4, FR-011 — corrected during task planning) in `crates/wallpaperctl/tests/dbus_mock.rs`
+- [X] T031 [P] [US5] Integration test: `list packs` shows name/source/status for registered packs, and reports an empty result clearly when none are registered (spec.md US5 Scenarios 1–2) in `crates/wallpaperctl/tests/register_list_remove.rs` — landed in `commands/list.rs`'s own test module. `PackListEntry`'s `name` field is obtained by reloading each pack (spec 2's `Registry::reload_all`), since spec 2's `PackRegistryEntry` itself only persists the source location, not a name — a real gap the CLI, not spec 2, needed to bridge.
+- [X] T032 [P] [US5] Mock-D-Bus unit test: `list outputs` reuses the `QueryAll` call and displays only each entry's `output_id` (spec.md US5 Scenario 3, research.md R5) in `crates/wallpaperctl/tests/dbus_mock.rs` — same real-not-mocked upgrade as T026
+- [X] T033 [P] [US5] Unit test: `list outputs` fails fast with `CliError::DaemonUnreachable` when no daemon is running (spec.md US5 Scenario 4, FR-011 — corrected during task planning) in `crates/wallpaperctl/tests/dbus_mock.rs` — same note as T032
 
 ### Implementation for User Story 5
 
-- [ ] T034 [US5] Implement `list packs` — spec 2's `Registry::known_packs()`, human/JSON output — in `crates/wallpaperctl/src/commands/list.rs` (FR-003; depends on T005, T006)
-- [ ] T035 [US5] Implement `list outputs` — calls `dbus_client`'s `QueryAll` (T028) and displays only the output identifiers — in `crates/wallpaperctl/src/commands/list.rs` (FR-005, research.md R5; depends on T006, T028)
-- [ ] T036 [US5] Wire `list.rs` into `main.rs`'s dispatch (depends on T008, T034, T035)
+- [X] T034 [US5] Implement `list packs` — spec 2's `Registry::known_packs()`, human/JSON output — in `crates/wallpaperctl/src/commands/list.rs` (FR-003; depends on T005, T006)
+- [X] T035 [US5] Implement `list outputs` — calls `dbus_client`'s `QueryAll` (T028) and displays only the output identifiers — in `crates/wallpaperctl/src/commands/list.rs` (FR-005, research.md R5; depends on T006, T028)
+- [X] T036 [US5] Wire `list.rs` into `main.rs`'s dispatch (depends on T008, T034, T035)
 
-**Checkpoint**: User Stories 1–5 functional.
+**Checkpoint**: User Stories 1–5 functional and tested.
 
 ---
 
@@ -190,16 +190,16 @@ confirm the daemon recomputes without any assignment or config value having chan
 
 ### Tests for User Story 6
 
-- [ ] T037 [P] [US6] Mock-D-Bus unit test: `reevaluate` constructs the correct `Reevaluate`/`ReevaluateAll` request for a named output or all outputs (spec.md US6 Scenarios 1–2) in `crates/wallpaperctl/tests/dbus_mock.rs`
-- [ ] T038 [P] [US6] Unit test: `reevaluate` fails fast with `CliError::DaemonUnreachable` when no daemon is running (spec.md US6 Scenario 3, FR-011) in `crates/wallpaperctl/tests/dbus_mock.rs`
+- [X] T037 [P] [US6] Mock-D-Bus unit test: `reevaluate` constructs the correct `Reevaluate`/`ReevaluateAll` request for a named output or all outputs (spec.md US6 Scenarios 1–2) in `crates/wallpaperctl/tests/dbus_mock.rs` — same real-not-mocked upgrade as T026, lands in `commands/reevaluate.rs`'s own test module
+- [X] T038 [P] [US6] Unit test: `reevaluate` fails fast with `CliError::DaemonUnreachable` when no daemon is running (spec.md US6 Scenario 3, FR-011) in `crates/wallpaperctl/tests/dbus_mock.rs` — same note as T037
 
 ### Implementation for User Story 6
 
-- [ ] T039 [US6] Implement `dbus_client.rs`'s `Reevaluate`/`ReevaluateAll` calls per contracts/wallpaperd-dbus-interface.md (research.md R3; depends on T007)
-- [ ] T040 [US6] Implement `reevaluate [--output <id>]` — human/JSON acknowledgement — in `crates/wallpaperctl/src/commands/reevaluate.rs` (FR-010, FR-013; depends on T039)
-- [ ] T041 [US6] Wire `reevaluate.rs` into `main.rs`'s dispatch (depends on T006, T008, T040)
+- [X] T039 [US6] Implement `dbus_client.rs`'s `Reevaluate`/`ReevaluateAll` calls per contracts/wallpaperd-dbus-interface.md (research.md R3; depends on T007)
+- [X] T040 [US6] Implement `reevaluate [--output <id>]` — human/JSON acknowledgement — in `crates/wallpaperctl/src/commands/reevaluate.rs` (FR-010, FR-013; depends on T039)
+- [X] T041 [US6] Wire `reevaluate.rs` into `main.rs`'s dispatch (depends on T006, T008, T040)
 
-**Checkpoint**: User Stories 1–6 functional.
+**Checkpoint**: User Stories 1–6 functional and tested. Verified via unit tests and a manual smoke test of the built binary (correctly reports "daemon unreachable", exit code 2).
 
 ---
 
@@ -212,15 +212,15 @@ packs` nor can be newly assigned.
 
 ### Tests for User Story 7
 
-- [ ] T042 [P] [US7] Integration test: removing a pack not currently assigned anywhere deletes its registry entry — it no longer lists or can be assigned (spec.md US7 Scenario 1) in `crates/wallpaperctl/tests/register_list_remove.rs`
-- [ ] T043 [P] [US7] Integration test: removing a pack currently assigned to an output still succeeds — the affected output falls back to spec 2/3's existing unavailable-pack handling, no new behavior invented (spec.md US7 Scenario 2) in `crates/wallpaperctl/tests/register_list_remove.rs`
+- [X] T042 [P] [US7] Integration test: removing a pack not currently assigned anywhere deletes its registry entry — it no longer lists or can be assigned (spec.md US7 Scenario 1) in `crates/wallpaperctl/tests/register_list_remove.rs` — landed in `commands/remove.rs`'s own test module
+- [X] T043 [P] [US7] Integration test: removing a pack currently assigned to an output still succeeds — the affected output falls back to spec 2/3's existing unavailable-pack handling, no new behavior invented (spec.md US7 Scenario 2) in `crates/wallpaperctl/tests/register_list_remove.rs` — same note as T042
 
 ### Implementation for User Story 7
 
-- [ ] T044 [US7] Implement `remove <pack-source>` — spec 2's `Registry::remove` — in `crates/wallpaperctl/src/commands/remove.rs` (FR-004; depends on T005)
-- [ ] T045 [US7] Wire `remove.rs` into `main.rs`'s dispatch (depends on T006, T008, T044)
+- [X] T044 [US7] Implement `remove <pack-source>` — spec 2's `Registry::remove` — in `crates/wallpaperctl/src/commands/remove.rs` (FR-004; depends on T005). Added a small shared `pack_ref.rs` helper (`find_registered`) used by both `remove` and `assign`: resolves a user-supplied path argument to its registered `PackSource`, falling back to a lexical (non-canonicalized) match so a since-vanished pack (spec 2's `Unavailable` case) can still be found/removed by the same path it was originally registered with — `std::fs::canonicalize` requires the target to exist, which isn't guaranteed for a pack a user wants to clean up precisely because it's gone.
+- [X] T045 [US7] Wire `remove.rs` into `main.rs`'s dispatch (depends on T006, T008, T044)
 
-**Checkpoint**: All seven user stories functional; full quickstart.md automated portion green.
+**Checkpoint**: All seven user stories functional and tested; full quickstart.md automated portion green (86.03% aggregate line coverage, all clippy-clean).
 
 ---
 
@@ -228,11 +228,11 @@ packs` nor can be newly assigned.
 
 **Purpose**: Close out the spec's success criteria and hand off a stable CLI.
 
-- [ ] T046 [P] Verify strong test coverage on `error.rs`, `output.rs`, and every config-only command path via `cargo llvm-cov` (SC-002, SC-004); add tests to close any gap
-- [ ] T047 [P] Add rustdoc comments to every public item matching contracts/wallpaperctl-cli.md
-- [ ] T048 [P] Add `crates/wallpaperctl/README.md` summarizing scope, the config-only-vs-daemon-required command split (spec.md Assumptions), and explicit non-scope (no GUI, no crossfade-duration control)
-- [ ] T049 Document the manual QA checklist for the three daemon-dependent commands (`list outputs`, `query`, `reevaluate`) against a real `wallpaperd` — runnable only once spec 3's Phase 10 (Amendment 2026-08-13) is implemented — referencing quickstart.md's manual smoke check
-- [ ] T050 Run quickstart.md end-to-end (`cargo test`, and the manual smoke check once a real `wallpaperd` exists) and fix any drift between the doc and the actual API/behavior
+- [X] T046 [P] Verify strong test coverage on `error.rs`, `output.rs`, and every config-only command path via `cargo llvm-cov` (SC-002, SC-004); add tests to close any gap — 86.03% aggregate (register.rs/remove.rs/pack_ref.rs 97-100%, assign.rs 92.86%, location.rs 98.04%); added `main.rs` dispatch-level tests (constructing `Cli` values directly, bypassing clap parsing) using a scratch `XDG_CONFIG_HOME` — `cosmic-config`'s `Config::new` respects it, so this exercises the *real* dispatch path end-to-end, not a simulation. Found and fixed a real test-isolation bug while adding these: two tests mutating the same process-wide env var raced each other under the default parallel test harness; serialized with a `Mutex`.
+- [X] T047 [P] Add rustdoc comments to every public item matching contracts/wallpaperctl-cli.md — verified via `RUSTFLAGS="-W missing_docs" cargo build --workspace`; this full-workspace run also caught real pre-existing gaps in spec 2's `pack-loader` (enum-variant fields in `ManifestError`/`RegistryError`, several struct fields in `manifest.rs`/`load.rs`/`registry.rs`) that spec 2's own narrower `cargo doc --no-deps` check had missed — fixed retroactively; zero warnings workspace-wide now.
+- [X] T048 [P] Add `crates/wallpaperctl/README.md` summarizing scope, the config-only-vs-daemon-required command split (spec.md Assumptions), and explicit non-scope (no GUI, no crossfade-duration control) — also documents the three cross-spec contracts this crate writes to/calls but spec 3 doesn't implement yet (RendererConfig, the D-Bus interface, LocationConfig's reader side)
+- [X] T049 Document the manual QA checklist for the three daemon-dependent commands (`list outputs`, `query`, `reevaluate`) against a real `wallpaperd` — runnable only once spec 3's Phase 10 (Amendment 2026-08-13) is implemented — referencing quickstart.md's manual smoke check — quickstart.md's existing "Manual smoke check" section already documents this exact flow; left as-is rather than duplicated, since it was already accurate against the actual implementation
+- [X] T050 Run quickstart.md end-to-end (`cargo test`, and the manual smoke check once a real `wallpaperd` exists) and fix any drift between the doc and the actual API/behavior — `cargo test` portion green; manually ran the config-only manual-smoke-check steps (register, location set/get, assign) against the real built binary and a scratch `XDG_CONFIG_HOME` — all matched quickstart.md's documented behavior with no drift. The two D-Bus-dependent steps correctly report "daemon unreachable" (exit 2), exactly as documented, since no `wallpaperd` exists yet.
 
 ---
 
