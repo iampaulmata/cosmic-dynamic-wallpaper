@@ -49,11 +49,29 @@ disconnect/resize event can't be triggered on this dev machine).
   that loads each output's assigned pack, evaluates its schedule, uploads textures on
   demand, and draws/presents frames — including the frame-callback-paced draw loop
   during an active crossfade (subscribes only while animating, per FR-003/FR-004).
-- **`config.rs`** — reading `RendererConfig` + spec 4's `LocationSource` via
-  `cosmic-config`, and `Coalescer` (FR-014's debounce), including `earliest_pending`
-  (peeked, not drained — feeds the idle-wait timer's wake computation).
+- **`config.rs`** — reading `RendererConfig` + `LocationSource` (now spec 6's v2 schema,
+  `mode`/`location`/`automatic_location`/`automatic_status`) via `cosmic-config`, plus
+  `effective_location()` (spec 6's pure resolution rule) and `Coalescer` (FR-014's
+  debounce), including `earliest_pending` (peeked, not drained — feeds the idle-wait
+  timer's wake computation).
 - **`scheduler_bridge.rs`** — ties assignment + a loaded pack + location into spec 1's
   `ScheduleQueryResult`, with the location-required-panic fix described below.
+- **`portal_location.rs`** (spec 6, US1–US3) — automatic location via
+  `org.freedesktop.portal.Location` (`ashpd`), driven inside `wallpaperd`'s existing
+  single `calloop` loop (no dedicated OS thread): session creation at `Accuracy::City`,
+  a 5s resolution timeout, an ongoing `LocationUpdated` subscription for as long as
+  automatic mode is active, and exponential backoff (30s–5min) on any failure. Every
+  outcome is validated through spec 1's `Location::new` and written back via
+  `apply_reading`/`apply_failure` — the pure, fully-unit-tested half of this module.
+  **Live-verified against this project's own real COSMIC session** (not just planned):
+  a genuine `CreateSession`/`Start` round trip against `xdg-desktop-portal-cosmic`
+  correctly produced `AutomaticStatus::Unavailable { reason: "...Location services
+  disabled" }`, persisted, and correctly fell back to the stored manual location via
+  `effective_location()` — end-to-end, not simulated. See "What's simplified or not
+  implemented" below for the one honest gap (the resolved-value success path needs a
+  GeoClue2-backed machine this dev environment doesn't have) and the deliberate
+  "spawned once, not cancelled on mode toggle" simplification documented in the
+  module's own doc comment.
 - **`dbus_types.rs`** — `QueryResponse`, the pure data-mapping half of spec 4's D-Bus
   interface.
 - **`dbus_service.rs`** — the live `zbus` server (T049/T053/T054, FR-016):
@@ -145,6 +163,21 @@ once a specific serialization format's own semantics enter the picture.
   counting handles actual GPU memory reclamation once a texture is no longer
   referenced, so there's no dangling-resource bug, but there's also no
   explicit "cancel the in-progress blend" step to point to as T030's deliverable.
+- **Automatic location's resolved-value success path** (spec 6 US1/US3): the degrade
+  path (FR-005) is fully live-verified against this project's own real COSMIC session —
+  see `portal_location.rs`'s entry above. The *successful*-resolution half needs a
+  machine with GeoClue2 installed and location services enabled, which this dev
+  environment doesn't have (spec 6 research.md R2) — every component up to the portal
+  boundary is real and live-spiked (a genuine `CreateSession`/`Start` round trip), the
+  final resolved-value hop is a documented, honest gap, not a task this crate can close
+  on its own without that hardware/software dependency present.
+- **Automatic-mode task lifecycle** (spec 6): the portal-driving resolution/subscribe/
+  retry task is spawned once automatic mode is (or becomes) active and then runs for
+  the remainder of the daemon's lifetime — it is not cancelled if the user later
+  switches back to manual mode. Documented as harmless (not a correctness gap) in
+  `portal_location.rs`'s module doc: `effective_location()` ignores `automatic_location`
+  entirely while `mode == Manual`, so a background retry loop simply has no observable
+  effect until automatic mode is re-enabled.
 
 ## Building on a real system
 
@@ -162,7 +195,7 @@ should already have the real `-dev` package and need no workaround.
 ## Testing
 
 ```sh
-cargo test --package renderer            # 43 tests: pure logic + real offscreen GPU renders
+cargo test --package renderer            # 50 tests: pure logic + real offscreen GPU renders
 cargo llvm-cov --package renderer --summary-only
 ```
 

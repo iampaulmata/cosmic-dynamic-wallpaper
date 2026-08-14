@@ -14,11 +14,12 @@ pub mod dbus_types;
 pub mod error;
 pub mod gpu;
 pub mod output;
+pub mod portal_location;
 pub mod scheduler_bridge;
 pub mod surface;
 pub mod texture;
 
-pub use config::{LocationSource, LOCATION_CONFIG_ID, RENDERER_CONFIG_ID};
+pub use config::{effective_location, AutomaticStatus, LocationMode, LocationSource, LOCATION_CONFIG_ID, RENDERER_CONFIG_ID};
 pub use crossfade::CrossfadeTransition;
 pub use dbus_types::QueryResponse;
 pub use error::RendererError;

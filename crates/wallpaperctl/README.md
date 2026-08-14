@@ -10,7 +10,7 @@ wallpaperctl list outputs
 wallpaperctl remove <pack-source>
 wallpaperctl assign --output <output-id> <pack-source>
 wallpaperctl assign --same-everywhere <pack-source>
-wallpaperctl location get|set <lat> <lon>|clear
+wallpaperctl location get|set <lat> <lon>|clear|auto|manual
 wallpaperctl query [--output <output-id>]
 wallpaperctl reevaluate [--output <output-id>]
 ```
@@ -25,7 +25,7 @@ running:
 
 | Config-only (no daemon needed) | Daemon-required |
 |---|---|
-| `register`, `list packs`, `remove`, `assign`, `location get\|set\|clear` | `list outputs`, `query`, `reevaluate` |
+| `register`, `list packs`, `remove`, `assign`, `location get\|set\|clear\|auto\|manual` | `list outputs`, `query`, `reevaluate` |
 
 The daemon-required column has no persisted record to fall back on — "which outputs
 exist" and "what's currently active" are live daemon state, not config. Those three
@@ -55,10 +55,14 @@ must eventually satisfy on its side:
   (contracts/wallpaperd-dbus-interface.md) exactly as specified; nothing currently
   implements the daemon side, so these three commands reliably (and correctly, per
   FR-011) report "daemon unreachable" until spec 3 does.
-- **`LocationConfig`** (`src/config.rs`'s `LocationConfigEntry`) — this crate *owns*
-  this schema and is its only writer (`location set|clear`, FR-008). Spec 3's
-  `scheduler_bridge.rs` is supposed to read it for solar-anchored packs
-  (contracts/location-config-schema.md) but doesn't exist yet either.
+- **`LocationConfig`** (`src/config.rs`'s `LocationConfigEntry`, now spec 6's v2 schema:
+  `mode`, `location`, `automatic_location`, `automatic_status`) — this crate writes
+  `mode`/`location` (`location set|clear|auto|manual`, FR-008/spec 6 FR-001/002/003/007/
+  009); `wallpaperd` (`crates/renderer`, spec 6) is the *only* writer of
+  `automatic_location`/`automatic_status` and the reader for actual scheduling, via
+  `effective_location()` (spec 6 data-model.md). `location get` reads and displays the
+  full entry — `mode`, `status`, and the effective location — daemon-optional, same
+  posture as every other command in the left-hand column above.
 
 None of this blocks this crate's own correctness or tests — every command here is fully
 implemented and tested against the *client*/*writer* side of these contracts. It just

@@ -12,8 +12,9 @@ use wayland_client::{globals::registry_queue_init, Connection};
 
 use pack_loader::Registry;
 use renderer::dbus_service::{self, DaemonInterface};
+use renderer::portal_location::{self, PortalEvent};
 use renderer::surface::WallpaperDaemon;
-use renderer::{LocationSource, RendererConfig};
+use renderer::{effective_location, LocationMode, LocationSource, RendererConfig};
 
 fn main() {
     tracing_subscriber::fmt::init();
@@ -36,11 +37,18 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let renderer_config_store = RendererConfig::open()?;
     let renderer_config = RendererConfig::load(&renderer_config_store);
     let location_store = LocationSource::open()?;
-    let location = LocationSource::load(&location_store).location;
+    let initial_location_entry = LocationSource::load(&location_store);
+    // spec 6 Cross-Spec Dependency (plan.md): scheduling reads the *effective* location
+    // — the resolved automatic value when automatic mode is active, falling back to the
+    // manual value — never `LocationSource.location` directly, or automatic mode would
+    // be silently ignored by actual scheduling even though the config value is
+    // correctly persisted.
+    let location = effective_location(&initial_location_entry);
 
     tracing::info!(
         overrides = renderer_config.overrides.len(),
         same_everywhere = renderer_config.same_pack_everywhere.is_some(),
+        location_mode = ?initial_location_entry.mode,
         has_location = location.is_some(),
         "wallpaperd starting"
     );
@@ -61,11 +69,66 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         })
         .map_err(|e| format!("failed to insert renderer-config watch: {e}"))?;
 
+    // spec 6 US1/US3: the portal-driving async task (`portal_location::run`) is spawned
+    // once automatic mode is (or becomes) active, and reports every resolution/failure
+    // over this channel — see `portal_location`'s module doc for the exact write-back
+    // contract and the "spawned once, not cancelled on mode toggle" simplification.
+    let (portal_events_tx, portal_events_rx) = calloop::channel::channel::<PortalEvent>();
+    let (portal_executor, portal_scheduler) =
+        calloop::futures::executor::<()>().map_err(|e| format!("failed to create the portal futures executor: {e}"))?;
+    event_loop
+        .handle()
+        .insert_source(portal_executor, |(), _, _: &mut WallpaperDaemon| {})
+        .map_err(|e| format!("failed to insert the portal futures executor: {e}"))?;
+
+    let mut portal_task_spawned = false;
+    let spawn_portal_task_if_needed = {
+        let portal_scheduler = portal_scheduler.clone();
+        let portal_events_tx = portal_events_tx.clone();
+        move |mode: LocationMode, spawned: &mut bool| {
+            if *spawned || mode != LocationMode::Automatic {
+                return;
+            }
+            if portal_scheduler.schedule(portal_location::run(portal_events_tx.clone())).is_err() {
+                tracing::error!("failed to schedule the automatic-location resolution task — event loop already gone");
+                return;
+            }
+            *spawned = true;
+        }
+    };
+    spawn_portal_task_if_needed(initial_location_entry.mode, &mut portal_task_spawned);
+
+    event_loop
+        .handle()
+        .insert_source(portal_events_rx, {
+            let location_store = location_store.clone();
+            move |event, _, daemon: &mut WallpaperDaemon| {
+                let calloop::channel::Event::Msg(portal_event) = event else { return };
+                let mut entry = LocationSource::load(&location_store);
+                match portal_event {
+                    PortalEvent::Reading(reading) => portal_location::apply_reading(&mut entry, reading),
+                    PortalEvent::Failure(reason) => portal_location::apply_failure(&mut entry, reason),
+                }
+                if let Err(e) = entry.save(&location_store) {
+                    tracing::error!(error = %e, "failed to persist an automatic-location resolution");
+                }
+                // Applied directly (not waited on via `location_watch` below) so
+                // scheduling reacts immediately rather than waiting on a filesystem
+                // watch round trip; `location_watch` will also observe this same write
+                // shortly after — redundant but harmless (module doc's write-back
+                // contract: this daemon is the entry's own watcher as well as writer).
+                daemon.on_location_changed(effective_location(&entry));
+            }
+        })
+        .map_err(|e| format!("failed to insert the portal event channel: {e}"))?;
+
     let location_watch = ConfigWatchSource::new(&location_store).map_err(|e| format!("failed to watch location config: {e}"))?;
     event_loop
         .handle()
-        .insert_source(location_watch, |(config, _changed_keys), _, daemon: &mut WallpaperDaemon| {
-            daemon.on_location_changed(LocationSource::load(&config).location);
+        .insert_source(location_watch, move |(config, _changed_keys), _, daemon: &mut WallpaperDaemon| {
+            let entry = LocationSource::load(&config);
+            spawn_portal_task_if_needed(entry.mode, &mut portal_task_spawned);
+            daemon.on_location_changed(effective_location(&entry));
         })
         .map_err(|e| format!("failed to insert location watch: {e}"))?;
 
