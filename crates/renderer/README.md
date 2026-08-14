@@ -13,6 +13,14 @@ verified precisely via an offscreen GPU render + pixel readback test
 (`tests/gpu_render.rs`) — not just "looked right" but exact byte values at
 progress 0.0/0.5/1.0.
 
+**Follow-up gap-closure pass (2026-08-14)**: all 5 gaps documented below as of the
+initial pass are now closed — precise idle-wait timer, live config/location watch, a
+live D-Bus service, all four scaling modes, and hotplug resize/rescale + fractional
+scale. Live-verified against a real two-output `cosmic-comp` session (this dev
+environment now has `eDP-1` + `HDMI-A-1` connected). See each section below for the
+specifics and the couple of caveats that remain honestly unverified (a real
+disconnect/resize event can't be triggered on this dev machine).
+
 ## What's implemented and tested
 
 - **`output.rs`** — `OutputId`, `OutputAssignment`, `RendererConfig` (the
@@ -82,6 +90,25 @@ progress 0.0/0.5/1.0.
   running now takes effect within ~2s with **no restart** — live-verified against a
   real two-output session (assigning a pack to a previously-unassigned output, and
   changing location, both observed taking effect without restarting the daemon).
+- **Hotplug resize/rescale + fractional scale** (T040) — `OutputHandler::update_output`
+  now compares an output's current logical size against `LayerShellHandler::configure`'s
+  own cached size and calls a shared `reconfigure_output` helper (the two handlers'
+  previously-separate logic factored into one) when they differ, so a `wl_output`-level
+  metadata change that doesn't also trigger a fresh layer-surface `configure` (e.g. a
+  scale-only change) isn't silently dropped. `wp_fractional_scale_manager_v1` is now
+  bound (optional/soft — degrades to a log line, doesn't fail the daemon, if a
+  compositor doesn't advertise it) and a real `Dispatch<WpFractionalScaleV1, _>` handles
+  its `preferred_scale` event (unlike `wp_viewporter`, which is purely imperative and
+  safely `delegate_noop!`'d). **Live-verified further than expected**: this dev
+  environment's real `cosmic-comp` *does* implement the protocol — binding succeeded and
+  real `preferred_scale` events (120 = 1×) arrived for both managed outputs, confirmed
+  via logs, with no regression to the existing single/multi-output behavior. **What's
+  still not live-verified**: an actual logical-size change firing `update_output`'s
+  reconfigure branch — this dev environment has no way to trigger a real resolution/scale
+  change on its physical displays, so that branch is structurally correct and
+  code-reviewed (same FR-013 per-output containment pattern as `configure`) but not
+  exercised against a real event, the same honest caveat `T039`/`T043` already carry for
+  hotplug disconnect.
 
 **Real cross-spec bug found and fixed** in `scheduler_bridge.rs`: spec 1's
 `ValidatedPack::query` panics if called with `location: None` on a solar-anchored pack
@@ -111,12 +138,6 @@ once a specific serialization format's own semantics enter the picture.
 
 ## What's simplified or not implemented
 
-- **Hotplug resize/rescale**: `OutputHandler::update_output` is a no-op (T040) — a
-  runtime resolution/scale change isn't reconfigured without a restart. `new_output`/
-  `output_destroyed` (connect/disconnect) *are* wired (T037-T039's core), verified
-  structurally but not exercised against a real hotplug event in this pass.
-  `wp_fractional_scale_v1` isn't wired either — only `wp_viewporter`'s destination-size
-  path, which is enough for integer-scale correctness but not fractional scaling.
 - **Overlapping-transition GPU resource cleanup** (T030): a new `CrossfadeTransition`
   value cleanly *replaces* the old one in this crate's data model (verified, see
   `crossfade.rs`'s tests) and old textures simply stay in the per-output cache for
