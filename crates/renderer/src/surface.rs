@@ -42,6 +42,7 @@ use schedule_engine::{ImageId, Location};
 
 use crate::config::Coalescer;
 use crate::crossfade::{CrossfadePipeline, CrossfadeTransition};
+use crate::dbus_types::QueryResponse;
 use crate::error::RendererError;
 use crate::gpu::GpuContext;
 use crate::output::{effective_pack, resolve_assignment, OutputId, RendererConfig};
@@ -106,6 +107,11 @@ pub struct WallpaperDaemon {
     /// The currently-registered idle-wait timer's token, if any — removed before a
     /// fresh one is inserted at a recomputed deadline.
     idle_timer_token: Option<calloop::RegistrationToken>,
+    /// The D-Bus-visible read/write mirror (T053, FR-016) — shared with
+    /// [`crate::dbus_service::DaemonInterface`] via [`Self::dbus_state`]. See
+    /// `dbus_service`'s module doc for why this is `Arc<Mutex<_>>` rather than
+    /// `Rc<RefCell<_>>` despite the daemon staying single-threaded.
+    dbus_state: std::sync::Arc<std::sync::Mutex<crate::dbus_service::DbusState>>,
 }
 
 impl WallpaperDaemon {
@@ -144,6 +150,7 @@ impl WallpaperDaemon {
             exit: false,
             loop_handle: None,
             idle_timer_token: None,
+            dbus_state: std::sync::Arc::new(std::sync::Mutex::new(crate::dbus_service::DbusState::default())),
         })
     }
 
@@ -380,6 +387,72 @@ impl WallpaperDaemon {
     /// Every currently-managed output's id — backs `list outputs`/`QueryAll` (T028).
     pub fn output_ids(&self) -> Vec<OutputId> {
         self.outputs.iter().map(|o| o.id.clone()).collect()
+    }
+
+    /// A clone of the shared `Arc` backing the D-Bus-visible state mirror — handed to
+    /// [`crate::dbus_service::DaemonInterface`] once at startup (T054).
+    pub fn dbus_state(&self) -> std::sync::Arc<std::sync::Mutex<crate::dbus_service::DbusState>> {
+        self.dbus_state.clone()
+    }
+
+    /// The pure "what would we answer right now" for one output (T052/T053) — no draw,
+    /// no GPU touched at all, just spec 1's schedule math over an already-loaded pack.
+    /// Backs `QueryOutput`/`QueryAll` (FR-016).
+    pub fn query_output(&self, id: &OutputId) -> Result<QueryResponse, RendererError> {
+        let index = self.outputs.iter().position(|o| &o.id == id).ok_or_else(|| RendererError::OutputNotManaged { id: id.clone() })?;
+        let pack = self.outputs[index].loaded_pack.as_ref();
+        match scheduler_bridge::evaluate(id, pack, self.location.as_ref(), chrono::Local::now(), chrono::TimeDelta::seconds(CROSSFADE_DURATION.as_secs() as i64)) {
+            Ok(Some(result)) => Ok(QueryResponse::from_schedule_result(id.clone(), &result)),
+            Ok(None) => Ok(QueryResponse::unassigned(id.clone())),
+            // A solar-anchored pack with no location configured yet: genuinely
+            // assigned (per the field's literal meaning), just not yet resolvable.
+            // Reported the same shape as a static/degenerate pack (no wire-incompatible
+            // fourth state) rather than surfaced as a D-Bus error — matches FR-013's
+            // "degrade, don't error" containment posture.
+            Err(RendererError::LocationRequired { .. }) => {
+                Ok(QueryResponse { output: id.clone(), assigned: true, active_image: String::new(), next_transition_at: None })
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Every currently-managed output's [`QueryResponse`] — backs `QueryAll` (FR-016).
+    /// Silently skips an output `query_output` can't resolve for reasons other than
+    /// the two handled above (there currently are none, but this stays defensive
+    /// rather than propagating a single output's failure into a whole-request error).
+    pub fn query_all(&self) -> Vec<QueryResponse> {
+        self.output_ids().iter().filter_map(|id| self.query_output(id).ok()).collect()
+    }
+
+    /// Refresh the D-Bus-visible snapshot from current state — cheap (pure schedule
+    /// math over already-loaded packs, no I/O), safe to call unconditionally after any
+    /// evaluation.
+    pub fn refresh_dbus_snapshot(&mut self) {
+        let responses = self.query_all();
+        let known = self.output_ids();
+        let mut state = self.dbus_state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.refresh(responses, known);
+    }
+
+    /// Drain every `Reevaluate`/`ReevaluateAll` request the D-Bus service enqueued
+    /// since the last tick, then refresh the snapshot — called once per event-loop
+    /// iteration from `wallpaperd.rs`'s `block_on` callback (T054).
+    pub fn drain_dbus_requests(&mut self) {
+        let requests = self.dbus_state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).drain();
+        for request in requests {
+            match request {
+                crate::dbus_service::ReevaluateRequest::One(id) => {
+                    // The id was already validated against `known_outputs` when the
+                    // request was enqueued — a failure here would mean the output was
+                    // removed (hotplug disconnect) in between, which is a legitimate
+                    // race, not a bug; contained silently, matching `evaluate_and_draw`'s
+                    // own `Result` being ignorable by any other caller in this file.
+                    let _ = self.evaluate_and_draw(&id);
+                }
+                crate::dbus_service::ReevaluateRequest::All => self.evaluate_and_draw_all(),
+            }
+        }
+        self.refresh_dbus_snapshot();
     }
 
     /// The next instant any managed output needs re-evaluating — the idle-wait timer
