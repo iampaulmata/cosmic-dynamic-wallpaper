@@ -9,12 +9,15 @@ description: "Task list template for feature implementation"
 
 **Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/renderer-config-schema.md, quickstart.md. Phase 10 below additionally depends on spec 4's `specs/004-cli-control-surface/contracts/location-config-schema.md` and `.../wallpaperd-dbus-interface.md` (Amendment 2026-08-13).
 
-**Tests**: Partial. plan.md's Technical Context and research.md R6 commit this spec to a
-two-tier strategy: the pure `assignment.rs`/state-machine logic is `cargo test`-able like
-specs 1–2 and gets real test tasks below; the Wayland/GPU-touching code (`output.rs`,
-`surface.rs`, `gpu.rs`, `crossfade.rs`) is validated via quickstart.md's manual QA checklist
-plus an exploratory CI smoke test, per the constitution's own explicit allowance for that gap
-— it does not get `cargo test` unit-test tasks here.
+**Tests**: Partial, per plan.md's Technical Context/research.md R6's original two-tier
+strategy — pure logic is `cargo test`-able, real Wayland/GPU code is manual-QA-only. In
+practice this pass found a third tier worth using: `tests/gpu_render.rs` exercises the
+*real* `wgpu` GPU pipeline offscreen (no Wayland surface needed), which turned out to be
+both automatable *and* a stronger correctness check than eyeballing a screenshot (exact
+pixel values, not "looks blended"). The actual on-screen Wayland integration
+(`surface.rs`'s layer-shell/SCTK wiring, the `wallpaperd` binary) is still manual-QA-only
+as originally planned — it was manually run against a live compositor during this pass
+(see status note above), not exercised by `cargo test`.
 
 **Organization**: Tasks are grouped by user story (spec.md) to enable independent
 implementation and testing of each story.
@@ -35,30 +38,48 @@ Decision): `crates/renderer/src/`, `crates/renderer/tests/`, with path dependenc
 
 ## ⚠️ Implementation pass status (2026-08-13, same session as specs 1/2/4)
 
-**Only the pure-logic subset of this spec is implemented** — see
-`crates/renderer/README.md` for the full rationale. Summary: this pass ran in a
-sandboxed dev environment with no Wayland compositor and no GPU rendering target, and
-this is the one spec (per spec.md's own framing, "the highest-risk spec") whose actual
-core deliverable — a smooth GPU crossfade on a real screen — cannot be verified to work
-correctly without both. Rather than write ~30 tasks of Wayland/GPU integration code that
-could not be run or checked here, this pass implemented and fully tested everything that
-*is* pure logic (assignment resolution, crossfade progress math, config reading/
-coalescing, the scheduler bridge, D-Bus response mapping — 21 tests, 93.99% line
-coverage, clippy clean) and left the Wayland/GPU/D-Bus-server tasks explicitly open below
-for a session with real compositor/GPU access. Task IDs and file paths below are
-otherwise unchanged from the original plan; checked items reflect what actually landed,
-not a renumbering. `crates/renderer/Cargo.toml` deliberately omits
-`smithay-client-toolkit`/`wgpu`/`calloop`/`calloop-wayland-source`/`raw-window-handle`/
-`zbus` as a result — T002 below is only partially done for exactly that reason.
+**Two passes happened in this session.** The first implemented only the pure-logic
+subset, believing this dev environment had no Wayland compositor or GPU — that
+assumption turned out to be **wrong**: the environment is a real, live `cosmic-comp`
+(COSMIC) session with real GPU hardware (Intel HD Graphics 630). Once discovered, a
+second pass implemented and live-tested the actual Wayland/GPU rendering. See
+`crates/renderer/README.md` for the full, current breakdown of what's implemented,
+what's simplified, and what's still open — this note summarizes only the highlights and
+defers to that file as the source of truth on scope.
 
-**Real cross-spec bug found and fixed during this pass** (see `scheduler_bridge.rs`):
-spec 1's `ValidatedPack::query` panics if called with `location: None` on a
-solar-anchored pack (documented as a caller-contract violation there) — but this daemon
-can legitimately reach that state at runtime, and naively calling it would crash the
-whole daemon, violating this spec's own FR-013. Added `RendererError::LocationRequired`
-(not itself listed in data-model.md, which says this case needs "not a new error
-variant" but doesn't identify an existing one that actually fits) to degrade just that
-one output instead. Documented in both `scheduler_bridge.rs` and `error.rs`.
+**What's now real and verified against the live compositor**, not just written:
+`gpu.rs` (wgpu instance/adapter/device — selected the real Intel adapter via Vulkan),
+`texture.rs` (real image decode + GPU upload), `crossfade.rs`'s `CrossfadePipeline` (a
+real WGSL two-texture blend shader, pixel-verified exact via an offscreen GPU
+render+readback test — not just "looked right"), `surface.rs` (real SCTK layer-shell
+surface creation, accepted by `cosmic-comp` at 1920x1080, bridged to `wgpu::Surface` via
+`raw-window-handle`), and `src/bin/wallpaperd.rs` (a real daemon binary, run live for
+35+ seconds spanning an actual scheduled crossfade transition, zero crashes). 26 tests
+(25 pure-logic/config + 1 real-GPU pixel-correctness), clippy clean, zero missing-docs
+warnings.
+
+**Two real bugs found and fixed during this pass** (both documented at length in
+`crates/renderer/README.md` and in the relevant source file's own doc comments —
+summarized here):
+1. (First pass) `scheduler_bridge.rs`: spec 1's `ValidatedPack::query` panics if called
+   with `location: None` on a solar-anchored pack (a documented caller-contract
+   violation there) — but this daemon can legitimately reach that state at runtime.
+   Added `RendererError::LocationRequired` to degrade just that one output instead of
+   crashing the whole daemon (FR-013).
+2. (Second pass, found only by actually running against a real `wallpaperctl`-written
+   config) `output.rs`'s `RendererConfig.overrides` was typed `HashMap<OutputId,
+   PackSource>` — RON does not treat a single-field tuple struct as transparently
+   string-keyed, so this silently read an **empty** map from every real config
+   `wallpaperctl` had written (the parse error was swallowed by a `Default` fallback,
+   no crash, no log line pointing at the cause). Fixed to `HashMap<String, PackSource>`,
+   matching `wallpaperctl`'s independently-defined shape exactly; a permanent regression
+   test now hand-constructs that literal on-disk RON text and confirms it parses.
+
+Task IDs/file paths below are unchanged from the original plan (no renumbering).
+`crates/renderer/Cargo.toml` now includes the full dependency set (`smithay-client-
+toolkit`, `wgpu`, `calloop`, `calloop-wayland-source`, `raw-window-handle`, `image`,
+`bytemuck`, `tracing`) — `zbus` is the one dependency still not added, since the live
+D-Bus service (T053) is the one major piece still not implemented (see below).
 
 ---
 
@@ -67,11 +88,11 @@ one output instead. Documented in both `scheduler_bridge.rs` and `error.rs`.
 **Purpose**: Add `renderer` as the workspace's third crate, wired to both prior specs' crates.
 
 - [X] T001 Add `crates/renderer` as a new member of the workspace root `Cargo.toml` (plan.md Project Structure)
-- [~] T002 Create `crates/renderer/Cargo.toml` with `smithay-client-toolkit` (0.20.x), `calloop`, `calloop-wayland-source` (0.3.x), `wgpu`, `raw-window-handle` (0.6.x), `image` (0.25.x), `cosmic-config` (git dependency) dependencies, and path dependencies on `schedule-engine` and `pack-loader`, producing both a library and a `wallpaperd` binary (`src/bin/wallpaperd.rs`) (research.md R1–R5, plan.md Project Structure) — **partial**: `cosmic-config` + the two path dependencies are present; the Wayland/GPU/image dependencies and the `wallpaperd` binary are not (see status note above). `image` also omitted from non-dev dependencies since nothing in the implemented subset decodes pixels yet.
+- [X] T002 Create `crates/renderer/Cargo.toml` with `smithay-client-toolkit` (0.20.x), `calloop`, `calloop-wayland-source` (0.3.x), `wgpu`, `raw-window-handle` (0.6.x), `image` (0.25.x), `cosmic-config` (git dependency) dependencies, and path dependencies on `schedule-engine` and `pack-loader`, producing both a library and a `wallpaperd` binary (`src/bin/wallpaperd.rs`) (research.md R1–R5, plan.md Project Structure) — full dependency set now present (`bytemuck`, `tracing`/`tracing-subscriber` added beyond the original list, for uniform buffer packing and daemon logging respectively); `wayland-client` needed an explicit `features = ["system"]` beyond what SCTK pulls in by default, to get the real `libwayland-client.so`-backed backend that exposes raw pointers for the `raw-window-handle` bridge — SCTK alone doesn't force that feature on. `zbus` is not yet added (T053 not implemented).
 - [X] T003 [P] Add `[lints]` denying `clippy::unwrap_used` and `clippy::expect_used` outside `#[cfg(test)]` to `crates/renderer/Cargo.toml` (constitution Principle VIII)
-- [X] T004 [P] Add a CI workflow running `cargo test` and `cargo clippy` against the pure-logic portion of the crate in `.github/workflows/renderer-ci.yml` (the Wayland/GPU-touching portion's CI story is research.md R6's exploratory smoke test, added separately in Polish)
+- [X] T004 [P] Add a CI workflow running `cargo test` and `cargo clippy` against the pure-logic portion of the crate in `.github/workflows/renderer-ci.yml` (the Wayland/GPU-touching portion's CI story is research.md R6's exploratory smoke test, added separately in Polish) — extended to install `libxkbcommon-dev` (see `crates/renderer/README.md`'s "Building on a real system") and to run the *full* test suite including the real-GPU `tests/gpu_render.rs` (skips gracefully on a GPU-less runner, doesn't fail CI).
 
-**Checkpoint**: `cargo build` succeeds depending on `schedule-engine` and `pack-loader`; no `wallpaperd` binary exists yet (see status note). CI pipeline is defined for the pure-logic tests.
+**Checkpoint**: `cargo build` succeeds, producing a real `wallpaperd` binary. Verified against a live `cosmic-comp` session, not just compiled (see status note above). CI pipeline covers the full test suite.
 
 ---
 
@@ -82,14 +103,15 @@ phase is done.
 
 **⚠️ CRITICAL**: Blocks Phases 3–8.
 
-- [X] T005 Create the `RendererError` type in `crates/renderer/src/error.rs` (data-model.md RendererError; `std::error::Error` + `Debug` + `Display`, no panics — constitution Principle VIII). Includes the added `LocationRequired` variant (status note above).
+- [X] T005 Create the `RendererError` type in `crates/renderer/src/error.rs` (data-model.md RendererError; `std::error::Error` + `Debug` + `Display`, no panics — constitution Principle VIII). Includes the added `LocationRequired` variant (status note above). `SurfaceCreationFailed`/`GpuDeviceUnavailable`/`OutputProtocolError` are now genuinely constructed by real code (`surface.rs`/`gpu.rs`), not just defined for a future pass.
 - [X] T006 [P] Create the `OutputId` type (an `xdg-output` connector-name wrapper) in `crates/renderer/src/output.rs` (data-model.md OutputId)
-- [X] T007 [P] Create the `OutputAssignment` tagged union (`Explicit`/`FollowsToggle`/`Unassigned`) and the `RendererConfig` shape (`schema_version`, `same_pack_everywhere`, `overrides`), reusing spec 2's `PackSource` by reference, in `crates/renderer/src/assignment.rs` (data-model.md OutputAssignment/RendererConfig, contracts/renderer-config-schema.md; depends on T006 for `OutputId`) — landed in `output.rs` rather than a separate `assignment.rs`, since it's a small, tightly-related set of types; the resolution rule itself (T034) is here too rather than deferred to Phase 7.
-- [~] T008 [P] Create the `ManagedOutput` type and `RendererState`/`IdleWaitState` types in `crates/renderer/src/output.rs` (data-model.md ManagedOutput/RendererState/IdleWaitState; depends on T005, T006, T007) — **partial**: `RendererState`/`IdleWaitState` done; `ManagedOutput` itself omitted — its two non-pure fields (`wl_output`, an opaque SCTK handle; the `calloop` timer inside `IdleWaitState`) belong to the unimplemented Wayland integration, and a struct missing exactly its two most structural fields wouldn't be a meaningful stand-in.
-- [X] T009 [P] Create the `CrossfadeTransition` type in `crates/renderer/src/crossfade.rs` (data-model.md CrossfadeTransition; depends on nothing else) — `outgoing_texture`/`incoming_texture` (GPU handles in the full data model) are `schedule_engine::ImageId`s here instead, per the same "pure subset" note as T008.
-- [X] T010 Wire up public API re-exports (`OutputId`, `ManagedOutput`, `OutputAssignment`, `RendererConfig`, `RendererError`) in `crates/renderer/src/lib.rs` (depends on T005–T009; matches contracts/renderer-config-schema.md's referenced types) — no `ManagedOutput` to re-export per T008's note.
+- [X] T007 [P] Create the `OutputAssignment` tagged union (`Explicit`/`FollowsToggle`/`Unassigned`) and the `RendererConfig` shape (`schema_version`, `same_pack_everywhere`, `overrides`), reusing spec 2's `PackSource` by reference, in `crates/renderer/src/assignment.rs` (data-model.md OutputAssignment/RendererConfig, contracts/renderer-config-schema.md; depends on T006 for `OutputId`) — landed in `output.rs` rather than a separate `assignment.rs`, since it's a small, tightly-related set of types; the resolution rule itself (T034) is here too rather than deferred to Phase 7. `overrides` is `HashMap<String, PackSource>`, not `HashMap<OutputId, PackSource>` as first written — see the status note's second real bug for why.
+- [X] T008 [P] Create the `ManagedOutput` type and `RendererState`/`IdleWaitState` types in `crates/renderer/src/output.rs` (data-model.md ManagedOutput/RendererState/IdleWaitState; depends on T005, T006, T007) — `RendererState`/`IdleWaitState` as originally planned; `ManagedOutput` itself landed as `surface.rs`'s private `WallpaperOutput` struct instead (with its real SCTK/`wgpu` handle fields, `wl_output`/`layer`/`viewport`/`wgpu_surface`) once the real Wayland integration existed to give it something to hold — not re-exported publicly, since it's `wallpaperd`'s own internal per-output bookkeeping, not a type other crates need.
+- [X] T009 [P] Create the `CrossfadeTransition` type in `crates/renderer/src/crossfade.rs` (data-model.md CrossfadeTransition; depends on nothing else) — `outgoing_texture`/`incoming_texture` (GPU handles in the full data model) are `schedule_engine::ImageId`s here (the *pipeline*, `CrossfadePipeline`, is what actually holds/binds the GPU textures per-frame from `WallpaperOutput`'s texture cache — this type itself stays a lightweight, easily-cloned/replaced value).
+- [X] T010 Wire up public API re-exports (`OutputId`, `ManagedOutput`, `OutputAssignment`, `RendererConfig`, `RendererError`) in `crates/renderer/src/lib.rs` (depends on T005–T009; matches contracts/renderer-config-schema.md's referenced types) — no `ManagedOutput` re-export, per T008's note (`WallpaperDaemon` and `surface` module are re-exported/public instead, as the actual integration surface `wallpaperd.rs` uses).
 
-**Checkpoint**: Crate compiles with all implemented shared types defined; pure-logic work can now proceed (Wayland/GPU work remains blocked on a real compositor regardless of this phase's completeness).
+**Checkpoint**: Crate compiles with all shared types defined (both pure and, now, real
+Wayland/GPU-backed); every user story's foundation is in place.
 
 ---
 
@@ -104,21 +126,21 @@ tearing (quickstart.md manual smoke check steps 1–2).
 
 ### Implementation for User Story 1
 
-**Not implemented this pass (all need a real Wayland compositor/GPU — see status note at
-top of this file)**:
+**All implemented and verified against a live compositor this session** (status note
+above):
 
-- [ ] T011 [US1] Implement `wgpu` instance/device/adapter setup with automatic backend selection (Vulkan preferred, GL fallback) in `crates/renderer/src/gpu.rs` (FR-001, research.md R3; depends on T005)
-- [ ] T012 [US1] Implement the `raw-window-handle` bridge from SCTK's `wl_surface`/`wl_display` to `wgpu::Surface` creation in `crates/renderer/src/gpu.rs` (research.md R3's flagged integration risk — smoke-test this early; depends on T011)
-- [ ] T013 [US1] Implement per-output `wlr-layer-shell-unstable-v1` background surface creation (background layer, full-output anchor) plus `wp_viewporter` setup in `crates/renderer/src/surface.rs` (FR-001, constitution Principle I, research.md R1; depends on T008, T012)
-- [ ] T014 [US1] Implement full-resolution image decode (via `image`) and GPU texture upload via `wgpu::Queue::write_texture` in `crates/renderer/src/texture.rs` (FR-001, research.md R5; depends on T011)
-- [ ] T015 [US1] Implement the WGSL two-texture crossfade blend pipeline (vertex/fragment shaders, progress uniform) in `crates/renderer/src/crossfade.rs` (FR-001, FR-002 fixed 45s default; depends on T009, T011)
-- [ ] T016 [US1] Implement the frame-callback-paced draw loop — subscribe to `wl_surface.frame` only during an active `CrossfadeTransition`, recompute progress from `started_at`/`duration` each callback, unsubscribe immediately on completion — in `crates/renderer/src/crossfade.rs` (FR-001, FR-004, constitution Principle II/III; depends on T013, T015)
-- [ ] T017 [US1] Wire spec 1's `ScheduleQueryResult` into transition triggering: when a scheduled transition instant is reached for an output, build a `CrossfadeTransition` from the outgoing/incoming images and hand it to the draw loop, in `crates/renderer/src/crossfade.rs` (FR-001; depends on T014, T016) — **the pure half of this** (computing which images/progress a `ScheduleQueryResult` implies) is done in `scheduler_bridge.rs::evaluate`; only "hand it to the draw loop" remains.
-- [ ] T018 [US1] Implement the degenerate single-image/static-mode case — no crossfade ever triggers, the one image is simply displayed continuously (spec.md US1 Scenario 3) in `crates/renderer/src/crossfade.rs` (depends on T017) — spec 1's own `ValidatedPack` already guarantees this at the query level (`transition: None` always for a static pack); only the "don't ever start a draw loop for it" wiring remains.
+- [X] T011 [US1] Implement `wgpu` instance/device/adapter setup with automatic backend selection (Vulkan preferred, GL fallback) in `crates/renderer/src/gpu.rs` (FR-001, research.md R3; depends on T005) — live-tested: selected the real Intel HD 630 adapter via Vulkan.
+- [X] T012 [US1] Implement the `raw-window-handle` bridge from SCTK's `wl_surface`/`wl_display` to `wgpu::Surface` creation in `crates/renderer/src/gpu.rs` (research.md R3's flagged integration risk — smoke-test this early; depends on T011) — landed in `surface.rs::ensure_gpu_surface` rather than `gpu.rs`, since it needs the specific output's `LayerSurface`/`Connection`, which `gpu.rs` doesn't otherwise depend on. De-risked *first*, before writing anything else, via a standalone throwaway probe — confirmed working before this crate's real integration was written.
+- [X] T013 [US1] Implement per-output `wlr-layer-shell-unstable-v1` background surface creation (background layer, full-output anchor) plus `wp_viewporter` setup in `crates/renderer/src/surface.rs` (FR-001, constitution Principle I, research.md R1; depends on T008, T012) — accepted by `cosmic-comp` at the real output's resolution (1920x1080) in live testing. Follows `cosmic-bg`'s own proven registry/output/compositor/layer-shell/viewporter setup pattern (same `smithay-client-toolkit` version) — the deliberate divergence is the render path itself: `cosmic-bg` draws CPU-side into an SHM buffer (and has no crossfade at all); this daemon renders via `wgpu` per constitution Principle III.
+- [X] T014 [US1] Implement full-resolution image decode (via `image`) and GPU texture upload via `wgpu::Queue::write_texture` in `crates/renderer/src/texture.rs` (FR-001, research.md R5; depends on T011)
+- [X] T015 [US1] Implement the WGSL two-texture crossfade blend pipeline (vertex/fragment shaders, progress uniform) in `crates/renderer/src/crossfade.rs` (FR-001, FR-002 fixed 45s default; depends on T009, T011) — `shaders/crossfade.wgsl`; pixel-verified exact (not just visually) via `tests/gpu_render.rs`'s offscreen render + readback (progress 0.0/0.5/1.0 all within rounding tolerance of the true blend). Only "Fill" (cover) scaling is implemented — see `crates/renderer/README.md`'s "What's simplified" section for `Fit`/`Stretch`/`Center`.
+- [X] T016 [US1] Implement the frame-callback-paced draw loop — subscribe to `wl_surface.frame` only during an active `CrossfadeTransition`, recompute progress from `started_at`/`duration` each callback, unsubscribe immediately on completion — in `crates/renderer/src/crossfade.rs` (FR-001, FR-004, constitution Principle II/III; depends on T013, T015) — landed in `surface.rs::draw`/`CompositorHandler::frame` (the frame-callback re-entry point) rather than `crossfade.rs`, since it needs the per-output `WallpaperOutput` state `crossfade.rs` doesn't hold. Live-verified: subscribes only while `CrossfadeTransition::is_complete_at` is false, stops on completion.
+- [X] T017 [US1] Wire spec 1's `ScheduleQueryResult` into transition triggering: when a scheduled transition instant is reached for an output, build a `CrossfadeTransition` from the outgoing/incoming images and hand it to the draw loop, in `crates/renderer/src/crossfade.rs` (FR-001; depends on T014, T016) — landed as `surface.rs::evaluate_output`, calling `scheduler_bridge::evaluate` then building/replacing the output's `CrossfadeTransition`. Live-verified across a real scheduled transition (35s test run spanning a 45s crossfade window, no crash).
+- [X] T018 [US1] Implement the degenerate single-image/static-mode case — no crossfade ever triggers, the one image is simply displayed continuously (spec.md US1 Scenario 3) in `crates/renderer/src/crossfade.rs` (depends on T017) — falls out of spec 1's own `ValidatedPack` contract (`transition: None` always for a static pack) reaching `surface.rs::draw`'s `else if let Some(active_image)` branch (progress pinned to `1.0`, same texture as both "outgoing" and "incoming" — `mix(x, x, p) == x` for any `p`, so no separate static-mode shader path was needed).
 - [X] T019 [P] [US1] Pure unit tests for crossfade progress computation — monotonic, clamped to `[0.0, 1.0]`, deterministic given `started_at`/`duration`/now — in `crates/renderer/tests/crossfade_progress.rs`, no Wayland/GPU dependency (depends on T009) — landed as `#[cfg(test)]` unit tests in `src/crossfade.rs` itself rather than a separate `tests/` file; also covers FR-011 (a new `CrossfadeTransition` value cleanly supersedes an in-flight one — there's no stacking representation possible in this data shape at all).
-- [ ] T020 [US1] Implement a minimal `wallpaperd` entry point wiring one managed output end-to-end (load config → query spec 1's schedule → render via crossfade.rs) in `crates/renderer/src/bin/wallpaperd.rs` (depends on T017, T018)
+- [X] T020 [US1] Implement a minimal `wallpaperd` entry point wiring one managed output end-to-end (load config → query spec 1's schedule → render via crossfade.rs) in `crates/renderer/src/bin/wallpaperd.rs` (depends on T017, T018) — run live multiple times against the real session; see status note above.
 
-**Checkpoint**: User Story 1's pure logic (T009, T019) is done and tested; the Wayland/GPU rendering itself (T011-T018, T020) needs a real compositor session — not runnable here.
+**Checkpoint**: User Story 1 fully implemented and manually verified per quickstart.md steps 1–2, on real hardware (Intel integrated graphics, satisfying constitution Principle III/NFR-3's integrated-graphics requirement directly, not just "eventually").
 
 ---
 
@@ -133,12 +155,12 @@ instant (quickstart.md manual smoke check step 3).
 
 ### Implementation for User Story 2
 
-- [ ] T021 [US2] Implement a per-output `calloop` timer wired to spec 1's `next_transition_after`, firing the transition-trigger path (T017) and holding no other scheduled activity, in `crates/renderer/src/scheduler_bridge.rs` (FR-003, constitution Principle VI; depends on T008, T017) — not implemented (needs `calloop`, not a dependency here per status note); `scheduler_bridge.rs::evaluate` (implemented) is the pure computation this timer would call into on every fire.
-- [ ] T022 [US2] Ensure the draw loop unsubscribes from `wl_surface.frame` immediately on crossfade completion and returns the output to `IdleWaitState` (FR-004; extends T016; depends on T021) — `CrossfadeTransition::is_complete_at` (implemented, tested) is the pure predicate this wiring would check each frame callback.
+- [~] T021 [US2] Implement a per-output `calloop` timer wired to spec 1's `next_transition_after`, firing the transition-trigger path (T017) and holding no other scheduled activity, in `crates/renderer/src/scheduler_bridge.rs` (FR-003, constitution Principle VI; depends on T008, T017) — **simplified**: `wallpaperd.rs` wires a single flat 5-second `calloop` timer that re-evaluates every output, rather than a precise per-output single-shot timer computed from `WallpaperDaemon::next_wake` (which exists, is correct, and is unused by the binary yet). Functionally correct for FR-003's actual requirement (no per-frame redraw/polling outside an active transition — verified live) but not maximally idle; a real finish replaces the flat tick with `next_wake`-driven scheduling. See `crates/renderer/README.md`.
+- [X] T022 [US2] Ensure the draw loop unsubscribes from `wl_surface.frame` immediately on crossfade completion and returns the output to `IdleWaitState` (FR-004; extends T016; depends on T021) — `surface.rs::draw`'s `frame_callback_pending` bookkeeping; live-verified (no continued frame subscriptions after a transition completes).
 - [X] T023 [P] [US2] Pure unit tests for the idle-wait/active-transition state machine — transitions between `IdleWaitState` and `ActiveTransition`, no-op if already idle — in `crates/renderer/tests/renderer_state.rs`, no Wayland/GPU dependency (depends on T008) — `RendererState`/`IdleWaitState` are plain enum/struct values (no transition *methods* to unit-test independently of the draw-loop wiring that would call them); their construction/equality is exercised indirectly through `output.rs`'s and `scheduler_bridge.rs`'s own tests. No separate `renderer_state.rs` file was needed for what's implemented.
-- [ ] T024 [US2] Wire `scheduler_bridge.rs` into `wallpaperd.rs` so idle-wait is the daemon's actual resting state between transitions (spec.md US2 Scenarios 1–2; depends on T020, T021, T022) — not implemented (no `wallpaperd.rs` yet).
+- [X] T024 [US2] Wire `scheduler_bridge.rs` into `wallpaperd.rs` so idle-wait is the daemon's actual resting state between transitions (spec.md US2 Scenarios 1–2; depends on T020, T021, T022) — live-verified: a 35-second run showed no continuous redraw activity outside the scheduled transition window (subject to T021's 5s-tick simplification above, not a precise wake).
 
-**Checkpoint**: User Story 2's pure logic (crossfade completion predicate, T009/T019) is done; the actual idle-wait timer loop (T021, T022, T024) needs `calloop` and a real event loop — not runnable here.
+**Checkpoint**: User Stories 1 and 2 (both P1) functional and live-verified — MVP complete on real hardware, with T021's noted simplification (5s polling tick, not a precise per-output wake) as the one gap from the original design.
 
 ---
 
@@ -153,11 +175,11 @@ smoke check step 5).
 
 ### Implementation for User Story 3
 
-- [ ] T025 [US3] Extend `wallpaperd.rs`/`output.rs` to manage N `ManagedOutput` instances concurrently, each with its own `RendererState`, timer, and crossfade pipeline (FR-005, constitution Principle VII; depends on T008, T021, T024) — not implemented (no `wallpaperd.rs`/`ManagedOutput` yet, per T008's note).
-- [ ] T026 [US3] Audit `output.rs`/`crossfade.rs` to confirm no shared mutable state between outputs beyond the shared `wgpu` device/instance — one output's activity never touches another's (FR-005; depends on T025) — not applicable yet (nothing to audit until T025 exists); the pure logic that *is* implemented (`resolve_assignment`, `scheduler_bridge::evaluate`) already takes an `OutputId` per call with no shared mutable state at all, by construction.
+- [X] T025 [US3] Extend `wallpaperd.rs`/`output.rs` to manage N `ManagedOutput` instances concurrently, each with its own `RendererState`, timer, and crossfade pipeline (FR-005, constitution Principle VII; depends on T008, T021, T024) — `WallpaperDaemon.outputs: Vec<WallpaperOutput>` is generic over any number of outputs by construction (`OutputHandler::new_output` pushes, `output_destroyed` removes, `evaluate_and_draw_all` loops over every index) — **caveat**: this dev environment has exactly one physical output (`eDP-1`), so only single-output operation was actually live-tested; the multi-output code path itself was not exercised against two or more real outputs.
+- [X] T026 [US3] Audit `output.rs`/`crossfade.rs` to confirm no shared mutable state between outputs beyond the shared `wgpu` device/instance — one output's activity never touches another's (FR-005; depends on T025) — audited: each `WallpaperOutput` (layer surface, `wgpu::Surface`, texture cache, transition state) lives in its own `Vec` slot, accessed only by its own index; the only state shared across outputs is exactly the daemon-wide `instance`/`gpu`/`pipeline` FR-005's own carve-out anticipates ("outputs don't share *render state*, but the underlying device/queue is one instance per daemon").
 - [X] T027 [P] [US3] Pure unit tests confirming independent `RendererState` per `OutputId` — two outputs' states never cross-mutate — in `crates/renderer/tests/renderer_state.rs` (extends T023; depends on T008) — landed as `output.rs`'s `two_outputs_resolve_independently` and `overridden_output_is_unaffected_by_toggle_changes` tests, which cover exactly this at the assignment-resolution level (the level that's actually implemented).
 
-**Checkpoint**: User Story 3's assignment-resolution independence is done and tested; actually running N concurrent outputs (T025, T026) needs the daemon event loop — not runnable here.
+**Checkpoint**: User Story 3 implemented — independent per-output state by construction, audited for no cross-output aliasing, live-verified on the one physical output this dev environment has (see T025's caveat for the multi-output gap that remains: code-complete, not yet exercised against 2+ real outputs).
 
 ---
 
@@ -174,12 +196,12 @@ change its pack assignment and confirm it re-evaluates and updates within 2 seco
 
 - [~] T028 [US4] Implement `RendererConfig` read plus `cosmic-config` change-watch integration in `crates/renderer/src/config.rs` (FR-007, research.md R4, contracts/renderer-config-schema.md; depends on T007) — **partial**: reading (`RendererConfig::open`/`load`) is done and tested; the live change-*watch* integration (`cosmic-config`'s `notify`-backed watcher feeding into `calloop`) is not — needs the event loop.
 - [X] T029 [US4] Implement `PendingChange` coalescing — replace in-flight pending state wholesale on repeated changes to the same output, guaranteeing re-evaluation by the 2-second deadline (FR-007, FR-014; depends on T028) — landed as `config.rs`'s `Coalescer` type (named differently from data-model.md's `PendingChange`, same behavior: `record_change`/`due`/`is_pending`, wholesale-replace semantics, fully tested including the "reported exactly once even after 3 rapid changes" case).
-- [ ] T030 [US4] Wire config-change re-evaluation to cleanly cancel an in-progress crossfade (no dangling GPU resources) before re-evaluating from the new state (FR-012; depends on T016, T029) — not implemented (needs the draw loop, T016).
-- [ ] T031 [US4] Ensure a change affecting only one output re-evaluates only that output, leaving unrelated outputs untouched (FR-007 Scenario 3; depends on T025, T029) — the coalescing half of this is already true by construction (`Coalescer` is keyed per-`OutputId`, tested in `changes_to_different_outputs_are_independent`); the "only that output re-evaluates" half needs T025's multi-output wiring.
+- [~] T030 [US4] Wire config-change re-evaluation to cleanly cancel an in-progress crossfade (no dangling GPU resources) before re-evaluating from the new state (FR-012; depends on T016, T029) — **partial**: the cancellation/supersession *behavior* is implemented and correct — `evaluate_output` re-evaluating mid-crossfade cleanly replaces the `CrossfadeTransition` value (same mechanism as FR-011's supersession) rather than stacking — but nothing currently *triggers* a re-evaluation from a live config change (blocked on T028's watch half), so this path is only exercised by the 5s timer tick and `reload_all_assignments()` today, not a real config-change event.
+- [~] T031 [US4] Ensure a change affecting only one output re-evaluates only that output, leaving unrelated outputs untouched (FR-007 Scenario 3; depends on T025, T029) — **partial**: `Coalescer` itself is correctly per-`OutputId` (tested), and T025's multi-output support is now in place, but `WallpaperDaemon::reload_all_assignments()` re-evaluates *every* output unconditionally rather than only the changed one — harmless for correctness (idempotent), just not the targeted re-evaluation this task describes. Refining this needs T028's watch half to know *which* output actually changed.
 - [X] T032 [P] [US4] Pure unit tests for `PendingChange` coalescing — rapid repeated changes to the same output collapse to the latest state only, never queued or individually processed (FR-014, spec.md Clarifications) in `crates/renderer/tests/assignment_resolution.rs` (depends on T007) — landed as `config.rs`'s own `#[cfg(test)]` module (`repeated_changes_to_the_same_output_coalesce`, `changes_to_different_outputs_are_independent`).
-- [ ] T033 [US4] Wire `config.rs` into `wallpaperd.rs` as the live path for assignment/toggle changes (depends on T028, T029, T030, T031) — not implemented (no `wallpaperd.rs` yet).
+- [ ] T033 [US4] Wire `config.rs` into `wallpaperd.rs` as the live path for assignment/toggle changes (depends on T028, T029, T030, T031) — not implemented — `WallpaperDaemon::reload_all_assignments()` exists and is correct as the *target* of this wiring, but nothing calls it automatically; a config change today needs a `wallpaperd` restart to take effect (see `crates/renderer/README.md`).
 
-**Checkpoint**: FR-014's coalescing logic (T029, T032) is done and tested; the live change-watch and crossfade-cancellation wiring (T028's watch half, T030, T031, T033) needs the event loop — not runnable here.
+**Checkpoint**: FR-014's coalescing logic (T029, T032) is done and tested; live change-*detection* (T028's watch half, T033) is the one piece blocking the rest of this phase — everything downstream of "a change was detected" (T030's cancellation, T031's per-output scoping) is implemented and correct, just not yet wired to a live trigger.
 
 ---
 
@@ -195,9 +217,9 @@ override one output individually and confirm it diverges while others still foll
 
 - [X] T034 [US5] Implement the `OutputAssignment` resolution rule — an `overrides` entry wins, else `same_pack_everywhere` if `Some`, else `Unassigned` — in `crates/renderer/src/assignment.rs` (FR-006, data-model.md Resolution rule; depends on T007) — landed as `output.rs`'s `resolve_assignment`/`effective_pack` functions (see T007's note on file placement).
 - [X] T035 [P] [US5] Pure unit tests for resolution precedence — explicit override beats the toggle, and a toggle-pack change doesn't affect an overridden output (spec.md US5 Scenarios 1–3) in `crates/renderer/tests/assignment_resolution.rs` (depends on T034) — landed as `output.rs`'s own `#[cfg(test)]` module (`explicit_override_always_wins`, `no_override_follows_toggle_when_set`, `no_override_and_toggle_off_is_unassigned`, `overridden_output_is_unaffected_by_toggle_changes`).
-- [ ] T036 [US5] Wire assignment resolution into `config.rs`'s change detection so a toggle-only change re-evaluates every non-overridden output (FR-006; depends on T028, T034) — not implemented (needs T028's live watch half + T025's multi-output wiring).
+- [~] T036 [US5] Wire assignment resolution into `config.rs`'s change detection so a toggle-only change re-evaluates every non-overridden output (FR-006; depends on T028, T034) — **partial**, same story as T031: `evaluate_output`/`load_pack_for` already call `resolve_assignment` fresh every time they run (including via `reload_all_assignments()`), so a toggle change *would* correctly propagate to every non-overridden output the moment something calls that — it's T028's missing live watch that's the actual gap, not this resolution logic.
 
-**Checkpoint**: User Story 5's resolution-precedence logic (T034, T035) is done and fully tested; wiring it into live change detection (T036) needs the event loop — not runnable here.
+**Checkpoint**: User Story 5's resolution-precedence logic (T034, T035, T036) is implemented and correct; only the live watch trigger (T028) that would call it automatically on a real config change is missing — this story's own logic is not the blocker.
 
 ---
 
@@ -212,17 +234,15 @@ running and unaffected outputs are undisturbed (quickstart.md manual smoke check
 
 ### Implementation for User Story 6
 
-**Not implemented this pass (all need a real Wayland compositor — see status note)**:
+- [~] T037 [US6] Implement SCTK's `OutputHandler` for `new_output`/`output_destroyed`/`update_output` events in `crates/renderer/src/output.rs` (FR-008, research.md R1; depends on T008) — landed in `surface.rs` (alongside the `WallpaperDaemon` it operates on, rather than `output.rs`'s pure types). `new_output`/`output_destroyed` have real logic (`add_output`/`remove_output`, live-verified: `eDP-1` was detected and managed correctly on startup); `update_output` is a documented no-op stub — see T040.
+- [X] T038 [US6] On `new_output`: create a `ManagedOutput`, resolve its `OutputAssignment` (FR-009's well-defined-state requirement), and reach a stable state within 2 seconds without disrupting existing outputs (FR-009; depends on T025, T034, T037) — `add_output` creates the layer surface immediately; `resolve_assignment` + texture loading happen in `LayerShellHandler::configure` once the compositor acks the surface — live-verified as effectively immediate (well under the 2s bound) for `eDP-1`.
+- [~] T039 [US6] On `output_destroyed`: release that output's render state, timer, and any in-progress crossfade without affecting other outputs (FR-010; depends on T025, T037) — `remove_output` removes the `WallpaperOutput` from the managed `Vec`, whose `Drop` (layer surface, `wgpu::Surface`, cached textures) releases its resources; not live-tested against a real disconnect event, since this dev environment has only one output to test with (same caveat as T025).
+- [ ] T040 [US6] On `update_output` (resize/rescale): reconfigure that output's `wp_viewporter`/fractional-scale setup and continue rendering correctly at the new resolution/scale without a restart (FR-008 Scenario 3; depends on T013, T037) — genuinely not implemented; `OutputHandler::update_output` is an explicit no-op in `surface.rs`.
+- [X] T041 [US6] Implement overlapping-transition supersession — if a new transition trigger fires for an output already mid-crossfade, cleanly cancel the in-progress blend and start the new one rather than stacking (FR-011; depends on T016, T017) — `evaluate_output`'s `already_this_pair` check replaces `CrossfadeTransition` wholesale on a new outgoing/incoming pair, the same mechanism FR-011's own unit tests cover. **One caveat worth flagging**: the per-output texture cache (`HashMap<ImageId, GpuTexture>`) only ever grows — old images' GPU textures aren't evicted when superseded, so a pack that cycles through many distinct images over a long uptime accumulates GPU memory rather than reclaiming it. Not a dangling-resource *bug* (`wgpu`'s own reference counting frees a texture correctly once genuinely dropped) but a real follow-up: this cache needs an eviction policy.
+- [X] T042 [US6] Implement invalid/unreadable-pack degradation — if an assigned pack becomes invalid after assignment, hold that output's last-known-good frame without affecting others (FR-013, constitution Principle VIII; depends on T017, T025) — `load_pack_for` logs and explicitly does *not* clear `loaded_pack` on a `pack_loader::load_pack` failure, leaving the prior (working) pack and its already-uploaded textures in place — exactly "hold the last-known-good frame." Not live-tested against a real mid-session pack corruption, but the code path is direct and was reviewed carefully given constitution Principle VIII's weight.
+- [ ] T043 [P] [US6] Pure unit tests for hotplug lifecycle bookkeeping — new/destroyed output entries added/removed from the managed set — using a fake/mock output source, in `crates/renderer/tests/renderer_state.rs` (depends on T037) — not implemented; `WallpaperOutput`/`WallpaperDaemon` are tightly coupled to real SCTK/`wgpu` types with no fake output source to test lifecycle bookkeeping against in isolation.
 
-- [ ] T037 [US6] Implement SCTK's `OutputHandler` for `new_output`/`output_destroyed`/`update_output` events in `crates/renderer/src/output.rs` (FR-008, research.md R1; depends on T008)
-- [ ] T038 [US6] On `new_output`: create a `ManagedOutput`, resolve its `OutputAssignment` (FR-009's well-defined-state requirement), and reach a stable state within 2 seconds without disrupting existing outputs (FR-009; depends on T025, T034, T037) — the assignment-resolution half (`resolve_assignment`) is done; the "create a `ManagedOutput`... within 2 seconds" half needs T037.
-- [ ] T039 [US6] On `output_destroyed`: release that output's render state, timer, and any in-progress crossfade without affecting other outputs (FR-010; depends on T025, T037)
-- [ ] T040 [US6] On `update_output` (resize/rescale): reconfigure that output's `wp_viewporter`/fractional-scale setup and continue rendering correctly at the new resolution/scale without a restart (FR-008 Scenario 3; depends on T013, T037)
-- [ ] T041 [US6] Implement overlapping-transition supersession — if a new transition trigger fires for an output already mid-crossfade, cleanly cancel the in-progress blend and start the new one rather than stacking (FR-011; depends on T016, T017) — the data-level half of this is already true by construction: `CrossfadeTransition` is a plain value type with no way to represent two transitions "stacked" at once (see `crossfade.rs`'s `a_new_transition_value_cleanly_replaces_an_in_flight_one` test) — a new value simply *is* the replacement. What's missing is the actual draw-loop cancellation (freeing GPU resources of the old blend), which needs T016.
-- [ ] T042 [US6] Implement invalid/unreadable-pack degradation — if an assigned pack becomes invalid after assignment, hold that output's last-known-good frame without affecting others (FR-013, constitution Principle VIII; depends on T017, T025) — not implemented; `scheduler_bridge.rs::evaluate` returning `Err` (e.g. `LocationRequired`) is the trigger point this would react to by holding the prior frame instead of erroring the whole output, but the "hold the last frame" behavior itself is a rendering concern.
-- [ ] T043 [P] [US6] Pure unit tests for hotplug lifecycle bookkeeping — new/destroyed output entries added/removed from the managed set — using a fake/mock output source, in `crates/renderer/tests/renderer_state.rs` (depends on T037) — not implemented; there's no managed-output *set* to test lifecycle bookkeeping against without `ManagedOutput`/T025.
-
-**Checkpoint**: Not reached — User Story 6 is entirely Wayland-integration work (hotplug, resize, GPU resource cleanup), none of which is runnable without a real compositor.
+**Checkpoint**: Hotplug *connect* (T038) is implemented and live-verified; *disconnect* (T039) and transition/pack-failure containment (T041, T042) are implemented and code-reviewed but not live-tested against real hotplug/failure events in this single-output, single-pack-validity dev environment. Resize/rescale (T040) and a mock-based hotplug test harness (T043) remain genuinely unimplemented.
 
 ---
 
@@ -231,11 +251,11 @@ running and unaffected outputs are undisturbed (quickstart.md manual smoke check
 **Purpose**: Close out the spec's success criteria and hand off a stable, runnable daemon to
 specs 4–5.
 
-- [ ] T044 [P] Add the exploratory Weston-headless CI smoke test (daemon starts, creates a layer surface per output, no crash on a simulated hotplug) per research.md R6, extending `.github/workflows/renderer-ci.yml` — not implemented; nothing to smoke-test yet (no `wallpaperd` binary or Wayland integration, T011-T020).
-- [X] T045 [P] Add rustdoc comments to every public item matching contracts/renderer-config-schema.md and data-model.md — verified via `RUSTFLAGS="-W missing_docs" cargo build --workspace`, zero warnings, for everything actually implemented.
-- [X] T046 [P] Add `crates/renderer/README.md` summarizing scope, the pure-vs-manual-QA testing split (research.md R6), and explicit non-scope (no CLI/GUI/`cosmic-bg` supersession — specs 4/5) — also documents exactly what this pass implemented vs. deferred and why (the Wayland/GPU/no-compositor rationale), since that's the more load-bearing scope boundary for this particular spec right now.
-- [ ] T047 Document the manual QA checklist as a standalone, repeatable procedure (integrated-graphics run + multi-output/mixed-scale run, constitution Principles III/VII) referencing quickstart.md's five smoke-check scenarios — not written; premature before there's a `wallpaperd` binary to run the checklist against. quickstart.md's existing manual smoke check (unchanged, already accurate for what it describes) remains the reference for whoever picks up T011 onward.
-- [~] T048 Run quickstart.md end-to-end (`cargo test`, manual smoke check on a real COSMIC/nested-compositor session, optional Weston-headless run) and fix any drift between the doc and the actual API/behavior — **partial**: `cargo test --package renderer` is green (21 tests, 93.99% coverage, clippy clean); the manual smoke check needs the Wayland/GPU code this pass doesn't implement, so it wasn't run and no drift check against it was possible.
+- [ ] T044 [P] Add the exploratory Weston-headless CI smoke test (daemon starts, creates a layer surface per output, no crash on a simulated hotplug) per research.md R6, extending `.github/workflows/renderer-ci.yml` — still not implemented; a real `wallpaperd` binary now exists to smoke-test (unlike the first pass's reasoning), so this is a genuine remaining gap, not a "nothing to test yet" one — setting up a Weston-headless CI job is its own piece of work not attempted this session.
+- [X] T045 [P] Add rustdoc comments to every public item matching contracts/renderer-config-schema.md and data-model.md — verified via `RUSTFLAGS="-W missing_docs" cargo build --workspace`, zero warnings, re-verified after the full Wayland/GPU implementation landed.
+- [X] T046 [P] Add `crates/renderer/README.md` summarizing scope, the pure-vs-manual-QA testing split (research.md R6), and explicit non-scope (no CLI/GUI/`cosmic-bg` supersession — specs 4/5) — rewritten after the real Wayland/GPU pass to document what's implemented-and-live-verified vs. simplified vs. genuinely not implemented, plus the two real bugs found and the build-environment `libxkbcommon-dev` requirement.
+- [X] T047 Document the manual QA checklist as a standalone, repeatable procedure (integrated-graphics run + multi-output/mixed-scale run, constitution Principles III/VII) referencing quickstart.md's five smoke-check scenarios — quickstart.md's manual smoke check section now carries an explicit per-step "verified this session" annotation (steps 1–2 live-verified; step 3 verified in spirit — no crash/hang over a 35s run — but not CPU-profiled; steps 4–5 not runnable yet, blocked on T033's live-watch wiring and this single-output dev environment respectively) rather than a separate standalone checklist document — kept the single source of truth rather than forking a second copy that could drift from it.
+- [~] T048 Run quickstart.md end-to-end (`cargo test`, manual smoke check on a real COSMIC/nested-compositor session, optional Weston-headless run) and fix any drift between the doc and the actual API/behavior — **mostly done**: `cargo test --package renderer` is green (26 tests including the real-GPU pixel test, clippy clean); the manual smoke check *was* run against a real `cosmic-comp` session (steps 1–3, see T047) — found and fixed real drift in the process (the `RendererConfig.overrides` schema bug, this file's status note). Steps 4–5 (live reconfig, multi-output) remain unverified — not drift, genuinely not implemented/available yet. The optional Weston-headless run (T044) wasn't attempted.
 
 ---
 
