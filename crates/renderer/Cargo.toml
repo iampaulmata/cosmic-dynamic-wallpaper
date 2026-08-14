@@ -44,8 +44,13 @@ stunclient = "0.4"
 tempfile = "3.27"
 # Mock hotplug test harness only (spec 7 US4, research.md R7) — a minimal in-process
 # fake Wayland compositor driving the real, unmodified SCTK client code under test.
-# Never shipped in the wallpaperd binary.
+# Never shipped in the wallpaperd binary. "server" features generate the server-side
+# bindings for the same protocols this crate's client side already depends on
+# (wayland-protocols/wayland-protocols-wlr), from wayland-rs's own generic
+# client/server split.
 wayland-server = "0.31"
+wayland-protocols = { version = "0.32", features = ["server"] }
+wayland-protocols-wlr = { version = "0.3", features = ["server"] }
 
 [lints.clippy]
 unwrap_used = "deny"

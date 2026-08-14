@@ -4523,6 +4523,8 @@ dependencies = [
  "tracing-subscriber",
  "wallpaper-ipc",
  "wayland-client",
+ "wayland-protocols",
+ "wayland-protocols-wlr",
  "wayland-server",
  "wgpu 0.20.1",
  "zbus",
