@@ -1,0 +1,16 @@
+[Unit]
+Description=Dynamic wallpaper renderer
+Documentation=https://github.com/iampaulmata/rust-dynamic-wallpaper
+PartOf=cosmic-session.target
+After=cosmic-session.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/wallpaperd
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=cosmic-session.target

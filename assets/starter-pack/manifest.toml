@@ -1,0 +1,33 @@
+schema_version = 1
+name = "Mountains"
+author = "Paul Mata"
+default_scaling = "Fill"
+fallback_color = "#1a1512"
+
+# These are plain PNGs with no embedded timing metadata, 
+# so this schedule is a reasonable hand-authored values 
+# of 6 solar anchors across a full day. Adjust offsets to taste.
+
+[[images]]
+file = "night.png"
+anchor = "solar_midnight"
+
+[[images]]
+file = "dawn.png"
+anchor = "astronomical_dawn"
+
+[[images]]
+file = "sunrise.png"
+anchor = "sunrise"
+
+[[images]]
+file = "morning.png"
+anchor = "solar_noon"
+
+[[images]]
+file = "afternoon.png"
+anchor = "sunset-2h30m"
+
+[[images]]
+file = "dusk.png"
+anchor = "astronomical_dusk"

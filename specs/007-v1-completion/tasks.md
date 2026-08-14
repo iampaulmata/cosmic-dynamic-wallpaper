@@ -41,22 +41,22 @@ to spec 5's planned (not yet implemented) `packaging/` artifacts.
 **Purpose**: Workspace scaffolding for the two new crates and every new dependency this spec
 needs.
 
-- [ ] T001 Add `crates/wallpaper-ipc` as a new workspace member in the root `Cargo.toml`, with an
+- [X] T001 Add `crates/wallpaper-ipc` as a new workspace member in the root `Cargo.toml`, with an
       empty crate depending on `serde`, `cosmic-config` (git, `features = ["macro"]`, no
       `"calloop"` — research.md R2), `zbus` (`features = ["async-io"]`), and path dependencies on
       `schedule-engine` and `pack-loader` (contracts/wallpaper-ipc-crate.md)
-- [ ] T002 [P] Add `crates/wallpaper-settings` as a new workspace member, empty crate depending on
+- [X] T002 [P] Add `crates/wallpaper-settings` as a new workspace member, empty crate depending on
       `libcosmic` (git, `pop-os/libcosmic`, same pin as `cosmic-config` — research.md R1),
       `wallpaper-ipc`, `schedule-engine`, and `pack-loader` — explicitly NOT `renderer`
       (plan.md Constitution Check finding 1)
-- [ ] T003 [P] Add `tools/generate-starter-pack` as a new workspace member, empty binary depending
+- [X] T003 [P] Add `tools/generate-starter-pack` as a new workspace member, empty binary depending
       on `image` (already a workspace dependency) — research.md R5
-- [ ] T004 [P] Add `maxminddb` (0.30.x) and `stunclient` (0.4.2) to `crates/renderer/Cargo.toml`,
+- [X] T004 [P] Add `maxminddb` (0.30.x) and `stunclient` (0.4.2) to `crates/renderer/Cargo.toml`,
       plus a `wallpaper-ipc` path dependency (research.md R3/R4)
-- [ ] T005 [P] Add `wayland-server` (0.31.x) as a `dev-dependencies`-only entry in
+- [X] T005 [P] Add `wayland-server` (0.31.x) as a `dev-dependencies`-only entry in
       `crates/renderer/Cargo.toml` (research.md R7)
-- [ ] T006 [P] Add a `wallpaper-ipc` path dependency to `crates/wallpaperctl/Cargo.toml`
-- [ ] T007 [P] Add `.github/workflows/wallpaper-ipc-ci.yml` and
+- [X] T006 [P] Add a `wallpaper-ipc` path dependency to `crates/wallpaperctl/Cargo.toml`
+- [X] T007 [P] Add `.github/workflows/wallpaper-ipc-ci.yml` and
       `.github/workflows/wallpaper-settings-ci.yml` (`cargo test` + `cargo clippy`), matching
       this project's existing per-crate CI pattern
 
@@ -74,36 +74,36 @@ parallel.
 
 **⚠️ CRITICAL**: Blocks Phases 3 (US1) and 6 (US3).
 
-- [ ] T008 Move `RendererConfig`/`OutputAssignment`/`OutputId` from `crates/renderer/src/output.rs`
+- [X] T008 Move `RendererConfig`/`OutputAssignment`/`OutputId` from `crates/renderer/src/output.rs`
       into `crates/wallpaper-ipc/src/renderer_config.rs`, unchanged shape (contracts/
       wallpaper-ipc-crate.md; depends on T001)
-- [ ] T009 Move `LocationConfigEntry` into `crates/wallpaper-ipc/src/location_config.rs`, rename
+- [X] T009 Move `LocationConfigEntry` into `crates/wallpaper-ipc/src/location_config.rs`, rename
       `AutomaticStatus`→`ResolutionStatus` (research.md R9), bump to v3, add `ip_location`/
       `ip_status` fields (data-model.md, contracts/location-config-schema-v3.md; depends on T001,
       T008)
-- [ ] T010 [P] Add `crossfade_duration_secs: u32` (default `45`) to `RendererConfig` in
+- [X] T010 [P] Add `crossfade_duration_secs: u32` (default `45`) to `RendererConfig` in
       `wallpaper-ipc` (plan.md Constitution Check finding 3, data-model.md; depends on T008)
-- [ ] T011 Implement the three-way `effective_location()` in `wallpaper-ipc` with unit tests
+- [X] T011 Implement the three-way `effective_location()` in `wallpaper-ipc` with unit tests
       covering all nine `(mode, resolution-state)` combinations (data-model.md; depends on T009)
-- [ ] T012 Move `DbusClient` from `crates/wallpaperctl/src/dbus_client.rs` into
+- [X] T012 Move `DbusClient` from `crates/wallpaperctl/src/dbus_client.rs` into
       `crates/wallpaper-ipc/src/dbus_client.rs`, unchanged protocol (contracts/
       wallpaperd-dbus-interface.md, spec 4, unchanged; depends on T001)
-- [ ] T013 [P] Regression test: a hand-written v2 RON `LocationConfig` entry loads via the new v3
+- [X] T013 [P] Regression test: a hand-written v2 RON `LocationConfig` entry loads via the new v3
       struct as `mode: Manual` (unchanged), `ip_location: None`, `ip_status: Unresolved` —
       confirms `cosmic-config`'s per-key fallback (spec 6 research.md R7) still works across the
       `AutomaticStatus`→`ResolutionStatus` rename (research.md R9; depends on T009)
-- [ ] T014 Amend `crates/renderer/src/config.rs` and `src/output.rs` to re-export
+- [X] T014 Amend `crates/renderer/src/config.rs` and `src/output.rs` to re-export
       `wallpaper-ipc`'s types instead of defining their own; delete the old independently-defined
       structs (depends on T008, T009)
-- [ ] T015 [P] Update `crates/renderer/src/scheduler_bridge.rs`'s `effective_location()` import
+- [X] T015 [P] Update `crates/renderer/src/scheduler_bridge.rs`'s `effective_location()` import
       path to `wallpaper-ipc` (no logic change — depends on T011, T014)
-- [ ] T016 Amend `crates/renderer/src/surface.rs`'s three `CROSSFADE_DURATION` call sites to read
+- [X] T016 Amend `crates/renderer/src/surface.rs`'s three `CROSSFADE_DURATION` call sites to read
       `RendererConfig.crossfade_duration_secs` instead of the constant, applied live via the
       existing config-watch mechanism (plan.md finding 3; depends on T010, T014)
-- [ ] T017 Amend `crates/wallpaperctl/src/config.rs` to re-export `wallpaper-ipc`'s types instead
+- [X] T017 Amend `crates/wallpaperctl/src/config.rs` to re-export `wallpaper-ipc`'s types instead
       of defining its own; delete `crates/wallpaperctl/src/dbus_client.rs`, re-exporting from
       `wallpaper-ipc` instead (depends on T009, T012, T006)
-- [ ] T018 Regression test closing research.md R2's own real-bug precedent: a `RendererConfig`
+- [X] T018 Regression test closing research.md R2's own real-bug precedent: a `RendererConfig`
       value written through `wallpaper-ipc` by a simulated `wallpaperctl` write path and read back
       through a simulated `wallpaperd` load path round-trips byte-for-byte — the exact class of
       bug now structurally prevented by a single shared type (depends on T014, T017)
@@ -124,36 +124,36 @@ timeline" flow entirely inside the GUI, with no terminal command run at any poin
 
 ### Tests for User Story 1
 
-- [ ] T019 [P] [US1] Unit test: Packs page's view-state maps a `pack-loader::Registry` listing
+- [X] T019 [P] [US1] Unit test: Packs page's view-state maps a `pack-loader::Registry` listing
       into display rows with preview paths, independent of `libcosmic` rendering (spec.md
       Acceptance Scenario 1) in `crates/wallpaper-settings/src/pages/packs.rs`
-- [ ] T020 [P] [US1] Unit test: Assignment page writes the identical `RendererConfig.overrides`
+- [X] T020 [P] [US1] Unit test: Assignment page writes the identical `RendererConfig.overrides`
       shape `wallpaperctl assign` does (spec.md Acceptance Scenario 2) in
       `crates/wallpaper-settings/src/pages/assignment.rs`
-- [ ] T021 [P] [US1] Unit test: Location page's mode switch writes the identical
+- [X] T021 [P] [US1] Unit test: Location page's mode switch writes the identical
       `LocationConfigEntry` shape `wallpaperctl location` does, for all three modes (spec.md
       Acceptance Scenario 3) in `crates/wallpaper-settings/src/pages/location.rs`
-- [ ] T022 [P] [US1] Unit test: Timeline page's data mapping matches
+- [X] T022 [P] [US1] Unit test: Timeline page's data mapping matches
       `wallpaper-ipc::DbusClient`'s query response shape 1:1, including the "daemon unreachable"
       state (spec.md Acceptance Scenario 4) in `crates/wallpaper-settings/src/pages/timeline.rs`
-- [ ] T023 [P] [US1] Unit test: Crossfade page writes `RendererConfig.crossfade_duration_secs`
+- [X] T023 [P] [US1] Unit test: Crossfade page writes `RendererConfig.crossfade_duration_secs`
       (spec.md Acceptance Scenario 5) in `crates/wallpaper-settings/src/pages/crossfade.rs`
 
 ### Implementation for User Story 1
 
-- [ ] T024 [US1] Implement the `cosmic::Application` skeleton — window, sidebar navigation between
+- [X] T024 [US1] Implement the `cosmic::Application` skeleton — window, sidebar navigation between
       the five pages — in `crates/wallpaper-settings/src/app.rs` + `src/main.rs` (research.md R1;
       depends on T002)
-- [ ] T025 [US1] Implement the Packs page (browse + preview) reading `pack-loader::Registry`
+- [X] T025 [US1] Implement the Packs page (browse + preview) reading `pack-loader::Registry`
       (contracts/gui-application.md; depends on T024)
-- [ ] T026 [US1] Implement the Assignment page (per-output / same-everywhere) writing
+- [X] T026 [US1] Implement the Assignment page (per-output / same-everywhere) writing
       `wallpaper-ipc::RendererConfig` (depends on T024, T014)
-- [ ] T027 [US1] Implement the Location page (manual/automatic/IP-geolocation mode switch, plus
+- [X] T027 [US1] Implement the Location page (manual/automatic/IP-geolocation mode switch, plus
       the STUN-disclosure copy FR-014 requires) writing `wallpaper-ipc::LocationConfigEntry`
       (depends on T024, T009)
-- [ ] T028 [US1] Implement the Timeline page using `wallpaper-ipc::DbusClient` (depends on T024,
+- [X] T028 [US1] Implement the Timeline page using `wallpaper-ipc::DbusClient` (depends on T024,
       T012, T017), showing the same "daemon unreachable" fallback `wallpaperctl query` uses
-- [ ] T029 [US1] Implement the Crossfade page writing `RendererConfig.crossfade_duration_secs`
+- [X] T029 [US1] Implement the Crossfade page writing `RendererConfig.crossfade_duration_secs`
       (depends on T024, T016)
 
 **Checkpoint**: GUI functional end-to-end against real `cosmic-config`/D-Bus state, interchangeable
@@ -173,30 +173,30 @@ remaining manual-only gap.
 
 ### Tests for User Story 4
 
-- [ ] T030 [P] [US4] Mock hotplug harness test: an output connect event via the `wayland-server`
+- [X] T030 [P] [US4] Mock hotplug harness test: an output connect event via the `wayland-server`
       double reaches the same real SCTK client code path a physical compositor triggers (spec.md
       Acceptance Scenario 1) in `crates/renderer/tests/hotplug_mock.rs` (research.md R7)
-- [ ] T031 [P] [US4] Mock hotplug harness test: an output disconnect event — previously entirely
+- [X] T031 [P] [US4] Mock hotplug harness test: an output disconnect event — previously entirely
       untested on any hardware this project has access to — correctly tears down state without
       panicking (closes spec 3 tasks.md T043's disconnect gap) in
       `crates/renderer/tests/hotplug_mock.rs`
-- [ ] T032 [P] [US4] Mock hotplug harness test: an output resize/scale-change event correctly
+- [X] T032 [P] [US4] Mock hotplug harness test: an output resize/scale-change event correctly
       triggers reconfiguration (closes spec 3's previously-untested resize branch) in
       `crates/renderer/tests/hotplug_mock.rs`
 
 ### Implementation for User Story 4
 
-- [ ] T033 [US4] Implement the minimal `wayland-server`-backed fake compositor
+- [X] T033 [US4] Implement the minimal `wayland-server`-backed fake compositor
       (`wl_registry`/`wl_output`/`xdg_output`/`wp_fractional_scale_v1`) driving the real,
       unmodified SCTK client code in `crates/renderer/src/surface.rs` over an in-memory
       socketpair (research.md R7; depends on T005)
-- [ ] T034 [US4] Add `recommends = "geoclue-2.0"` to `crates/renderer/Cargo.toml`'s
+- [X] T034 [US4] Add `recommends = "geoclue-2.0"` to `crates/renderer/Cargo.toml`'s
       `[package.metadata.deb]` section (research.md R8, closes spec 6 research.md R2's
       previously-unapplied suggestion)
-- [ ] T035 [US4] Manual QA, executed and dated: spec 5's real install/autostart/crash-restart
+- [X] T035 [US4] Manual QA, executed and dated: spec 5's real install/autostart/crash-restart
       lifecycle on a live session (spec.md FR-019) — record dated results in a new
       `docs/manual-qa-log.md`
-- [ ] T036 [US4] Manual QA, executed and dated: spec 6's full automatic-location success path
+- [X] T036 [US4] Manual QA, executed and dated: spec 6's full automatic-location success path
       against a real GeoClue backend with location services enabled (spec.md FR-019) — same
       recording location as T035
 
@@ -217,31 +217,31 @@ a bundled starter pack is already registered, assigned, and actively scheduled.
 
 ### Tests for User Story 2
 
-- [ ] T037 [P] [US2] Unit test: `PackRegistryEntry.origin` defaults to `User`; a pre-existing
+- [X] T037 [P] [US2] Unit test: `PackRegistryEntry.origin` defaults to `User`; a pre-existing
       (v-old) registry entry loads unchanged (research.md R6) in
       `crates/pack-loader/src/registry.rs`
-- [ ] T038 [P] [US2] Unit test: removing a `Package`-origin entry appends its source to
+- [X] T038 [P] [US2] Unit test: removing a `Package`-origin entry appends its source to
       `RemovedStarterPacks`; removing a `User`-origin entry does not (spec.md FR-010) in
       `crates/pack-loader/src/registry.rs`
-- [ ] T039 [P] [US2] Unit test: a simulated `postinst` re-run skips registering a starter pack
+- [X] T039 [P] [US2] Unit test: a simulated `postinst` re-run skips registering a starter pack
       already listed in `RemovedStarterPacks` (spec.md US2 Scenario 2) in
       `crates/pack-loader/src/registry.rs`
-- [ ] T040 [P] [US2] Unit test: a starter pack's default assignment never overrides an existing
+- [X] T040 [P] [US2] Unit test: a starter pack's default assignment never overrides an existing
       user assignment (spec.md US2 Scenario 3) in `crates/renderer/src/scheduler_bridge.rs`
 
 ### Implementation for User Story 2
 
-- [ ] T041 [US2] Add `origin: PackOrigin` to `PackRegistryEntry` and a new, separate
+- [X] T041 [US2] Add `origin: PackOrigin` to `PackRegistryEntry` and a new, separate
       `RemovedStarterPacks` schema in `crates/pack-loader/src/registry.rs` (data-model.md,
       contracts/pack-registry-origin.md)
-- [ ] T042 [US2] Implement `tools/generate-starter-pack`: produce a fixed gradient/sky-art image
+- [X] T042 [US2] Implement `tools/generate-starter-pack`: produce a fixed gradient/sky-art image
       sequence spanning a solar-anchored day cycle (research.md R5; depends on T003)
-- [ ] T043 [US2] Run the generator once; commit its static output
+- [X] T043 [US2] Run the generator once; commit its static output
       (`assets/starter-pack/*.png` + `manifest.toml`) to the repository (depends on T042)
-- [ ] T044 [US2] Amend spec 5's `packaging/debian/postinst` to register `assets/starter-pack/`
+- [X] T044 [US2] Amend spec 5's `packaging/debian/postinst` to register `assets/starter-pack/`
       with `origin: Package`, checking `RemovedStarterPacks` first (contracts/
       pack-registry-origin.md; depends on T041, T043)
-- [ ] T045 [US2] Amend `wallpaperctl remove` to append to `RemovedStarterPacks` when removing a
+- [X] T045 [US2] Amend `wallpaperctl remove` to append to `RemovedStarterPacks` when removing a
       `Package`-origin entry (depends on T041)
 
 **Checkpoint**: Fresh installs show a real, actively-scheduled wallpaper immediately with zero
@@ -258,33 +258,33 @@ location and confirm a solar-anchored pack schedules against the resolved approx
 
 ### Tests for User Story 3
 
-- [ ] T046 [P] [US3] Unit test: `maxminddb` lookup against a small fixture `.mmdb` resolves known
+- [X] T046 [P] [US3] Unit test: `maxminddb` lookup against a small fixture `.mmdb` resolves known
       test IPs to expected coordinates, fully offline — no real STUN/network call in `cargo test`
       (research.md R3) in `crates/renderer/src/ip_geolocation.rs`
-- [ ] T047 [P] [US3] Unit test: STUN failure/timeout maps to `ResolutionStatus::Unavailable` with
+- [X] T047 [P] [US3] Unit test: STUN failure/timeout maps to `ResolutionStatus::Unavailable` with
       a specific reason string, never panics (research.md R4) in
       `crates/renderer/src/ip_geolocation.rs`
-- [ ] T048 [P] [US3] Unit test: the public-IP cache respects its 24-hour TTL — a second lookup
+- [X] T048 [P] [US3] Unit test: the public-IP cache respects its 24-hour TTL — a second lookup
       within the window reuses the cached value, no repeat STUN call (research.md R4) in
       `crates/renderer/src/ip_geolocation.rs`
-- [ ] T049 [P] [US3] Unit test extending T011's coverage: `effective_location()` with
+- [X] T049 [P] [US3] Unit test extending T011's coverage: `effective_location()` with
       `mode: IpGeolocation` falls back to `location` then `None` when unresolved/unavailable
       (spec.md FR-015) in `crates/wallpaper-ipc/src/location_config.rs`
 
 ### Implementation for User Story 3
 
-- [ ] T050 [US3] Implement `crates/renderer/src/ip_geolocation.rs`: STUN-based public-IP discovery
+- [X] T050 [US3] Implement `crates/renderer/src/ip_geolocation.rs`: STUN-based public-IP discovery
       (`stunclient`) with a 24-hour in-memory cache, `maxminddb` lookup against the bundled
       `.mmdb`, writing `ip_location`/`ip_status` back through `wallpaper-ipc::LocationConfigEntry`
       (research.md R3/R4; depends on T009, T012, T004)
-- [ ] T051 [US3] Package the bundled DB-IP Lite `.mmdb` database as a static asset alongside
+- [X] T051 [US3] Package the bundled DB-IP Lite `.mmdb` database as a static asset alongside
       `wallpaperd` (spec 5's packaging, amended) — document the download-and-verify step in the
       release process, not a runtime dependency (research.md R3)
-- [ ] T052 [US3] Implement the `wallpaperctl location ip` subcommand (sets `mode: IpGeolocation`
+- [X] T052 [US3] Implement the `wallpaperctl location ip` subcommand (sets `mode: IpGeolocation`
       only) in `crates/wallpaperctl/src/commands/location.rs` (contracts/
       location-config-schema-v3.md; depends on T017)
-- [ ] T053 [US3] Wire `location ip` into `main.rs`'s dispatch (depends on T052)
-- [ ] T054 [US3] Confirm the GUI's Location page (T027) and CLI's `location get` both surface the
+- [X] T053 [US3] Wire `location ip` into `main.rs`'s dispatch (depends on T052)
+- [X] T054 [US3] Confirm the GUI's Location page (T027) and CLI's `location get` both surface the
       STUN-disclosure copy FR-014 requires before a user opts in (depends on T027, T052)
 
 **Checkpoint**: All four user stories functional. IP-geolocation's happy path is live-testable on
@@ -297,17 +297,17 @@ testable by disconnecting network access.
 
 **Purpose**: Close out the spec's success criteria and hand off a stable, documented feature set.
 
-- [ ] T055 [P] Verify strong test coverage via `cargo llvm-cov --workspace`; add tests to close
+- [X] T055 [P] Verify strong test coverage via `cargo llvm-cov --workspace`; add tests to close
       any real gap across the two new crates and the three amended ones
-- [ ] T056 [P] Add rustdoc comments to every new public item; verify with
+- [X] T056 [P] Add rustdoc comments to every new public item; verify with
       `RUSTFLAGS="-W missing_docs" cargo build --workspace` (this full-workspace check has caught
       real cross-crate gaps before, per this project's own history)
-- [ ] T057 [P] Add `crates/wallpaper-ipc/README.md` and `crates/wallpaper-settings/README.md`
+- [X] T057 [P] Add `crates/wallpaper-ipc/README.md` and `crates/wallpaper-settings/README.md`
       documenting scope, matching this project's existing per-crate README convention
-- [ ] T058 [P] Update `crates/renderer/README.md`'s "What's simplified or not implemented"
+- [X] T058 [P] Update `crates/renderer/README.md`'s "What's simplified or not implemented"
       section: remove the mock-hotplug and non-configurable-crossfade gaps; add IP-geolocation's
       STUN caveat plainly (plan.md finding 2)
-- [ ] T059 Run quickstart.md end-to-end (automated `cargo test --workspace`, plus all three manual
+- [X] T059 Run quickstart.md end-to-end (automated `cargo test --workspace`, plus all three manual
       smoke checks) and fix any drift between the doc and actual behavior
 
 ---

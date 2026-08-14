@@ -1,6 +1,12 @@
 # Rust
 /target/
 
+# IP-geolocation database (spec 7 US3, research.md R3) — a release-process download
+# (see crates/renderer/README.md's "IP-geolocation database" section), never committed:
+# large, third-party-licensed (CC-BY-4.0, attribution required), and re-downloaded
+# fresh before each packaging build, not a build- or test-time dependency.
+/assets/geoip/
+
 # Claude Code local machine state (permissions, etc.) — not shared project config
 .claude/settings.local.json
 

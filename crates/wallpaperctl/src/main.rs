@@ -5,7 +5,6 @@
 
 mod commands;
 mod config;
-mod dbus_client;
 mod error;
 mod output;
 mod pack_ref;
@@ -87,6 +86,14 @@ enum LocationAction {
         longitude: f64,
     },
     Clear,
+    /// Enable automatic location via the portal (spec 6 FR-001/002/003). Idempotent.
+    Auto,
+    /// Enable IP-geolocation via a bundled offline database (spec 7 FR-012/013/014).
+    /// Idempotent.
+    Ip,
+    /// Switch back to manual mode using whatever value is already stored, no re-entry
+    /// required (spec 6 FR-007/009).
+    Manual,
 }
 
 fn main() {
@@ -146,6 +153,9 @@ fn run(cli: Cli) -> Result<String, CliError> {
                     commands::location::set(&config, latitude, longitude, json)
                 }
                 LocationAction::Clear => commands::location::clear(&config, json),
+                LocationAction::Auto => commands::location::auto(&config, json),
+                LocationAction::Ip => commands::location::ip(&config, json),
+                LocationAction::Manual => commands::location::manual(&config, json),
             }
         }
         Command::Query { output } => commands::query::run(output.as_deref(), json),
@@ -203,7 +213,7 @@ mod tests {
     fn location_get_set_clear_dispatch_correctly() {
         with_scratch_xdg_config_home(|| {
             let get_before = run(cli(false, Command::Location { action: LocationAction::Get }));
-            assert_eq!(get_before.unwrap(), "no location set");
+            assert!(get_before.unwrap().contains("no location available"));
 
             let set_result = run(cli(
                 false,
@@ -216,6 +226,24 @@ mod tests {
 
             let clear_result = run(cli(false, Command::Location { action: LocationAction::Clear }));
             assert!(clear_result.is_ok());
+        });
+    }
+
+    /// spec 6: `location auto`/`manual` dispatch correctly through `main.rs`.
+    #[test]
+    fn location_auto_manual_dispatch_correctly() {
+        with_scratch_xdg_config_home(|| {
+            let auto_result = run(cli(false, Command::Location { action: LocationAction::Auto }));
+            assert!(auto_result.is_ok());
+
+            let get_after_auto = run(cli(false, Command::Location { action: LocationAction::Get }));
+            assert!(get_after_auto.unwrap().contains("mode: automatic"));
+
+            let manual_result = run(cli(false, Command::Location { action: LocationAction::Manual }));
+            assert!(manual_result.is_ok());
+
+            let get_after_manual = run(cli(false, Command::Location { action: LocationAction::Get }));
+            assert!(get_after_manual.unwrap().contains("mode: manual"));
         });
     }
 

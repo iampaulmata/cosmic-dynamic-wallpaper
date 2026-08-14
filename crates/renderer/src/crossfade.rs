@@ -25,7 +25,10 @@ pub struct CrossfadeTransition {
     /// `DateTime<Local>`, since a system clock adjustment mid-transition must not
     /// perturb an already-running animation.
     pub started_at: Instant,
-    /// Fixed 45s default (FR-002), configurable.
+    /// 45s default (FR-002), genuinely configurable as of spec 7 FR-006
+    /// (`RendererConfig.crossfade_duration_secs`, `surface.rs`'s `crossfade_duration()`)
+    /// — this doc comment previously claimed configurability that didn't actually
+    /// exist yet (plan.md Constitution Check finding 3); now true.
     pub duration: Duration,
 }
 

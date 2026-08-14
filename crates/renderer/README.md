@@ -49,11 +49,29 @@ disconnect/resize event can't be triggered on this dev machine).
   that loads each output's assigned pack, evaluates its schedule, uploads textures on
   demand, and draws/presents frames — including the frame-callback-paced draw loop
   during an active crossfade (subscribes only while animating, per FR-003/FR-004).
-- **`config.rs`** — reading `RendererConfig` + spec 4's `LocationSource` via
-  `cosmic-config`, and `Coalescer` (FR-014's debounce), including `earliest_pending`
-  (peeked, not drained — feeds the idle-wait timer's wake computation).
+- **`config.rs`** — reading `RendererConfig` + `LocationSource` (now spec 6's v2 schema,
+  `mode`/`location`/`automatic_location`/`automatic_status`) via `cosmic-config`, plus
+  `effective_location()` (spec 6's pure resolution rule) and `Coalescer` (FR-014's
+  debounce), including `earliest_pending` (peeked, not drained — feeds the idle-wait
+  timer's wake computation).
 - **`scheduler_bridge.rs`** — ties assignment + a loaded pack + location into spec 1's
   `ScheduleQueryResult`, with the location-required-panic fix described below.
+- **`portal_location.rs`** (spec 6, US1–US3) — automatic location via
+  `org.freedesktop.portal.Location` (`ashpd`), driven inside `wallpaperd`'s existing
+  single `calloop` loop (no dedicated OS thread): session creation at `Accuracy::City`,
+  a 5s resolution timeout, an ongoing `LocationUpdated` subscription for as long as
+  automatic mode is active, and exponential backoff (30s–5min) on any failure. Every
+  outcome is validated through spec 1's `Location::new` and written back via
+  `apply_reading`/`apply_failure` — the pure, fully-unit-tested half of this module.
+  **Live-verified against this project's own real COSMIC session** (not just planned):
+  a genuine `CreateSession`/`Start` round trip against `xdg-desktop-portal-cosmic`
+  correctly produced `AutomaticStatus::Unavailable { reason: "...Location services
+  disabled" }`, persisted, and correctly fell back to the stored manual location via
+  `effective_location()` — end-to-end, not simulated. See "What's simplified or not
+  implemented" below for the one honest gap (the resolved-value success path needs a
+  GeoClue2-backed machine this dev environment doesn't have) and the deliberate
+  "spawned once, not cancelled on mode toggle" simplification documented in the
+  module's own doc comment.
 - **`dbus_types.rs`** — `QueryResponse`, the pure data-mapping half of spec 4's D-Bus
   interface.
 - **`dbus_service.rs`** — the live `zbus` server (T049/T053/T054, FR-016):
@@ -145,6 +163,68 @@ once a specific serialization format's own semantics enter the picture.
   counting handles actual GPU memory reclamation once a texture is no longer
   referenced, so there's no dangling-resource bug, but there's also no
   explicit "cancel the in-progress blend" step to point to as T030's deliverable.
+- **Automatic location's resolved-value success path** (spec 6 US1/US3): the degrade
+  path (FR-005) is fully live-verified against this project's own real COSMIC session —
+  see `portal_location.rs`'s entry above. The *successful*-resolution half needs a
+  machine with GeoClue2 installed and location services enabled, which this dev
+  environment doesn't have (spec 6 research.md R2) — every component up to the portal
+  boundary is real and live-spiked (a genuine `CreateSession`/`Start` round trip), the
+  final resolved-value hop is a documented, honest gap, not a task this crate can close
+  on its own without that hardware/software dependency present.
+- **Automatic-mode task lifecycle** (spec 6): the portal-driving resolution/subscribe/
+  retry task is spawned once automatic mode is (or becomes) active and then runs for
+  the remainder of the daemon's lifetime — it is not cancelled if the user later
+  switches back to manual mode. Documented as harmless (not a correctness gap) in
+  `portal_location.rs`'s module doc: `effective_location()` ignores `automatic_location`
+  entirely while `mode == Manual`, so a background retry loop simply has no observable
+  effect until automatic mode is re-enabled. The same lifecycle/harmlessness posture
+  applies to `ip_geolocation.rs`'s IpGeolocation-mode task (spec 7).
+- **IP-geolocation's live STUN/database happy path** (spec 7 US3, plan.md finding 2):
+  the pure logic (`.mmdb` lookup, backoff, cache TTL, the `Location`-validation
+  write-back) is fully unit-tested against a dynamically-built fixture database.
+  **STUN discovery itself is live-verified** (2026-08-14, this project's own dev
+  machine, via a throwaway `examples/stun_smoke.rs` harness, deleted after use) — and
+  a real bug was found and fixed doing so: this machine's DNS resolves the default
+  STUN server (`stun.l.google.com:19302`) to an **IPv6** address first, which silently
+  failed against the original IPv4-only wildcard bind with an opaque "UDP socket
+  error" (an address-family mismatch, not a network problem — `discover_public_ip_
+  blocking` now picks an IPv4 result when one exists and binds accordingly). After the
+  fix: a genuine STUN round trip against the real server correctly returned this
+  machine's real public IP. Only the final hop — a real bundled DB-IP Lite lookup — is
+  still a manual-QA item (`specs/007-v1-completion/quickstart.md`), since this dev
+  environment has no `.mmdb` present locally (see "IP-geolocation database" below,
+  which is a release-process download, not something this session fetches). `ip_
+  geolocation.rs` runs STUN discovery on its own dedicated background OS thread — the
+  one deliberate exception to this daemon's single-`calloop`-loop concurrency model
+  elsewhere, called out explicitly in that module's own doc comment (`stunclient`'s
+  only usable API is synchronous; its `async` feature would require `tokio`, a second
+  runtime this project has otherwise avoided throughout).
+
+## IP-geolocation database (spec 7 US3, research.md R3, T051)
+
+`ip_geolocation.rs` reads a bundled offline `.mmdb` database at
+`/usr/share/dynamic-wallpaper/geoip.mmdb` (`ip_geolocation::MMDB_SYSTEM_PATH`) — **not**
+checked into this repository (`.gitignore`'d under `assets/geoip/`) and **not** a
+build- or test-time dependency (this crate's own tests build a tiny fixture `.mmdb` at
+test time instead, via the `mmdb-writer` dev-dependency — see `ip_geolocation.rs`'s
+test module). Before cutting a packaging build (`cargo deb`), the release process must:
+
+1. Download a fresh [DB-IP Lite (City)](https://db-ip.com/db/download/ip-to-city-lite)
+   `.mmdb` snapshot (CC-BY-4.0 — attribution required in release notes/about text, not
+   just this file) — "periodically-updated" (the project's own Clarification wording)
+   means *this step* is repeated before each release, not that `wallpaperd` updates it
+   itself at runtime.
+2. Verify the download (DB-IP publishes an `.mmdb.md5` alongside each snapshot —
+   check it before trusting the file).
+3. Place it at `assets/geoip/dbip-city-lite.mmdb` (relative to the repo root) —
+   `crates/renderer/Cargo.toml`'s `[package.metadata.deb]` assets list references
+   exactly this path and will fail the packaging build loudly if it's missing, by
+   design (T051 — a missing database should never silently ship as "IP-geolocation
+   quietly doesn't work").
+
+No GeoLite2 (MaxMind's own database) alternative is used — it requires a free account
+and license key just to *download*, real friction for a build pipeline that shouldn't
+need a third-party account (research.md R3).
 
 ## Building on a real system
 
@@ -162,7 +242,7 @@ should already have the real `-dev` package and need no workaround.
 ## Testing
 
 ```sh
-cargo test --package renderer            # 43 tests: pure logic + real offscreen GPU renders
+cargo test --package renderer            # 50 tests: pure logic + real offscreen GPU renders
 cargo llvm-cov --package renderer --summary-only
 ```
 

@@ -43,7 +43,7 @@ pub enum RendererError {
         /// Why it failed.
         reason: String,
     },
-    /// A `cosmic-config` read/write failed (`RendererConfig` or `LocationSource`).
+    /// A `cosmic-config` read/write failed (`RendererConfig` or `LocationConfigEntry`).
     ConfigError {
         /// The underlying storage error's message.
         reason: String,
@@ -63,7 +63,7 @@ pub enum RendererError {
         id: OutputId,
     },
     /// A solar-anchored pack is assigned to an output but no manual location has been
-    /// provided (FR-015). **Resolved gap**: data-model.md's LocationSource section says
+    /// provided (FR-015). **Resolved gap**: data-model.md's LocationConfigEntry section says
     /// this "degrades... per `RendererError`'s existing containment posture..., not a
     /// new error variant" — but no existing variant actually describes this condition
     /// (all others are Wayland/GPU/config/D-Bus specific). Added here rather than
