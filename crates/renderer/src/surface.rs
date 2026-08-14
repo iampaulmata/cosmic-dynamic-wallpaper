@@ -37,7 +37,7 @@ use wayland_client::{
     Connection, Proxy, QueueHandle,
 };
 
-use pack_loader::{LoadedPack, Registry};
+use pack_loader::{Color, LoadedPack, Registry, ScalingMode};
 use schedule_engine::{ImageId, Location};
 
 use crate::config::Coalescer;
@@ -314,6 +314,21 @@ impl WallpaperDaemon {
         }
     }
 
+    /// The scaling mode + fallback color to render image `id` with on output `index`
+    /// (FR-005): per-image override if the loaded pack has one, else the pack's
+    /// default. Falls back to `Fill`/opaque-black if no pack is loaded at all — should
+    /// never actually trigger (an `outgoing`/`incoming` id only ever comes from a
+    /// loaded pack's own schedule evaluation), but avoids a wrong-looking crash if a
+    /// future refactor ever breaks that invariant (constitution Principle VIII).
+    fn image_scaling_for(&self, index: usize, id: &ImageId) -> crate::crossfade::ImageScaling {
+        match self.outputs[index].loaded_pack.as_ref() {
+            Some(pack) => {
+                crate::crossfade::ImageScaling { mode: pack.image_scaling.get(id).copied().unwrap_or(pack.default_scaling), fallback_color: pack.fallback_color }
+            }
+            None => crate::crossfade::ImageScaling { mode: ScalingMode::Fill, fallback_color: Color { r: 0, g: 0, b: 0, a: 255 } },
+        }
+    }
+
     /// Draw output `index`'s current state (static image or in-progress crossfade) and
     /// present it (T016, T017, T018).
     fn draw(&mut self, index: usize) {
@@ -344,8 +359,10 @@ impl WallpaperDaemon {
                 return;
             }
         };
+        let outgoing_scaling = self.image_scaling_for(index, &outgoing_id);
+        let incoming_scaling = self.image_scaling_for(index, &incoming_id);
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
-        pipeline.render(&gpu.device, &gpu.queue, &view, outgoing, incoming, progress, size);
+        pipeline.render(&gpu.device, &gpu.queue, &view, outgoing, outgoing_scaling, incoming, incoming_scaling, progress, size);
 
         let wl_surface = self.outputs[index].layer.wl_surface().clone();
         wl_surface.damage_buffer(0, 0, size.0 as i32, size.1 as i32);
