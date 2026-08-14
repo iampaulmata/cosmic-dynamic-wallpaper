@@ -44,15 +44,17 @@ See [`docs/PRD.md`](docs/PRD.md) for the full requirements this project is scope
 
 This project is under active, spec-driven development using [GitHub Spec
 Kit](https://github.com/github/spec-kit) — every feature is written up as a spec, planned,
-and broken into tasks under [`specs/`](specs/) before any implementation lands. There is no
-buildable code yet.
+and broken into tasks under [`specs/`](specs/) before implementation lands. Specs 1, 2, and 4
+are fully implemented and tested; spec 3 has real, live-verified Wayland/GPU rendering with a
+few documented gaps remaining. This has run end-to-end on a real COSMIC session: a real image
+pack applied and crossfaded on-screen via `wallpaperctl` + `wallpaperd`.
 
 | # | Spec | Status |
 |---|---|---|
-| 1 | [Core scheduling engine](specs/001-core-scheduling-engine/) — pure solar/time logic, no rendering | Planned, ready for implementation |
-| 2 | [Pack format & loading](specs/002-pack-format-loading/) — manifest schema, pack directory loading | Planned, ready for implementation |
-| 3 | Renderer — Wayland layer-shell client, GPU crossfade, multi-output | Not started |
-| 4 | CLI control surface | Not started |
+| 1 | [Core scheduling engine](specs/001-core-scheduling-engine/) — pure solar/time logic, no rendering | **Implemented** — `crates/schedule-engine` |
+| 2 | [Pack format & loading](specs/002-pack-format-loading/) — manifest schema, pack directory loading, `cosmic-config` registry | **Implemented** — `crates/pack-loader` |
+| 3 | [Renderer](specs/003-wallpaper-renderer/) — Wayland layer-shell client, GPU crossfade, multi-output | **Mostly implemented, live-verified** — `crates/renderer` (`wallpaperd` binary). Remaining gaps: no live D-Bus service yet (so `wallpaperctl query`/`reevaluate` can't reach it), config is read once at startup (no live watch/reload), a flat 5s poll instead of a precise per-output idle timer, only "Fill" scaling, and no hotplug resize/rescale. See [`crates/renderer/README.md`](crates/renderer/README.md) for the full, current list. |
+| 4 | [CLI control surface](specs/004-cli-control-surface/) | **Implemented** — `crates/wallpaperctl` (binary: `wallpaperctl`) |
 | 5 | Session integration & packaging | Not started |
 | 6 | Location portal integration | Not started |
 
@@ -63,25 +65,36 @@ pure/deterministic/unit-tested solar math, and more — are ratified in
 
 ## Architecture at a glance
 
-Once implemented, the daemon is planned as a Cargo workspace of independent crates, each
-tracing back to one spec above:
+The daemon is a Cargo workspace of independent crates, each tracing back to one spec above:
 
 - `crates/schedule-engine` — pure solar/clock scheduling logic (spec 1), no I/O
-- `crates/pack-loader` — wallpaper pack manifest parsing and loading (spec 2)
-- a Wayland layer-shell renderer crate (spec 3)
-- a CLI control binary (spec 4)
+- `crates/pack-loader` — wallpaper pack manifest parsing, loading, and `cosmic-config`
+  registry persistence (spec 2)
+- `crates/renderer` — the `wallpaperd` daemon: Wayland `wlr-layer-shell` background surfaces,
+  GPU-accelerated crossfade via `wgpu`, per-output independent scheduling (spec 3)
+- `crates/wallpaperctl` — the `wallpaperctl` CLI: register/assign packs, set location, query
+  and control a running daemon (spec 4)
 
 Packs are user-authorable TOML manifests pointing at a directory of images, each tagged with
 either a solar-event anchor (`sunrise`, `civil_dusk-30m`, etc.) or an absolute clock time —
 see spec 2's [manifest schema](specs/002-pack-format-loading/contracts/pack-loader-api.md)
 for the exact shape.
 
+### Running it today
+
+1. Author a pack manifest (TOML) pointing at a directory of images, or use a zero-config
+   directory of statically-named images.
+2. `wallpaperctl register <path-to-pack>`, then `wallpaperctl assign --output <id> <path>`.
+3. `wallpaperctl location set <lat> <lon>` if the pack uses solar anchors.
+4. Run `wallpaperd` (it reads config once at startup — restart it after further config
+   changes, since live-reload isn't wired up yet).
+
 ## Contributing
 
-Not yet open for external contribution while the initial architecture is still being
-specced out. Once spec 1 lands as real code, this section will cover build instructions,
-toolchain requirements, and how to propose new specs.
+Not yet open for external contribution while spec 3's remaining gaps and specs 5-6 are still
+being worked through. Build instructions and toolchain requirements live in each crate's own
+README under `crates/`.
 
 ## License
 
-Not yet chosen.
+GPL-3.0-or-later.
