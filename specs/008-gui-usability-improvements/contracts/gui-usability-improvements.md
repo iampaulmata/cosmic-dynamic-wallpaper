@@ -41,21 +41,52 @@ placement, per US3's own acceptance scenarios.
 
 ## US4 — Assignment page shows pack names, not paths
 
-| Location in the page | Before | After |
-|---|---|---|
-| A per-output assignment row | `source.path().display()` | `resolve_pack_name(source).unwrap_or_else(\|\| "(unnamed pack)".into())` |
-| The "same pack everywhere" toggle's active-pack label | `current.path().display()` | Same `resolve_pack_name` call |
+Satisfied entirely as a side effect of US5's dropdown construction (below), not a separate code
+path — see US5's table. A dropdown's option labels and its selected-value display are both
+`resolve_pack_name` results, so once US5 lands there is no remaining `source.path().display()` or
+`current.path().display()` anywhere in `pages::assignment::view` for US4 to separately fix.
 
-`resolve_pack_name` (data-model.md) is the single implementation both this page and the Packs
-page call — FR-010/FR-011/FR-012 by construction, not by two pages independently agreeing on the
-same behavior.
+## US5 — Assign packs to displays from the GUI (amends spec 7's `pages/assignment.rs` "assigns the
+first registered pack" simplification, which this spec supersedes)
+
+| State | Control shown | Selecting an option writes |
+|---|---|---|
+| Toggle on (`same_pack_everywhere.is_some()`, default) | One `widget::toggler` (checked) + one `widget::dropdown` listing every registered pack by name | `RendererConfig.same_pack_everywhere` — identical field `wallpaperctl assign --same-everywhere` writes |
+| Toggle off | The toggler (unchecked) + one `widget::dropdown` per connected display, each independently selectable | `RendererConfig.overrides[output_id]` — identical field `wallpaperctl assign --output <id>` writes |
+| No packs registered | Dropdown(s) replaced with a message directing the user to register a pack first (FR-016) | Nothing — no dropdown to interact with |
+
+**Toggle-on transition** (FR-015, `set_same_everywhere_enabled`, data-model.md): switching the
+toggle from off to on clears `RendererConfig.overrides` in the same write, so every display shows
+the toggle's chosen pack unconditionally — **a deliberate GUI-specific behavior**, not shared with
+`wallpaperctl assign --same-everywhere`, which continues to leave `overrides` untouched exactly as
+it does today (research.md R6, spec.md Assumptions). If `same_pack_everywhere` has no value yet
+when the toggle is switched on, the first registered pack is pre-selected rather than leaving the
+toggle on with nothing chosen.
+
+**Toggle-off transition**: sets `same_pack_everywhere = None`. A display with no `overrides` entry
+of its own then resolves to `Unassigned` (spec 3's already-defined, non-error state) until the
+user picks something from its now-visible dropdown.
+
+Every write goes through the exact same `RendererConfig` fields `wallpaperctl assign` already
+writes (contracts/gui-application.md's FR-007 interchangeability promise, unchanged) — FR-013's
+"behave like the CLI" is enforced structurally, the toggle-clears-overrides behavior being the one
+explicitly-scoped GUI-only exception (called out above, not silently different).
+
+## US6 — Packs page thumbnail
+
+| FR | Behavior |
+|---|---|
+| FR-018 | `PackRow` gains a `thumbnail: Option<PathBuf>`, rendered via `widget::image(path)` instead of the existing path-as-text preview. |
+| FR-019 | `resolve_thumbnail_path` (data-model.md, research.md R7) picks the pack's solar-noon-anchored image if one exists, else its first image in manifest order. |
+| FR-020 | `None` (a failed `load_pack`, or an entry already `RegistryStatus::Unavailable`) renders the same placeholder posture the Packs page already uses for a missing preview today. |
 
 ## Explicitly out of scope for this contract
 
-- A pack-picker *dropdown* replacing Assignment's existing "assigns the first registered pack"
-  simplification (`pages/assignment.rs`'s own documented scope cut, spec 7) — untouched by this
-  spec; FR-010/FR-011 only change *how a pack is displayed*, not which pack an action assigns.
 - Editing a pack's manifest `name` from the GUI — out of scope; this spec only *reads* the
   existing name.
 - Any change to `wallpaperctl`'s command surface or JSON output shape (beyond the disclosure
-  string's wording, data-model.md) — the CLI's contract (spec 4) is otherwise untouched.
+  string's wording, data-model.md, and the fact that the GUI's toggle-on transition — unlike the
+  CLI's `--same-everywhere` — also clears `overrides`, US5 above) — the CLI's contract (spec 4)
+  is otherwise untouched.
+- A thumbnail carousel/gallery showing every image in a pack — out of scope; US6 asks for one
+  representative thumbnail, chosen deterministically, not a full preview gallery.

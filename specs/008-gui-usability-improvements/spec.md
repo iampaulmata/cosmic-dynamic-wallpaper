@@ -8,6 +8,16 @@
 
 **Input**: User description: "Need to write new specs to address a few things that I want to update. 1. The users need a way to add/remove Packs from the GUI. 2. The notification about the IP-geolocation should be a hover notification for the user when they hover over the radio button. It should also use proper sentence case. 3. The window should either be appropriately sized to show the "Set Manual Location" button or it should scroll. 4. The assignment tab should show the Pack name, not the location."
 
+**Follow-up input (2026-08-14, after initial planning)**: "I realize we need to go back to the
+spec and add in the ability to assign the package from the GUI as well. This includes the
+ability to decide if it is the same for both monitors (use a toggle switch like the rest of
+Cosmic Settings) and if it is not switched on (on by default), the user can assign Packs for
+each connected display independently using a drop down list of all registered packs." Plus,
+from the same follow-up round's clarification answer: "Also add into this spec that the Packs
+page should display a thumbnail of the image in the pack marked as the noon image or the first
+image in the pack if a noon image doesn't exist so that the user can have an idea of what the
+wallpapers will look like." These became User Story 5 and User Story 6 below.
+
 ## Clarifications
 
 ### Session 2026-08-14
@@ -16,6 +26,7 @@
 - Q: When a user adds a pack from the Packs page, how should they provide its location — typed path or a native file/folder picker dialog? → A: A button opens the desktop's native file chooser (via the XDG desktop portal) so the user browses to the pack instead of typing a path
 - Q: When a user removes a registered pack from the Packs page, should removal happen immediately on click, or require a confirmation step first? → A: Clicking remove opens a small confirmation dialog ("Remove <pack name>? This cannot be undone.") that the user must confirm before it's removed
 - Q: For touch-only users who can't hover, how should they discover the IP-geolocation disclosure before selecting that option? → A: A small (i) info icon sits next to the IP-geolocation option at all times; tapping/clicking it shows the same disclosure text
+- Q: When the user switches the new "same pack everywhere" toggle ON, should the GUI clear any existing per-display assignments so the toggle's choice truly applies to every display? → A: Yes — turning the toggle ON clears any existing per-display overrides in the same action, so "same everywhere" is unconditionally true whenever the toggle shows ON (a deliberate GUI-specific divergence from `wallpaperctl`'s existing `--same-everywhere`, which never clears overrides — see spec's Assumptions)
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -130,6 +141,69 @@ confirming the Assignment page displays that pack's name rather than its file lo
 
 ---
 
+### User Story 5 - Assign packs to displays from the GUI (Priority: P1)
+
+A user with packs already registered wants to actually choose which pack shows on which
+display — or the same pack everywhere — entirely from the settings application, rather than
+the application only ever assigning "the first registered pack" regardless of preference.
+
+**Why this priority**: Browsing and registering packs (User Stories 1 and prior work) is not
+useful on its own if the application still can't put a *chosen* pack on a *chosen* display —
+this is as core a capability gap as User Story 1's add/remove, just on the assignment side
+rather than the registration side.
+
+**Independent Test**: Can be fully tested by registering two or more packs, using the toggle to
+turn "same pack everywhere" off, assigning a different pack to each of two connected displays
+via their dropdowns, confirming each display's assignment independently, then turning the
+toggle back on and confirming a single chosen pack applies to every display.
+
+**Acceptance Scenarios**:
+
+1. **Given** the Assignment page is open with the "same pack everywhere" toggle on (its default
+   state), **When** the user selects a pack from the single dropdown shown, **Then** that pack
+   is applied to every connected display.
+2. **Given** the user switches the toggle off, **When** they view the Assignment page, **Then**
+   each connected display shows its own independent pack-selection dropdown, defaulting to
+   whatever (if anything) is already assigned to it.
+3. **Given** the toggle is off, **When** the user selects a pack from one display's dropdown,
+   **Then** only that display's assignment changes — other displays are unaffected.
+4. **Given** one or more displays already have individual packs assigned, **When** the user
+   switches the toggle from off to on and picks a pack, **Then** every display — including
+   those with a prior individual assignment — shows the toggle's chosen pack, not its old
+   individual one.
+5. **Given** no packs are registered yet, **When** the user opens the Assignment page, **Then**
+   the assignment control(s) show a clear message directing them to register a pack first,
+   rather than an empty or broken dropdown.
+
+---
+
+### User Story 6 - See a thumbnail preview of each pack (Priority: P2)
+
+A user browsing the Packs page wants a quick visual sense of what a pack actually looks like,
+rather than having to remember or decode it from its name alone.
+
+**Why this priority**: This is a clarity/quality improvement to an already-working page — it
+doesn't unblock any action the way User Stories 1, 2, or 5 do, but it meaningfully speeds up
+recognizing and choosing between packs, especially once several are registered.
+
+**Independent Test**: Can be fully tested by registering a pack that has an image anchored to
+solar noon and confirming the Packs page shows that specific image as its thumbnail; then
+registering a pack with no solar-noon anchor and confirming its first image (in manifest order)
+is shown instead.
+
+**Acceptance Scenarios**:
+
+1. **Given** a registered pack whose manifest anchors one image to solar noon, **When** the
+   user views the Packs page, **Then** that image is shown as the pack's thumbnail.
+2. **Given** a registered pack with no image anchored to solar noon (including a single-image
+   static pack), **When** the user views the Packs page, **Then** its first image, in manifest
+   order, is shown as the thumbnail instead.
+3. **Given** a registered pack whose chosen thumbnail image can't be loaded, **When** the user
+   views the Packs page, **Then** a clearly-labeled placeholder is shown instead of a broken
+   image or an error.
+
+---
+
 ### Edge Cases
 
 - What happens when a user removes a pack that is currently assigned to one or more
@@ -148,6 +222,15 @@ confirming the Assignment page displays that pack's name rather than its file lo
 - What happens when a pack has no human-readable name available (e.g., a minimally-formed
   pack)? The Assignment page falls back to a clearly-labeled placeholder rather than reverting
   to a raw file location.
+- What happens if a display is disconnected while the toggle is off and it has its own
+  assignment? Its assignment is retained (matching existing behavior for a not-currently-
+  connected output) and reappears if that display reconnects.
+- What happens when the toggle is switched on but the user hasn't yet picked a pack from its
+  dropdown? The application pre-selects a registered pack (e.g. the first one) rather than
+  leaving the toggle "on" with nothing actually chosen.
+- What happens when a pack assigned to a display (or chosen via the toggle) is later removed
+  from the registry? The assignment is left as-is (matching User Story 1's own removal edge
+  case) — the display keeps using that pack's files directly until reassigned.
 
 ## Requirements *(mandatory)*
 
@@ -192,6 +275,25 @@ confirming the Assignment page displays that pack's name rather than its file lo
   a file location.
 - **FR-012**: The Packs page MUST display each registered pack by the same name resolved per
   FR-010, instead of its file location, for consistency with the Assignment page.
+- **FR-013**: The settings application MUST let a user assign any specific registered pack to
+  any specific connected display, choosing from a list of every registered pack.
+- **FR-014**: The settings application MUST provide a single toggle (default: on) that, when
+  on, applies one user-chosen pack to every connected display, and when off, allows an
+  independent per-display pack choice for each connected display.
+- **FR-015**: Switching the toggle from off to on MUST clear any existing individual per-display
+  assignments, so the toggle's chosen pack applies to every display unconditionally, not only to
+  displays that didn't already have their own assignment.
+- **FR-016**: When no packs are registered, the assignment control(s) MUST show a clear message
+  directing the user to register a pack first, rather than an empty or non-functional dropdown.
+- **FR-017**: An assignment made through the settings application MUST write the identical
+  configuration shape the existing command-line tool's assign command already writes.
+- **FR-018**: The Packs page MUST show a visual thumbnail image of each registered pack, not a
+  file path or generic icon.
+- **FR-019**: The thumbnail MUST be the pack's image anchored to solar noon if one exists;
+  otherwise, the pack's first image in manifest order (which is also its only image, for a
+  single-image pack).
+- **FR-020**: A pack whose thumbnail image cannot be loaded MUST show a clearly-labeled
+  placeholder instead of a broken image or an error.
 
 ### Key Entities
 
@@ -207,6 +309,12 @@ confirming the Assignment page displays that pack's name rather than its file lo
   field when it has one (directory-sourced packs); derived from the filename (without
   extension) for single-image packs, which have no manifest; falls back to a clearly-labeled
   placeholder when neither is usable.
+- **Display assignment control**: The Assignment page's toggle-plus-dropdown(s) for choosing
+  which pack shows where. Exactly one of two states at a time: a single dropdown (toggle on,
+  applies everywhere) or one independent dropdown per connected display (toggle off).
+- **Pack thumbnail**: A representative preview image for a registered pack, shown on the Packs
+  page. Chosen as the pack's solar-noon-anchored image if one exists, otherwise its first image
+  in manifest order; falls back to a placeholder if that chosen image can't be loaded.
 
 ## Success Criteria *(mandatory)*
 
@@ -223,6 +331,10 @@ confirming the Assignment page displays that pack's name rather than its file lo
   assigned to any given output.
 - **SC-005**: Users can read the IP-geolocation external-touchpoint disclosure before
   switching to that mode, not only after.
+- **SC-006**: Users can assign any registered pack to any specific connected display, or to
+  every display at once, entirely from the settings application.
+- **SC-007**: Users can visually distinguish between registered packs via a thumbnail, without
+  opening each pack's files or leaving the application.
 
 ## Assumptions
 
@@ -241,3 +353,18 @@ confirming the Assignment page displays that pack's name rather than its file lo
   both) is left open for planning rather than mandated here.
 - Removing a pack through the settings application does not automatically unassign it from
   any output it's currently assigned to, matching the command-line tool's existing behavior.
+- User Story 5's "toggle clears existing per-display assignments when switched on" (FR-015) is
+  a deliberate GUI-specific behavior, not a change to the command-line tool: `wallpaperctl
+  assign --same-everywhere` continues to leave any existing per-output assignments in place
+  exactly as it does today (an explicit override still wins there) — this spec only changes
+  what the *settings application's* toggle does when the user interacts with it directly,
+  per the 2026-08-14 follow-up clarification.
+- User Story 4 (Assignment shows pack names) and User Story 5 (assign packs from the GUI) are
+  complementary, and User Story 5's dropdown-based design satisfies User Story 4's display
+  requirement by construction — a dropdown's selected value is itself the resolved pack name,
+  so no separate read-only label is needed once User Story 5 is implemented. Both remain listed
+  as distinct, independently-testable stories since they were requested and are verifiable
+  separately.
+- "The image marked as the noon image" (User Story 6) means the pack's image whose manifest
+  anchor is the solar-noon event specifically (`SolarEventKind::SolarNoon`), not merely an image
+  near midday by clock time.
