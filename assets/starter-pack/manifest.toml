@@ -1,37 +1,33 @@
 schema_version = 1
-name = "Solar Gradient"
-author = "dynamic-wallpaper project — procedurally generated, no photography, CC0"
+name = "Mountains"
+author = "Paul Mata"
 default_scaling = "Fill"
-fallback_color = "#05050f"
+fallback_color = "#1a1512"
+
+# These are plain PNGs with no embedded timing metadata, 
+# so this schedule is a reasonable hand-authored values 
+# of 6 solar anchors across a full day. Adjust offsets to taste.
 
 [[images]]
-file = "01-astronomical-dawn.png"
+file = "night.png"
+anchor = "solar_midnight"
+
+[[images]]
+file = "dawn.png"
 anchor = "astronomical_dawn"
 
 [[images]]
-file = "02-civil-dawn.png"
-anchor = "civil_dawn"
-
-[[images]]
-file = "03-sunrise.png"
+file = "sunrise.png"
 anchor = "sunrise"
 
 [[images]]
-file = "04-solar-noon.png"
+file = "morning.png"
 anchor = "solar_noon"
 
 [[images]]
-file = "05-sunset.png"
-anchor = "sunset"
+file = "afternoon.png"
+anchor = "sunset-2h30m"
 
 [[images]]
-file = "06-civil-dusk.png"
-anchor = "civil_dusk"
-
-[[images]]
-file = "07-astronomical-dusk.png"
+file = "dusk.png"
 anchor = "astronomical_dusk"
-
-[[images]]
-file = "08-solar-midnight.png"
-anchor = "solar_midnight"
