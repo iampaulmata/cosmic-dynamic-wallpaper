@@ -50,8 +50,12 @@ use crate::output::{effective_pack, resolve_assignment, OutputId, RendererConfig
 use crate::scheduler_bridge;
 use crate::texture::GpuTexture;
 
-/// Fixed crossfade duration (FR-002 default; not yet exposed as user-configurable —
-/// spec.md Assumptions explicitly defers that).
+/// Default crossfade duration (FR-002) — used only as `RendererConfig::default()`'s own
+/// value; the live duration is `WallpaperDaemon::crossfade_duration()`, reading
+/// `renderer_config.crossfade_duration_secs` (spec 7 FR-006, plan.md Constitution Check
+/// finding 3 — this constant alone was previously the *entire* implementation despite a
+/// stray doc comment elsewhere claiming it was already configurable; it now only feeds
+/// the schema's own default).
 pub const CROSSFADE_DURATION: Duration = Duration::from_secs(45);
 
 /// Per-output render state: the layer surface, its `wgpu` bridge, and everything
@@ -297,8 +301,9 @@ impl WallpaperDaemon {
         // VIII: no `unwrap()`/`expect()` outside tests).
         let Some(pack) = self.outputs[index].loaded_pack.clone() else { return };
         let Some(gpu) = self.gpu.as_ref() else { return };
+        let crossfade_duration = self.crossfade_duration();
 
-        let result = scheduler_bridge::evaluate(&id, Some(&pack), self.location.as_ref(), at, chrono::TimeDelta::seconds(CROSSFADE_DURATION.as_secs() as i64));
+        let result = scheduler_bridge::evaluate(&id, Some(&pack), self.location.as_ref(), at, chrono::TimeDelta::seconds(crossfade_duration.as_secs() as i64));
 
         match result {
             Ok(Some(result)) => {
@@ -310,9 +315,9 @@ impl WallpaperDaemon {
                     if !already_this_pair {
                         // A fresh transition (FR-011: supersedes cleanly — a new value
                         // simply replaces the old one, see crossfade.rs's own doc).
-                        let started_at = now - Duration::from_secs_f64(t.progress * CROSSFADE_DURATION.as_secs_f64());
+                        let started_at = now - Duration::from_secs_f64(t.progress * crossfade_duration.as_secs_f64());
                         output.transition =
-                            Some(CrossfadeTransition { outgoing: t.outgoing.clone(), incoming: t.incoming.clone(), started_at, duration: CROSSFADE_DURATION });
+                            Some(CrossfadeTransition { outgoing: t.outgoing.clone(), incoming: t.incoming.clone(), started_at, duration: crossfade_duration });
                     }
                     Self::ensure_texture(gpu, &mut output.textures, &pack, &t.outgoing);
                     Self::ensure_texture(gpu, &mut output.textures, &pack, &t.incoming);
@@ -439,6 +444,17 @@ impl WallpaperDaemon {
         self.outputs.iter().map(|o| o.id.clone()).collect()
     }
 
+    /// The live crossfade transition duration (spec 7 FR-006) — reads
+    /// `renderer_config.crossfade_duration_secs`, picked up by the existing live
+    /// config-watch mechanism (no new watch infrastructure: a `RendererConfig` change
+    /// already reschedules every output via `on_renderer_config_changed`). Replaces
+    /// what was, before spec 7, a plain compile-time constant (`CROSSFADE_DURATION`)
+    /// despite a stray doc comment elsewhere claiming it was already configurable
+    /// (plan.md Constitution Check finding 3).
+    fn crossfade_duration(&self) -> Duration {
+        Duration::from_secs(u64::from(self.renderer_config.crossfade_duration_secs))
+    }
+
     /// A clone of the shared `Arc` backing the D-Bus-visible state mirror — handed to
     /// [`crate::dbus_service::DaemonInterface`] once at startup (T054).
     pub fn dbus_state(&self) -> std::sync::Arc<std::sync::Mutex<crate::dbus_service::DbusState>> {
@@ -451,7 +467,7 @@ impl WallpaperDaemon {
     pub fn query_output(&self, id: &OutputId) -> Result<QueryResponse, RendererError> {
         let index = self.outputs.iter().position(|o| &o.id == id).ok_or_else(|| RendererError::OutputNotManaged { id: id.clone() })?;
         let pack = self.outputs[index].loaded_pack.as_ref();
-        match scheduler_bridge::evaluate(id, pack, self.location.as_ref(), chrono::Local::now(), chrono::TimeDelta::seconds(CROSSFADE_DURATION.as_secs() as i64)) {
+        match scheduler_bridge::evaluate(id, pack, self.location.as_ref(), chrono::Local::now(), chrono::TimeDelta::seconds(self.crossfade_duration().as_secs() as i64)) {
             Ok(Some(result)) => Ok(QueryResponse::from_schedule_result(id.clone(), &result)),
             Ok(None) => Ok(QueryResponse::unassigned(id.clone())),
             // A solar-anchored pack with no location configured yet: genuinely

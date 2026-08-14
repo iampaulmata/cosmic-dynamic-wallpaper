@@ -1,0 +1,54 @@
+name: wallpaper-ipc CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "crates/wallpaper-ipc/**"
+      - "crates/schedule-engine/**"
+      - "crates/pack-loader/**"
+      - "Cargo.toml"
+      - ".github/workflows/wallpaper-ipc-ci.yml"
+  pull_request:
+    paths:
+      - "crates/wallpaper-ipc/**"
+      - "crates/schedule-engine/**"
+      - "crates/pack-loader/**"
+      - "Cargo.toml"
+      - ".github/workflows/wallpaper-ipc-ci.yml"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: cargo test
+        run: cargo test --package wallpaper-ipc --all-targets
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: cargo clippy
+        run: cargo clippy --package wallpaper-ipc --all-targets -- -D warnings
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - name: cargo llvm-cov
+        run: cargo llvm-cov --package wallpaper-ipc --fail-under-lines 85

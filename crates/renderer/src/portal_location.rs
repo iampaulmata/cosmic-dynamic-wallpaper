@@ -30,7 +30,7 @@ use futures_util::{Stream, StreamExt};
 
 use schedule_engine::Location;
 
-use crate::config::{AutomaticStatus, LocationSource};
+use crate::config::{ResolutionStatus, LocationConfigEntry};
 
 /// The resolution-attempt timeout (research.md R6) — distinct from spec 3 FR-007's
 /// 2-second *reaction* bound (how fast a config change is picked up). Generous enough
@@ -87,11 +87,11 @@ pub enum PortalEvent {
 /// resolution (spec.md US1 Scenarios 1–2, data-model.md's validate-before-write rule).
 /// An out-of-range/non-finite reading from a misbehaving backend is treated as a
 /// resolution failure, never partially written — delegates to [`apply_failure`].
-pub fn apply_reading(entry: &mut LocationSource, reading: PortalReading) {
+pub fn apply_reading(entry: &mut LocationConfigEntry, reading: PortalReading) {
     match Location::new(reading.latitude, reading.longitude) {
         Ok(location) => {
             entry.automatic_location = Some(location);
-            entry.automatic_status = AutomaticStatus::Resolved;
+            entry.automatic_status = ResolutionStatus::Resolved;
         }
         Err(e) => apply_failure(entry, e.to_string()),
     }
@@ -104,9 +104,9 @@ pub fn apply_reading(entry: &mut LocationSource, reading: PortalReading) {
 /// triggers when `automatic_location` is `None` (contracts/location-config-schema-v2.md
 /// "freshly-degraded example"), so a prior successful resolution must not linger once
 /// it's known to be stale.
-pub fn apply_failure(entry: &mut LocationSource, reason: String) {
+pub fn apply_failure(entry: &mut LocationConfigEntry, reason: String) {
     entry.automatic_location = None;
-    entry.automatic_status = AutomaticStatus::Unavailable { reason };
+    entry.automatic_status = ResolutionStatus::Unavailable { reason };
 }
 
 /// One resolution attempt: create a portal session requesting [`Accuracy::City`]
@@ -202,9 +202,9 @@ mod tests {
     /// produces `automatic_location: Some(..)`, `automatic_status: Resolved`.
     #[test]
     fn apply_reading_with_a_valid_value_resolves() {
-        let mut entry = LocationSource::default();
+        let mut entry = LocationConfigEntry::default();
         apply_reading(&mut entry, reading(45.5019, -73.5674));
-        assert_eq!(entry.automatic_status, AutomaticStatus::Resolved);
+        assert_eq!(entry.automatic_status, ResolutionStatus::Resolved);
         let loc = entry.automatic_location.unwrap();
         assert_eq!((loc.latitude(), loc.longitude()), (45.5019, -73.5674));
     }
@@ -213,10 +213,10 @@ mod tests {
     /// resolution failure, never partially written.
     #[test]
     fn apply_reading_with_an_out_of_range_value_is_treated_as_a_failure() {
-        let mut entry = LocationSource::default();
+        let mut entry = LocationConfigEntry::default();
         apply_reading(&mut entry, reading(200.0, 0.0));
         assert_eq!(entry.automatic_location, None);
-        assert!(matches!(entry.automatic_status, AutomaticStatus::Unavailable { .. }));
+        assert!(matches!(entry.automatic_status, ResolutionStatus::Unavailable { .. }));
     }
 
     /// T013: a portal error/timeout/absence maps to `Unavailable { reason }` with the
@@ -225,9 +225,9 @@ mod tests {
     /// literal test case, not a generic placeholder.
     #[test]
     fn apply_failure_preserves_the_reason_verbatim() {
-        let mut entry = LocationSource::default();
+        let mut entry = LocationConfigEntry::default();
         apply_failure(&mut entry, "Location services disabled".to_string());
-        assert_eq!(entry.automatic_status, AutomaticStatus::Unavailable { reason: "Location services disabled".to_string() });
+        assert_eq!(entry.automatic_status, ResolutionStatus::Unavailable { reason: "Location services disabled".to_string() });
     }
 
     /// T013/data-model.md: a failure clears any previously-resolved `automatic_location`
@@ -235,7 +235,7 @@ mod tests {
     /// only triggers when `automatic_location` is `None`.
     #[test]
     fn apply_failure_clears_a_previously_resolved_automatic_location() {
-        let mut entry = LocationSource::default();
+        let mut entry = LocationConfigEntry::default();
         apply_reading(&mut entry, reading(45.5019, -73.5674));
         assert!(entry.automatic_location.is_some());
 
@@ -274,7 +274,7 @@ mod tests {
     /// Scenario 1, FR-006); this asserts the write side of that path is correct.
     #[test]
     fn apply_reading_with_a_new_value_replaces_the_old_one() {
-        let mut entry = LocationSource::default();
+        let mut entry = LocationConfigEntry::default();
         apply_reading(&mut entry, reading(45.5019, -73.5674));
         let first = entry.automatic_location;
 

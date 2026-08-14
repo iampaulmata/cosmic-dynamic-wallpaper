@@ -1,30 +1,18 @@
-//! `wallpaperctl location get|set|clear|auto|manual` (spec 4 FR-008; spec 6 FR-001/
-//! FR-002/FR-003/FR-007/FR-009, contracts/wallpaperctl-location-cli.md). All five
-//! subcommands are daemon-optional (spec 6 FR-012) — every one reads/writes
-//! `cosmic-config` only.
+//! `wallpaperctl location get|set|clear|auto|manual|ip` (spec 4 FR-008; spec 6 FR-001/
+//! FR-002/FR-003/FR-007/FR-009; spec 7 FR-012/FR-013/FR-014). All six subcommands are
+//! daemon-optional (spec 6 FR-012) — every one reads/writes `cosmic-config` only.
 
 use cosmic_config::Config;
 use schedule_engine::Location;
 use serde::Serialize;
+use wallpaper_ipc::{effective_location, LocationConfigEntry, LocationMode, ResolutionStatus};
 
-use crate::config::{AutomaticStatus, LocationConfigEntry, LocationMode};
 use crate::error::CliError;
 use crate::output::{self, Ack};
 
-/// Mirrors spec 6 data-model.md's `effective_location()` (owned/read by
-/// `crates/renderer/src/config.rs` for actual scheduling) — duplicated here for
-/// display purposes only, so `location get` can report the same effective value
-/// without this daemon-optional CLI crate depending on `renderer`.
-fn effective_location(state: &LocationConfigEntry) -> Option<Location> {
-    match state.mode {
-        LocationMode::Manual => state.location,
-        LocationMode::Automatic => state.automatic_location.or(state.location),
-    }
-}
-
-/// The `--json` shape for `automatic_status`, matching
-/// contracts/wallpaperctl-location-cli.md exactly: `{"state":"resolved"}` /
-/// `{"state":"unresolved"}` / `{"state":"unavailable","reason":"..."}`.
+/// The `--json` shape for a resolution status field, matching this project's
+/// established convention: `{"state":"resolved"}` / `{"state":"unresolved"}` /
+/// `{"state":"unavailable","reason":"..."}`.
 #[derive(Debug, Serialize)]
 #[serde(tag = "state", rename_all = "lowercase")]
 enum StatusJson {
@@ -33,21 +21,21 @@ enum StatusJson {
     Unavailable { reason: String },
 }
 
-impl From<&AutomaticStatus> for StatusJson {
-    fn from(status: &AutomaticStatus) -> Self {
+impl From<&ResolutionStatus> for StatusJson {
+    fn from(status: &ResolutionStatus) -> Self {
         match status {
-            AutomaticStatus::Unresolved => StatusJson::Unresolved,
-            AutomaticStatus::Resolved => StatusJson::Resolved,
-            AutomaticStatus::Unavailable { reason } => StatusJson::Unavailable { reason: reason.clone() },
+            ResolutionStatus::Unresolved => StatusJson::Unresolved,
+            ResolutionStatus::Resolved => StatusJson::Resolved,
+            ResolutionStatus::Unavailable { reason } => StatusJson::Unavailable { reason: reason.clone() },
         }
     }
 }
 
-fn status_human(status: &AutomaticStatus) -> String {
+fn status_human(status: &ResolutionStatus) -> String {
     match status {
-        AutomaticStatus::Unresolved => "unresolved".to_string(),
-        AutomaticStatus::Resolved => "resolved".to_string(),
-        AutomaticStatus::Unavailable { reason } => format!("unavailable ({reason})"),
+        ResolutionStatus::Unresolved => "unresolved".to_string(),
+        ResolutionStatus::Resolved => "resolved".to_string(),
+        ResolutionStatus::Unavailable { reason } => format!("unavailable ({reason})"),
     }
 }
 
@@ -55,8 +43,28 @@ fn mode_str(mode: LocationMode) -> &'static str {
     match mode {
         LocationMode::Manual => "manual",
         LocationMode::Automatic => "automatic",
+        LocationMode::IpGeolocation => "ip_geolocation",
     }
 }
+
+/// The resolution status relevant to the *currently active* mode — `Manual` mode has
+/// no resolution attempt of its own, so it's reported as `Unresolved` regardless of
+/// whatever `automatic_status`/`ip_status` happen to hold from a previously-active
+/// mode (spec 6/7's own posture: those fields are preserved, not reset, but showing a
+/// stale non-Manual status while in Manual mode would be misleading).
+fn current_status(state: &LocationConfigEntry) -> ResolutionStatus {
+    match state.mode {
+        LocationMode::Manual => ResolutionStatus::Unresolved,
+        LocationMode::Automatic => state.automatic_status.clone(),
+        LocationMode::IpGeolocation => state.ip_status.clone(),
+    }
+}
+
+/// STUN-disclosure copy FR-014 requires before a user opts into IP-geolocation
+/// (spec 7 research.md R4) — surfaced directly in `location ip`'s own output and
+/// reused by the GUI's Location page (T054) so the two control surfaces show identical
+/// wording.
+pub const IP_GEOLOCATION_DISCLOSURE: &str = "uses a bundled offline database for the location lookup; briefly asks a STUN server what this machine's public IP address is, since that's not something a bundled database can tell you on its own";
 
 #[derive(Debug, Serialize)]
 struct LocationGetResponse {
@@ -65,40 +73,45 @@ struct LocationGetResponse {
     location: Option<Location>,
     manual_location: Option<Location>,
     automatic_location: Option<Location>,
+    ip_location: Option<Location>,
 }
 
-/// spec.md US4 Scenario 1, SC-004: reports `mode`, `status`, and the effective
-/// location (data-model.md `effective_location()`) for every `(mode, status)`
-/// combination, daemon-optional.
+/// spec.md US4 Scenario 1, SC-004 (spec 6); extended for spec 7's third mode: reports
+/// `mode`, the active mode's `status`, and the effective location
+/// (`wallpaper_ipc::effective_location`) for every `(mode, status)` combination,
+/// daemon-optional.
 pub fn get(config: &Config, json: bool) -> String {
     let state = LocationConfigEntry::load(config);
     let effective = effective_location(&state);
-    // The displayed value came from an automatic resolution specifically when
-    // automatic mode is active *and* a resolved automatic value exists — matches
-    // `effective_location()`'s own priority (automatic_location before location).
+    let status = current_status(&state);
+    // The displayed value's provenance, matching `effective_location()`'s own
+    // priority (mode-specific resolved value before the manual fallback).
     let from_automatic = matches!(state.mode, LocationMode::Automatic) && state.automatic_location.is_some();
+    let from_ip = matches!(state.mode, LocationMode::IpGeolocation) && state.ip_location.is_some();
 
     let response = LocationGetResponse {
         mode: mode_str(state.mode),
-        status: (&state.automatic_status).into(),
+        status: (&status).into(),
         location: effective,
         manual_location: state.location,
         automatic_location: state.automatic_location,
+        ip_location: state.ip_location,
     };
 
     output::render(json, &response, || {
         let location_line = match effective {
             Some(loc) if from_automatic => format!("{} {}  (from automatic resolution)", loc.latitude(), loc.longitude()),
+            Some(loc) if from_ip => format!("{} {}  (from IP-geolocation)", loc.latitude(), loc.longitude()),
             Some(loc) => format!("{} {}", loc.latitude(), loc.longitude()),
             None => "no location available".to_string(),
         };
-        format!("mode: {}\nstatus: {}\nlocation: {location_line}", mode_str(state.mode), status_human(&state.automatic_status))
+        format!("mode: {}\nstatus: {}\nlocation: {location_line}", mode_str(state.mode), status_human(&status))
     })
 }
 
 /// Scenario 3: `Location::new`'s validation runs *before* anything is written — an
 /// invalid value is never partially applied. Also sets `mode: Manual` (spec 6
-/// research.md R7) — setting a manual value while remaining in automatic mode would
+/// research.md R7) — setting a manual value while remaining in a non-manual mode would
 /// have no observable effect, a worse default than switching modes explicitly.
 pub fn set(config: &Config, latitude: f64, longitude: f64, json: bool) -> Result<String, CliError> {
     let location = Location::new(latitude, longitude)?;
@@ -109,8 +122,8 @@ pub fn set(config: &Config, latitude: f64, longitude: f64, json: bool) -> Result
     Ok(output::render(json, &Ack::ok(), || format!("location set to {latitude} {longitude}")))
 }
 
-/// Clears `location` only — `mode` and the `automatic_*` fields are left untouched
-/// (spec 6 research.md R7): expanding `clear`'s scope to also flip automatic mode
+/// Clears `location` only — `mode` and every resolution-status field are left
+/// untouched (spec 6 research.md R7): expanding `clear`'s scope to also flip mode
 /// would be a surprising side effect for existing users of this command.
 pub fn clear(config: &Config, json: bool) -> Result<String, CliError> {
     let mut state = LocationConfigEntry::load(config);
@@ -119,15 +132,28 @@ pub fn clear(config: &Config, json: bool) -> Result<String, CliError> {
     Ok(output::render(json, &Ack::ok(), || "location cleared".to_string()))
 }
 
-/// Enables automatic mode (spec 6 FR-001/FR-002/FR-003). Idempotent — calling it while
-/// already in automatic mode is a no-op success, not an error. Writes `mode: Automatic`
-/// only: doesn't touch `location`/`automatic_location`/`automatic_status`, and doesn't
-/// itself attempt a resolution (that's `wallpaperd`'s job, once running).
+/// Enables automatic (portal) mode (spec 6 FR-001/FR-002/FR-003). Idempotent — calling
+/// it while already in automatic mode is a no-op success, not an error. Writes
+/// `mode: Automatic` only: doesn't touch `location`/`automatic_location`/
+/// `automatic_status`, and doesn't itself attempt a resolution (that's `wallpaperd`'s
+/// job, once running).
 pub fn auto(config: &Config, json: bool) -> Result<String, CliError> {
     let mut state = LocationConfigEntry::load(config);
     state.mode = LocationMode::Automatic;
     state.save(config)?;
     Ok(output::render(json, &Ack::ok(), || "automatic location enabled (resolving…)".to_string()))
+}
+
+/// Enables IP-geolocation mode (spec 7 FR-012/FR-013). Idempotent, same posture as
+/// [`auto`] — writes `mode: IpGeolocation` only; the actual STUN/`maxminddb`
+/// resolution is `wallpaperd`'s job (`ip_geolocation.rs`). The success message itself
+/// carries [`IP_GEOLOCATION_DISCLOSURE`] (FR-014) so the one external touchpoint is
+/// disclosed at the moment of opting in, not buried in documentation.
+pub fn ip(config: &Config, json: bool) -> Result<String, CliError> {
+    let mut state = LocationConfigEntry::load(config);
+    state.mode = LocationMode::IpGeolocation;
+    state.save(config)?;
+    Ok(output::render(json, &Ack::ok(), || format!("IP-geolocation enabled ({IP_GEOLOCATION_DISCLOSURE}) — resolving…")))
 }
 
 /// Switches back to manual mode using whatever value is already stored in `location`,
@@ -192,8 +218,8 @@ mod tests {
         assert!(LocationConfigEntry::load(&config).location.is_none());
     }
 
-    /// T025: `set` now also writes `mode: Manual` — a documented deliberate side
-    /// effect (research.md R7), not accidental scope creep.
+    /// `set` also writes `mode: Manual` — a documented deliberate side effect
+    /// (research.md R7), not accidental scope creep.
     #[test]
     fn set_also_switches_mode_to_manual() {
         let (config, _dir) = temp_config();
@@ -204,7 +230,7 @@ mod tests {
         assert_eq!(LocationConfigEntry::load(&config).mode, LocationMode::Manual);
     }
 
-    /// T025: `clear` continues to leave `mode`/`automatic_*` untouched.
+    /// `clear` continues to leave `mode`/resolution-status fields untouched.
     #[test]
     fn clear_leaves_mode_and_automatic_fields_untouched() {
         let (config, _dir) = temp_config();
@@ -215,8 +241,8 @@ mod tests {
         assert_eq!(state.location, None);
     }
 
-    /// T006 (US1): `auto` sets `mode: Automatic` only, is idempotent, and never
-    /// touches `location`/`automatic_location`/`automatic_status`.
+    /// `auto` sets `mode: Automatic` only, is idempotent, and never touches
+    /// `location`/`automatic_location`/`automatic_status`.
     #[test]
     fn auto_sets_mode_only_and_is_idempotent() {
         let (config, _dir) = temp_config();
@@ -227,7 +253,7 @@ mod tests {
         assert_eq!(first.mode, LocationMode::Automatic);
         assert_eq!(first.location.unwrap().latitude(), 45.5019);
         assert_eq!(first.automatic_location, None);
-        assert_eq!(first.automatic_status, AutomaticStatus::Unresolved);
+        assert_eq!(first.automatic_status, ResolutionStatus::Unresolved);
 
         // Calling again is a no-op success, not an error, and changes nothing else.
         auto(&config, false).unwrap();
@@ -235,8 +261,30 @@ mod tests {
         assert_eq!(second, first);
     }
 
-    /// T023 (US4): `manual` sets `mode: Manual` only, leaves `location` untouched, and
-    /// handles the "no manual value was ever stored" case cleanly.
+    /// T052 (US3): `ip` sets `mode: IpGeolocation` only, is idempotent, and never
+    /// touches `location`/`ip_location`/`ip_status` — same posture as `auto`.
+    #[test]
+    fn ip_sets_mode_only_and_is_idempotent() {
+        let (config, _dir) = temp_config();
+        set(&config, 45.5019, -73.5674, false).unwrap();
+
+        let output = ip(&config, false).unwrap();
+        let first = LocationConfigEntry::load(&config);
+        assert_eq!(first.mode, LocationMode::IpGeolocation);
+        assert_eq!(first.location.unwrap().latitude(), 45.5019);
+        assert_eq!(first.ip_location, None);
+        assert_eq!(first.ip_status, ResolutionStatus::Unresolved);
+
+        ip(&config, false).unwrap();
+        let second = LocationConfigEntry::load(&config);
+        assert_eq!(second, first);
+
+        // T054: the STUN-disclosure copy is present in the command's own output.
+        assert!(output.contains("STUN"));
+    }
+
+    /// `manual` sets `mode: Manual` only, leaves `location` untouched, and handles the
+    /// "no manual value was ever stored" case cleanly.
     #[test]
     fn manual_sets_mode_only_and_leaves_location_untouched() {
         let (config, _dir) = temp_config();
@@ -260,13 +308,14 @@ mod tests {
         assert_eq!(LocationConfigEntry::load(&config).mode, LocationMode::Manual);
     }
 
-    /// T024 (US4): `get`'s human and `--json` output both report `mode`, `status`, and
-    /// the effective location for every `(mode, status)` combination.
+    /// `get`'s human and `--json` output both report `mode`, `status`, and the
+    /// effective location for every `(mode, status)` combination, including the new
+    /// `IpGeolocation` mode.
     #[test]
     fn get_reports_mode_status_and_effective_location_for_every_combination() {
         let (config, _dir) = temp_config();
 
-        // Fresh default: manual, unresolved, nothing stored.
+        // Fresh default: manual, nothing stored.
         let human = get(&config, false);
         assert!(human.contains("mode: manual"));
         assert!(human.contains("status: unresolved"));
@@ -294,7 +343,7 @@ mod tests {
         // Automatic, resolved: reports the automatic value with the provenance suffix.
         let mut state = LocationConfigEntry::load(&config);
         state.automatic_location = Some(Location::new(51.5072, -0.1276).unwrap());
-        state.automatic_status = AutomaticStatus::Resolved;
+        state.automatic_status = ResolutionStatus::Resolved;
         state.save(&config).unwrap();
         let human = get(&config, false);
         assert!(human.contains("status: resolved"));
@@ -307,12 +356,37 @@ mod tests {
         // Automatic, unavailable: falls back to the manual value, reason surfaced.
         let mut state = LocationConfigEntry::load(&config);
         state.automatic_location = None;
-        state.automatic_status = AutomaticStatus::Unavailable { reason: "Location services disabled".into() };
+        state.automatic_status = ResolutionStatus::Unavailable { reason: "Location services disabled".into() };
         state.save(&config).unwrap();
         let human = get(&config, false);
         assert!(human.contains("status: unavailable (Location services disabled)"));
         assert!(human.contains("45.5019"));
         let json = get(&config, true);
         assert!(json.contains(r#""state":"unavailable","reason":"Location services disabled""#));
+
+        // IP-geolocation, resolved: reports the ip value with its own provenance suffix.
+        let mut state = LocationConfigEntry::load(&config);
+        state.mode = LocationMode::IpGeolocation;
+        state.ip_location = Some(Location::new(40.7128, -74.006).unwrap());
+        state.ip_status = ResolutionStatus::Resolved;
+        state.save(&config).unwrap();
+        let human = get(&config, false);
+        assert!(human.contains("mode: ip_geolocation"));
+        assert!(human.contains("status: resolved"));
+        assert!(human.contains("40.7128"));
+        assert!(human.contains("from IP-geolocation"));
+        // Switching to IP-geolocation mode doesn't fabricate a stale "automatic"
+        // status from the prior mode's own fields.
+        assert!(!human.contains("status: unavailable"));
+
+        // IP-geolocation, unavailable: falls back to the manual value.
+        let mut state = LocationConfigEntry::load(&config);
+        state.ip_location = None;
+        state.ip_status = ResolutionStatus::Unavailable { reason: "public IP discovery failed: STUN request timed out".into() };
+        state.save(&config).unwrap();
+        let human = get(&config, false);
+        assert!(human.contains("mode: ip_geolocation"));
+        assert!(human.contains("status: unavailable (public IP discovery failed: STUN request timed out)"));
+        assert!(human.contains("45.5019"));
     }
 }

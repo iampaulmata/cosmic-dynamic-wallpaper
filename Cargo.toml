@@ -3,8 +3,11 @@ resolver = "2"
 members = [
     "crates/schedule-engine",
     "crates/pack-loader",
+    "crates/wallpaper-ipc",
     "crates/wallpaperctl",
     "crates/renderer",
+    "crates/wallpaper-settings",
+    "tools/generate-starter-pack",
 ]
 
 [workspace.package]
