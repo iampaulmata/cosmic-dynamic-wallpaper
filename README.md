@@ -1,4 +1,4 @@
-# Dynamic Wallpaper
+# Cosmic Dynamic Wallpaper
 
 A from-scratch, COSMIC-native dynamic wallpaper daemon for the [COSMIC desktop
 environment](https://github.com/pop-os/cosmic-epoch). It rotates wallpapers across the day
@@ -21,10 +21,12 @@ This project differs from prior art in three ways:
   raw sunrise/sunset with evenly-spaced slots
 - **Native libcosmic UI and `cosmic-config` persistence**, not a bolted-on toolkit
 
-## Status
+## Features
 
-- Wallpapers change automatically across the day, following either real solar events for
-  your location or a fully custom manual schedule
+- Wallpapers change automatically across the day, following either real solar events for your location or a fully custom manual schedule
+- Easily manage image packs from the GUI
+  - Add/Remove packs
+  - Assign packs
 - Transitions between images are visually smooth (crossfade), not jarring
 - Works correctly across mixed multi-monitor, multi-scale-factor setups
 - Feels like a native part of COSMIC - install, configure, and forget
@@ -32,6 +34,7 @@ This project differs from prior art in three ways:
 
 ## Future goals
 
+- Update the pack configuration from the GUI
 - A curated wallpaper marketplace
 - Weather-reactive imagery
 - Parsing Apple's `.heic` dynamic-wallpaper metadata format directly
@@ -50,11 +53,16 @@ install the latest one:
 sudo apt install ./dynamic-wallpaper_*.deb
 ```
 
-`wallpaperd` then autostarts with your COSMIC session via the bundled systemd user unit, and
-a bundled starter pack is registered and actively scheduled automatically - nothing to
-configure to see it working. Launch **wallpaper-settings** from your app launcher (or
-`wallpaper-settings` from a terminal) to browse packs, change assignment/location/crossfade
-settings, or use `wallpaperctl --help` for the CLI equivalent.
+`wallpaperd` then autostarts with your COSMIC session via the bundled systemd user unit — every
+session *after* the one you installed in. The installer (`postinst`) only enables the unit for
+all users (`systemctl --user --global enable`); it deliberately does not try to start it inside
+whatever session you happen to already be logged into, since a root-run install script can't
+reliably reach a specific logged-in user's session bus. **If you install while already logged
+in, log out and back in once (or reboot)** — from then on `wallpaperd` starts automatically every
+session, registers the bundled starter pack, and actively schedules it, with nothing further to
+configure. Launch **wallpaper-settings** from your app launcher (or `wallpaper-settings` from a
+terminal) to browse packs, change assignment/location/crossfade settings, or use `wallpaperctl
+--help` for the CLI equivalent.
 
 ### Build from source
 
