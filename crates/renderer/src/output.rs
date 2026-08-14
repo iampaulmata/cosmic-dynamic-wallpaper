@@ -59,20 +59,32 @@ pub enum OutputAssignment {
 /// identical to `wallpaperctl::config::RendererConfig` (spec 4 writes this same
 /// `cosmic-config` entry) — the two crates don't share a type (neither depends on the
 /// other), but must stay shape-compatible; see this crate's `README.md`.
+///
+/// **`overrides` is keyed by plain `String`, not [`OutputId`]** — found to matter for
+/// real, not just in principle, while manually testing this crate against a live
+/// `wallpaperctl`-written config (2026-08-13): RON deserializes a `HashMap<OutputId,
+/// _>` key expecting `OutputId`'s newtype-struct textual form, not the bare string
+/// `wallpaperctl`'s own `HashMap<String, PackSource>` actually writes — the two are
+/// *not* wire-compatible despite `OutputId` being "just a string wrapper", so silently
+/// produced an empty `overrides` map (RON parse error swallowed by `load`'s
+/// `unwrap_or_else` fallback to `Default`) rather than the assignment that was actually
+/// on disk. `String` here guarantees byte-for-byte compatibility with what
+/// `wallpaperctl` writes.
 #[derive(Debug, Clone, Default, PartialEq, CosmicConfigEntry)]
 #[version = 1]
 pub struct RendererConfig {
     /// `None` = the toggle is off.
     pub same_pack_everywhere: Option<PackSource>,
-    /// Explicit per-output overrides, keyed by output identifier.
-    pub overrides: HashMap<OutputId, PackSource>,
+    /// Explicit per-output overrides, keyed by output identifier (as a plain string —
+    /// see this struct's doc comment for why not `OutputId`).
+    pub overrides: HashMap<String, PackSource>,
 }
 
 /// Resolve `output`'s [`OutputAssignment`] from the current [`RendererConfig`]
 /// (data-model.md's Resolution rule, FR-005–FR-007): an `overrides` entry always wins;
 /// else `FollowsToggle` if the toggle is set; else `Unassigned`.
 pub fn resolve_assignment(output: &OutputId, config: &RendererConfig) -> OutputAssignment {
-    if let Some(source) = config.overrides.get(output) {
+    if let Some(source) = config.overrides.get(output.as_str()) {
         OutputAssignment::Explicit(source.clone())
     } else if config.same_pack_everywhere.is_some() {
         OutputAssignment::FollowsToggle
@@ -126,7 +138,7 @@ mod tests {
             same_pack_everywhere: Some(source("/toggle.jpg")),
             overrides: HashMap::new(),
         };
-        config.overrides.insert(OutputId::new("DP-3"), source("/override.jpg"));
+        config.overrides.insert("DP-3".to_string(), source("/override.jpg"));
 
         let assignment = resolve_assignment(&OutputId::new("DP-3"), &config);
         assert_eq!(assignment, OutputAssignment::Explicit(source("/override.jpg")));
@@ -155,7 +167,7 @@ mod tests {
     #[test]
     fn overridden_output_is_unaffected_by_toggle_changes() {
         let mut config = RendererConfig { same_pack_everywhere: Some(source("/a.jpg")), overrides: HashMap::new() };
-        config.overrides.insert(OutputId::new("DP-3"), source("/override.jpg"));
+        config.overrides.insert("DP-3".to_string(), source("/override.jpg"));
         let assignment = resolve_assignment(&OutputId::new("DP-3"), &config);
 
         config.same_pack_everywhere = Some(source("/b.jpg")); // toggle's pack changes
@@ -167,7 +179,7 @@ mod tests {
     #[test]
     fn two_outputs_resolve_independently() {
         let mut config = RendererConfig::default();
-        config.overrides.insert(OutputId::new("DP-3"), source("/a.jpg"));
+        config.overrides.insert("DP-3".to_string(), source("/a.jpg"));
 
         let dp3 = resolve_assignment(&OutputId::new("DP-3"), &config);
         let edp1 = resolve_assignment(&OutputId::new("eDP-1"), &config);

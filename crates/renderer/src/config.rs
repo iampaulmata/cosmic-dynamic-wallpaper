@@ -129,6 +129,26 @@ impl Coalescer {
 mod tests {
     use super::*;
 
+    /// Regression test for a real bug found manually testing this crate against a
+    /// live `wallpaperctl`-written config (see `RendererConfig`'s own doc comment):
+    /// `overrides` must parse a plain-string-keyed RON map, matching exactly what
+    /// `wallpaperctl`'s `HashMap<String, PackSource>` writes — not silently fall back
+    /// to an empty map because `OutputId`'s newtype form doesn't match. Written by
+    /// hand-constructing the RON text `wallpaperctl` actually produces, rather than
+    /// depending on the `wallpaperctl` crate itself just for this one shape check.
+    #[test]
+    fn overrides_parses_the_exact_shape_wallpaperctl_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = RendererConfig::open_at(dir.path()).unwrap();
+
+        let overrides_path = dir.path().join("cosmic").join(RENDERER_CONFIG_ID).join("v1").join("overrides");
+        std::fs::create_dir_all(overrides_path.parent().unwrap()).unwrap();
+        std::fs::write(&overrides_path, r#"{"eDP-1": Directory("/home/user/pack")}"#).unwrap();
+
+        let loaded = RendererConfig::load(&config);
+        assert_eq!(loaded.overrides.get("eDP-1"), Some(&pack_loader::PackSource::Directory("/home/user/pack".into())));
+    }
+
     #[test]
     fn renderer_config_round_trips() {
         let dir = tempfile::tempdir().unwrap();
@@ -137,7 +157,7 @@ mod tests {
         let mut state = RendererConfig::load(&config);
         assert_eq!(state, RendererConfig::default());
 
-        state.overrides.insert(OutputId::new("DP-3"), pack_loader::PackSource::StaticFile("/x.jpg".into()));
+        state.overrides.insert("DP-3".to_string(), pack_loader::PackSource::StaticFile("/x.jpg".into()));
         state.write_entry(&config).unwrap();
 
         let reloaded = RendererConfig::load(&config);
