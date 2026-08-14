@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Wallpaper Settings
+Comment=Configure the dynamic wallpaper daemon
+Exec=wallpaper-settings
+Icon=preferences-desktop-wallpaper
+Terminal=false
+Categories=Settings;DesktopSettings;COSMIC;
+X-CosmicApplet=false
