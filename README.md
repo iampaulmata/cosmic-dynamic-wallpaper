@@ -44,16 +44,16 @@ See [`docs/PRD.md`](docs/PRD.md) for the full requirements this project is scope
 
 This project is under active, spec-driven development using [GitHub Spec
 Kit](https://github.com/github/spec-kit) — every feature is written up as a spec, planned,
-and broken into tasks under [`specs/`](specs/) before implementation lands. Specs 1, 2, and 4
-are fully implemented and tested; spec 3 has real, live-verified Wayland/GPU rendering with a
-few documented gaps remaining. This has run end-to-end on a real COSMIC session: a real image
-pack applied and crossfaded on-screen via `wallpaperctl` + `wallpaperd`.
+and broken into tasks under [`specs/`](specs/) before implementation lands. Specs 1, 2, 3, and
+4 are fully implemented and tested, with spec 3's Wayland/GPU rendering live-verified against
+a real COSMIC session (including multi-output, hotplug, and fractional-scale handling). A real
+image pack applied and crossfaded on-screen via `wallpaperctl` + `wallpaperd`, end to end.
 
 | # | Spec | Status |
 |---|---|---|
 | 1 | [Core scheduling engine](specs/001-core-scheduling-engine/) — pure solar/time logic, no rendering | **Implemented** — `crates/schedule-engine` |
 | 2 | [Pack format & loading](specs/002-pack-format-loading/) — manifest schema, pack directory loading, `cosmic-config` registry | **Implemented** — `crates/pack-loader` |
-| 3 | [Renderer](specs/003-wallpaper-renderer/) — Wayland layer-shell client, GPU crossfade, multi-output | **Mostly implemented, live-verified** — `crates/renderer` (`wallpaperd` binary). Remaining gaps: no live D-Bus service yet (so `wallpaperctl query`/`reevaluate` can't reach it), config is read once at startup (no live watch/reload), a flat 5s poll instead of a precise per-output idle timer, only "Fill" scaling, and no hotplug resize/rescale. See [`crates/renderer/README.md`](crates/renderer/README.md) for the full, current list. |
+| 3 | [Renderer](specs/003-wallpaper-renderer/) — Wayland layer-shell client, GPU crossfade, multi-output | **Implemented, live-verified** — `crates/renderer` (`wallpaperd` binary). Config is live-watched (no restart needed), the idle-wait timer is precise (schedule-driven, not a flat poll), the live D-Bus service backs `wallpaperctl query`/`reevaluate`/`list outputs`, all four scaling modes (Fill/Fit/Stretch/Center) are implemented and pixel-verified, and hotplug resize/rescale + fractional-scale are wired up (this dev environment's real `cosmic-comp` does support `wp_fractional_scale_v1` — live-verified). See [`crates/renderer/README.md`](crates/renderer/README.md) for the couple of caveats that remain unverified against real hotplug/resize events (no way to trigger those on this dev machine). |
 | 4 | [CLI control surface](specs/004-cli-control-surface/) | **Implemented** — `crates/wallpaperctl` (binary: `wallpaperctl`) |
 | 5 | Session integration & packaging | Not started |
 | 6 | Location portal integration | Not started |
