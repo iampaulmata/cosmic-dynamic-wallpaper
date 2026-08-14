@@ -84,6 +84,15 @@ impl From<cosmic_config::Error> for CliError {
     }
 }
 
+impl From<wallpaper_ipc::DbusError> for CliError {
+    fn from(e: wallpaper_ipc::DbusError) -> Self {
+        match e {
+            wallpaper_ipc::DbusError::DaemonUnreachable => CliError::DaemonUnreachable,
+            wallpaper_ipc::DbusError::OutputNotFound { id } => CliError::OutputNotFound { id },
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

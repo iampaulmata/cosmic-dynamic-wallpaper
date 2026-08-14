@@ -9,12 +9,13 @@ rust-version = "1.97"
 [dependencies]
 schedule-engine = { path = "../schedule-engine" }
 pack-loader = { path = "../pack-loader" }
+wallpaper-ipc = { path = "../wallpaper-ipc" }
 serde = { version = "1.0", features = ["derive"] }
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 cosmic-config = { git = "https://github.com/pop-os/libcosmic", default-features = false, features = ["macro", "calloop"] }
 smithay-client-toolkit = "0.20.0"
 wayland-client = { version = "0.31", features = ["system"] }
-calloop = { version = "0.14", features = ["block_on"] }
+calloop = { version = "0.14", features = ["block_on", "executor"] }
 calloop-wayland-source = "0.4"
 wgpu = "0.20"
 raw-window-handle = "0.6"
@@ -24,10 +25,77 @@ bytemuck = { version = "1.25", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
 zbus = { version = "5", default-features = false, features = ["async-io"] }
+ashpd = { version = "0.13", default-features = false, features = ["location", "async-io"] }
+# Not a second async runtime: these are the exact `async-io`/`futures-lite`/
+# `futures-util` crates zbus's own `async-io` feature (and ashpd, transitively) already
+# pull in — depended on directly here only to build the 5s resolution timeout
+# (research.md R6) and drive `ashpd`'s `Stream` of location updates, on the same
+# non-tokio backend already in use throughout this crate (research.md R3/R5).
+async-io = "2"
+futures-lite = "2"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+# IP-geolocation (spec 7 US3, research.md R3/R4): maxminddb reads the bundled DB-IP
+# Lite .mmdb database; stunclient discovers this machine's own public IP (the one
+# external touchpoint an offline database can't supply on its own).
+maxminddb = "0.30"
+stunclient = "0.4"
 
 [dev-dependencies]
 tempfile = "3.27"
+# Mock hotplug test harness only (spec 7 US4, research.md R7) — a minimal in-process
+# fake Wayland compositor driving the real, unmodified SCTK client code under test.
+# Never shipped in the wallpaperd binary. "server" features generate the server-side
+# bindings for the same protocols this crate's client side already depends on
+# (wayland-protocols/wayland-protocols-wlr), from wayland-rs's own generic
+# client/server split.
+wayland-server = "0.31"
+wayland-protocols = { version = "0.32", features = ["server"] }
+wayland-protocols-wlr = { version = "0.3", features = ["server"] }
+# IP-geolocation fixture tests only (spec 7 US3, T046) — builds a tiny, in-memory-only
+# .mmdb at test time rather than committing any binary fixture to the repo; the real
+# bundled DB-IP Lite database is a release-process download (see README.md), never a
+# build- or test-time dependency.
+mmdb-writer = "0.1"
+ipnet = "2.11"
 
 [lints.clippy]
 unwrap_used = "deny"
 expect_used = "deny"
+
+[package.metadata.deb]
+name = "dynamic-wallpaper"
+maintainer = "iampaulmata <paul.mata42@gmail.com>"
+copyright = "2026, iampaulmata <paul.mata42@gmail.com>"
+extended-description = """\
+A from-scratch, COSMIC-native dynamic wallpaper daemon. Rotates wallpapers across the day \
+following real solar events (sunrise, sunset, civil/astronomical twilight, solar noon) for \
+your location, or a fully custom location-free manual schedule, crossfading smoothly between \
+images. Ships wallpaperd (the renderer daemon) and wallpaperctl (its CLI control surface), \
+plus a systemd user unit so wallpaperd autostarts with your COSMIC session."""
+depends = "$auto"
+# Soft dependency only (spec 6 research.md R2, applied here per spec 7 research.md R8):
+# automatic portal-based location (spec 6) works correctly without GeoClue2 installed
+# (FR-005's graceful degrade), but a fresh install offers it out of the box on distros
+# that carry the package.
+recommends = "geoclue-2.0"
+section = "x11"
+priority = "optional"
+assets = [
+    ["target/release/wallpaperd", "usr/bin/", "755"],
+    ["target/release/wallpaperctl", "usr/bin/", "755"],
+    ["../../packaging/systemd/wallpaperd.service", "usr/lib/systemd/user/wallpaperd.service", "644"],
+    # Bundled starter pack (spec 7 US2, FR-008) — static, checked-in assets (T043,
+    # tools/generate-starter-pack). `wallpaperd`'s own first-run self-registration
+    # (crates/renderer/src/starter_pack.rs) looks for this exact path
+    # (STARTER_PACK_SYSTEM_PATH) — not a postinst script write, see that module's doc
+    # comment for why.
+    ["../../assets/starter-pack/*", "usr/share/dynamic-wallpaper/starter-pack/", "644"],
+    # IP-geolocation database (spec 7 US3, research.md R3, T051) — NOT checked into
+    # this repository (.gitignore'd, `assets/geoip/`). A release-process download step
+    # (README.md's "IP-geolocation database" section) must place a fresh DB-IP Lite
+    # snapshot here before running `cargo deb` — this line intentionally makes
+    # packaging fail loudly if that step was skipped, rather than shipping without it.
+    # Destination matches `ip_geolocation::MMDB_SYSTEM_PATH` exactly.
+    ["../../assets/geoip/dbip-city-lite.mmdb", "usr/share/dynamic-wallpaper/geoip.mmdb", "644"],
+]
+maintainer-scripts = "../../packaging/debian"

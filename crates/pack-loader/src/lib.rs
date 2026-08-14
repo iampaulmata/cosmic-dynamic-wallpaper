@@ -42,4 +42,4 @@ pub use error::{ManifestError, RegistryError};
 pub use load::{load_pack, LoadedPack, MANIFEST_FILE_NAME};
 pub use manifest::{Color, ManifestImage, PackManifest, ScalingMode, MAX_SUPPORTED_SCHEMA_VERSION};
 pub use pack_source::PackSource;
-pub use registry::{PackRegistryEntry, Registry, RegistryStatus, REGISTRY_CONFIG_ID};
+pub use registry::{PackOrigin, PackRegistryEntry, Registry, RegistryStatus, REGISTRY_CONFIG_ID, REMOVED_STARTER_PACKS_CONFIG_ID};

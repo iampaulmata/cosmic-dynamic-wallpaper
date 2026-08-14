@@ -1,0 +1,56 @@
+name: wallpaper-settings CI
+
+# This crate has no unit tests of its own beyond each page's pure view-state mapping
+# logic (spec 7 tasks.md T019-T023) — the actual libcosmic-rendered window is manual QA
+# against a real COSMIC session (see crates/wallpaper-settings/README.md), same posture
+# as this project's other Wayland-adjacent crates.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "crates/wallpaper-settings/**"
+      - "crates/wallpaper-ipc/**"
+      - "crates/schedule-engine/**"
+      - "crates/pack-loader/**"
+      - "Cargo.toml"
+      - ".github/workflows/wallpaper-settings-ci.yml"
+  pull_request:
+    paths:
+      - "crates/wallpaper-settings/**"
+      - "crates/wallpaper-ipc/**"
+      - "crates/schedule-engine/**"
+      - "crates/pack-loader/**"
+      - "Cargo.toml"
+      - ".github/workflows/wallpaper-settings-ci.yml"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # libxkbcommon-dev: the same build-time requirement crates/renderer already
+      # documents (smithay-client-toolkit's build script) — libcosmic's "wayland"
+      # feature pulls in the same class of dependency.
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev
+      - name: cargo test
+        run: cargo test --package wallpaper-settings --all-targets
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev
+      - name: cargo clippy
+        run: cargo clippy --package wallpaper-settings --all-targets -- -D warnings

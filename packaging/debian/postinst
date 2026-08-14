@@ -1,0 +1,13 @@
+#!/bin/sh
+set -e
+# Note (spec 7 US2): this script deliberately does NOT register the bundled starter
+# pack (usr/share/dynamic-wallpaper/starter-pack/, installed by this .deb's own asset
+# list). It runs once, as root, at install time, with no per-user context — but the
+# pack registry is a per-user cosmic-config store under each user's own XDG config
+# directory, which this script has no way to locate or safely write to. Registration
+# instead happens in wallpaperd's own first-run startup logic
+# (crates/renderer/src/starter_pack.rs), which runs correctly per-user as a
+# systemd --user service. See that module's doc comment for the full rationale.
+if [ "$1" = "configure" ]; then
+    systemctl --user --global enable wallpaperd.service 2>/dev/null || true
+fi

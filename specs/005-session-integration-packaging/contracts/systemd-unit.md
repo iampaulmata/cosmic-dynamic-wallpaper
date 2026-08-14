@@ -12,18 +12,33 @@ Description=Dynamic wallpaper renderer
 Documentation=https://github.com/iampaulmata/rust-dynamic-wallpaper
 PartOf=cosmic-session.target
 After=cosmic-session.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
 ExecStart=/usr/bin/wallpaperd
 Restart=on-failure
 RestartSec=2
-StartLimitIntervalSec=60
-StartLimitBurst=5
 
 [Install]
 WantedBy=cosmic-session.target
 ```
+
+**Correction, live-verified during implementation (2026-08-14)**: `StartLimitIntervalSec=`/
+`StartLimitBurst=` MUST be in `[Unit]`, not `[Service]` — an earlier draft of this contract
+placed them under `[Service]`. `systemd-analyze verify` on this project's own dev machine
+(systemd 255) flags `StartLimitIntervalSec` under `[Service]` as an **unknown key, silently
+ignored**, falling back to the manager's `DefaultStartLimitIntervalSec=10s` — meaning the
+clarified 60-second/5-attempt bound was never actually being enforced in that placement; 8
+consecutive SIGKILL-triggered restarts within ~43 seconds never tripped the limit before this fix.
+`StartLimitBurst` happened to still work from `[Service]` in this systemd version (legacy
+compat), but is moved alongside `StartLimitIntervalSec` for consistency and to match
+`systemd.unit(5)`'s current documented section. data-model.md's own directive table already had
+the section annotations correct (`[Unit]`) — only the literal ini reference blocks (here and in
+research.md R2) had the bug; fixed in both, and their disagreement is itself the lesson: when a
+descriptive table and a literal code block disagree, verify against the real tool, don't assume
+either is right.
 
 ## Guarantees this unit MUST provide (traced to spec.md's FRs)
 

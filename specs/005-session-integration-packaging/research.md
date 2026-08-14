@@ -70,18 +70,27 @@ Description=Dynamic wallpaper renderer
 Documentation=https://github.com/iampaulmata/rust-dynamic-wallpaper
 PartOf=cosmic-session.target
 After=cosmic-session.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
 ExecStart=/usr/bin/wallpaperd
 Restart=on-failure
 RestartSec=2
-StartLimitIntervalSec=60
-StartLimitBurst=5
 
 [Install]
 WantedBy=cosmic-session.target
 ```
+
+**⚠️ Correction, live-verified during implementation (2026-08-14, tasks.md T007)**: the original
+version of this block placed `StartLimitIntervalSec=`/`StartLimitBurst=` under `[Service]`. Real,
+live testing on this dev machine (systemd 255) proved that placement doesn't work:
+`systemd-analyze verify` flags `StartLimitIntervalSec` there as an unknown key (silently ignored,
+falling back to the manager's 10-second default), and 8 consecutive SIGKILL-triggered restarts
+within ~43 seconds never tripped the intended 60s/5-attempt limit before the fix — a real gap
+between this research doc's original reasoning and actual systemd behavior, corrected here and in
+contracts/systemd-unit.md rather than left standing now that it's known.
 
 **Rationale**: `PartOf=cosmic-session.target` (not just `After=`) is what gives FR-002's
 "stops cleanly when the session ends" for free — systemd propagates a stop of the target to

@@ -13,13 +13,16 @@ pub mod dbus_service;
 pub mod dbus_types;
 pub mod error;
 pub mod gpu;
+pub mod ip_geolocation;
 pub mod output;
+pub mod portal_location;
 pub mod scheduler_bridge;
+pub mod starter_pack;
 pub mod surface;
 pub mod texture;
 
-pub use config::{LocationSource, LOCATION_CONFIG_ID, RENDERER_CONFIG_ID};
+pub use config::{effective_location, LocationConfigEntry, LocationMode, ResolutionStatus, LOCATION_CONFIG_ID};
 pub use crossfade::CrossfadeTransition;
 pub use dbus_types::QueryResponse;
 pub use error::RendererError;
-pub use output::{effective_pack, resolve_assignment, IdleWaitState, OutputAssignment, OutputId, RendererConfig, RendererState};
+pub use output::{effective_pack, resolve_assignment, IdleWaitState, OutputAssignment, OutputId, RendererConfig, RendererState, RENDERER_CONFIG_ID};

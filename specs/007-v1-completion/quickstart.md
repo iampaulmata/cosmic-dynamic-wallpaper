@@ -46,18 +46,45 @@ get`; the Timeline page matches `wallpaperctl query`'s output for the same outpu
 page's change is picked up by a running `wallpaperd` without a restart (spec 3's existing live-
 config-watch).
 
+**Confirmed live during implementation (2026-08-14)**: `cargo run -p wallpaper-settings` opened a
+real window against this dev machine's live Vulkan/Wayland stack (`wgpu` selected "Intel(R) HD
+Graphics 630", the same GPU adapter `crates/renderer` itself uses), ran stably for 6+ seconds with
+zero panics, and shut down cleanly on `SIGTERM`. A pixel-level screenshot comparison wasn't
+obtainable non-interactively — the desktop portal's `Screenshot` call needs interactive user
+consent, the same limitation spec 5's own README already documents (its T010 note). The
+page-by-page read/write behavior above is exercised by each page's own pure-logic unit tests
+(11 total, `crates/wallpaper-settings/src/pages/`), not re-verified click-by-click in this pass.
+
 ## Manual smoke check 2: Starter pack zero-config first run
 
+**Drift fixed during implementation**: `wallpaperctl register` has no `--origin` flag — a real
+design correction, not this doc catching up to a missed feature (see
+`crates/renderer/src/starter_pack.rs`'s module doc for the full rationale: `postinst` runs once,
+as root, with no access to any user's per-user `cosmic-config` store, so it can't correctly
+register anything there). The actual mechanism is `wallpaperd`'s own first-run self-registration,
+checked on every startup:
+
 ```sh
-# Simulates what postinst does, without a real package install:
-wallpaperctl register assets/starter-pack --origin package   # or the real postinst script, once spec 5 lands
+sudo mkdir -p /usr/share/dynamic-wallpaper
+sudo cp -r assets/starter-pack /usr/share/dynamic-wallpaper/starter-pack   # simulates the .deb's own asset install
 wallpaperd &
 wallpaperctl query --output <your-output>
 ```
 
-Expected outcome: the starter pack is active with no other configuration. Removing it
-(`wallpaperctl remove assets/starter-pack`) and re-running the registration step again should
-**not** re-add it — confirming `RemovedStarterPacks` is respected (FR-010).
+Expected outcome: on first run against an empty registry, `wallpaperd` registers
+`/usr/share/dynamic-wallpaper/starter-pack` as `Package`-origin and assigns it via
+`same_pack_everywhere` (only if nothing was already configured — FR-011), then the starter pack is
+active with no other configuration. Removing it (`wallpaperctl remove
+/usr/share/dynamic-wallpaper/starter-pack`) and restarting `wallpaperd` again should **not**
+re-add it — confirming `RemovedStarterPacks` is respected (FR-010).
+
+**Not run live in this dev environment**: placing a file under `/usr/share/` needs `sudo`, which
+this implementation session's shell doesn't have interactively (the same constraint spec 5's own
+quickstart.md already documents for its own install/uninstall cycle, T022). The logic itself —
+every branch of `maybe_register()` (fresh install, missing path, already-removed, existing
+assignment untouched, idempotent across restarts) — is fully covered by `starter_pack.rs`'s own
+6 unit tests instead (99.5% region coverage). Ready to run for real whenever the user does the
+`sudo` steps above themselves.
 
 ## Manual smoke check 3: IP-geolocation happy path and degrade path
 
@@ -74,6 +101,21 @@ copy per FR-014 before this step is considered validated — not just that resol
 Disconnecting the network before enabling should instead show `ip_status: unavailable`, with
 `location get` falling back to any stored manual value or the existing no-location state, exactly
 as it does for spec 6's portal mode.
+
+**Confirmed live during implementation (2026-08-14), the STUN half specifically**: a genuine
+`discover_public_ip_blocking()` round trip against the real default STUN server
+(`stun.l.google.com:19302`) correctly returned this dev machine's real public IP — via a
+throwaway `crates/renderer/examples/stun_smoke.rs` harness, deleted after use. **A real bug was
+found and fixed doing this**: this machine's DNS resolves the STUN server to an IPv6 address
+first; the original implementation bound an IPv4-only wildcard socket, so a naive
+`.to_socket_addrs().next()` silently picked the IPv6 result and failed with an opaque "UDP socket
+error" (an address-family mismatch, not a network problem, and not the kind of thing a fixture
+test would catch — this specific failure mode only exists against real DNS). Fixed to prefer an
+IPv4 result when one exists and bind accordingly; re-verified live after the fix. The database
+half (a real bundled DB-IP Lite lookup) remains unverified in this dev environment — no `.mmdb`
+is present locally (it's a release-process download, `crates/renderer/README.md`'s
+"IP-geolocation database" section, not something available during implementation) — the fixture
+test suite (`ip_geolocation.rs`) is what closes SC coverage for the lookup logic itself.
 
 ## What "done" looks like for this spec
 
