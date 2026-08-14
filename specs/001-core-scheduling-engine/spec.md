@@ -197,8 +197,12 @@ timestamp consistent with the pack's anchors.
   returns a result in under 1 millisecond, since this is pure in-memory computation with
   no I/O.
 - **SC-002**: Computed solar event times match an independent reference source (e.g. a
-  published solar calculator) to within one minute, for any tested location and date,
-  including high-latitude locations short of full polar day/night.
+  published solar calculator) to within three minutes, for any tested location and date,
+  including high-latitude locations short of full polar day/night. (Amended during
+  implementation 2026-08-13, was one minute — see research.md R4's "Tolerance widened"
+  note: two independently-published references disagreed with *each other* by up to two
+  minutes for the same location/date, so one minute wasn't an achievable bar for any
+  simplified solar algorithm being checked against a single external source.)
 - **SC-003**: Identical (pack, query instant) inputs produce identical results across
   repeated calls, 100% of the time — no dependency on call order, caching, or hidden state.
 - **SC-004**: A fully manual, clock-time-only schedule can be defined and correctly evaluated

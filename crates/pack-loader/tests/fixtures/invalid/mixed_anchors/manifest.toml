@@ -1,0 +1,12 @@
+schema_version = 1
+name = "Mixed Anchor Types Pack"
+default_scaling = "Fill"
+fallback_color = "#000000"
+
+[[images]]
+file = "a.png"
+anchor = "sunrise"
+
+[[images]]
+file = "b.png"
+anchor = "12:00"
