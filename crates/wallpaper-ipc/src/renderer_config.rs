@@ -105,6 +105,7 @@ impl RendererConfig {
         Self::get_entry(config).unwrap_or_else(|(_errors, default)| default)
     }
 
+    /// Persist this entry.
     pub fn save(&self, config: &Config) -> Result<(), cosmic_config::Error> {
         self.write_entry(config)
     }

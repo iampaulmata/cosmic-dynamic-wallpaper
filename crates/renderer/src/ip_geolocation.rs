@@ -44,8 +44,10 @@ pub const PUBLIC_IP_CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 /// `portal_location.rs`'s (spec 6 research.md R6): never a tight loop, self-recovers
 /// without the user needing to manually toggle the mode off and on.
 pub const INITIAL_BACKOFF: Duration = Duration::from_secs(30);
+/// The backoff ceiling — never waited longer than this between retries.
 pub const MAX_BACKOFF: Duration = Duration::from_secs(300);
 
+/// The next backoff delay after a failed attempt — doubles, capped at [`MAX_BACKOFF`].
 pub fn next_backoff(current: Duration) -> Duration {
     current.saturating_mul(2).min(MAX_BACKOFF)
 }
@@ -62,11 +64,15 @@ pub const MMDB_SYSTEM_PATH: &str = "/usr/share/dynamic-wallpaper/geoip.mmdb";
 /// (`ip_location`/`ip_status`) is persisted.
 #[derive(Debug, Clone, Copy)]
 pub struct PublicIpCache {
+    /// The last STUN-discovered public IP address.
     pub address: IpAddr,
+    /// When it was discovered — the cache is fresh until [`PUBLIC_IP_CACHE_TTL`] after
+    /// this instant.
     pub resolved_at: Instant,
 }
 
 impl PublicIpCache {
+    /// Whether this cached value is still within [`PUBLIC_IP_CACHE_TTL`] of `now`.
     pub fn is_fresh(&self, now: Instant) -> bool {
         now.saturating_duration_since(self.resolved_at) < PUBLIC_IP_CACHE_TTL
     }
@@ -79,7 +85,10 @@ impl PublicIpCache {
 /// directly).
 #[derive(Debug, Clone)]
 pub enum IpGeoEvent {
+    /// A successful resolution.
     Reading(Location),
+    /// Any resolution failure (STUN discovery or the `.mmdb` lookup), with the
+    /// specific reason.
     Failure(String),
 }
 

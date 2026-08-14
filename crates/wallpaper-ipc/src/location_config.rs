@@ -84,19 +84,24 @@ pub struct LocationConfigEntry {
 }
 
 impl LocationConfigEntry {
+    /// Open the real, user-global location config.
     pub fn open() -> Result<Config, cosmic_config::Error> {
         Config::new(LOCATION_CONFIG_ID, Self::VERSION)
     }
 
+    /// Open a location config rooted at a custom path — test-only.
     #[doc(hidden)]
     pub fn open_at(custom_path: &std::path::Path) -> Result<Config, cosmic_config::Error> {
         Config::with_custom_path(LOCATION_CONFIG_ID, Self::VERSION, custom_path.to_path_buf())
     }
 
+    /// Read the current entry, falling back to the all-default entry if nothing has
+    /// been written yet.
     pub fn load(config: &Config) -> Self {
         Self::get_entry(config).unwrap_or_else(|(_errors, default)| default)
     }
 
+    /// Persist this entry.
     pub fn save(&self, config: &Config) -> Result<(), cosmic_config::Error> {
         self.write_entry(config)
     }
