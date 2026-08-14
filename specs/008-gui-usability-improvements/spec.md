@@ -8,6 +8,15 @@
 
 **Input**: User description: "Need to write new specs to address a few things that I want to update. 1. The users need a way to add/remove Packs from the GUI. 2. The notification about the IP-geolocation should be a hover notification for the user when they hover over the radio button. It should also use proper sentence case. 3. The window should either be appropriately sized to show the "Set Manual Location" button or it should scroll. 4. The assignment tab should show the Pack name, not the location."
 
+## Clarifications
+
+### Session 2026-08-14
+
+- Q: Where should the "pack name" shown on the Assignment page actually come from, given the Packs page doesn't display a human-readable name today either — it currently shows the file path, not the manifest's `name` field? → A: Load each registered pack's manifest `name` field (directories) with a sensible fallback for single-image packs (e.g. filename without extension); also switch the Packs page to show this same name instead of the path, for consistency
+- Q: When a user adds a pack from the Packs page, how should they provide its location — typed path or a native file/folder picker dialog? → A: A button opens the desktop's native file chooser (via the XDG desktop portal) so the user browses to the pack instead of typing a path
+- Q: When a user removes a registered pack from the Packs page, should removal happen immediately on click, or require a confirmation step first? → A: Clicking remove opens a small confirmation dialog ("Remove <pack name>? This cannot be undone.") that the user must confirm before it's removed
+- Q: For touch-only users who can't hover, how should they discover the IP-geolocation disclosure before selecting that option? → A: A small (i) info icon sits next to the IP-geolocation option at all times; tapping/clicking it shows the same disclosure text
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Manage packs without leaving the GUI (Priority: P1)
@@ -28,12 +37,13 @@ run at any point.
 
 **Acceptance Scenarios**:
 
-1. **Given** the Packs page is open, **When** the user provides the location of a valid,
-   well-formed pack and confirms, **Then** the pack appears in the list immediately and is
-   available for assignment elsewhere in the application.
-2. **Given** a pack is already registered, **When** the user selects it and confirms removal,
-   **Then** it disappears from the list immediately and is no longer available for
-   assignment.
+1. **Given** the Packs page is open, **When** the user opens the native file/folder picker,
+   browses to the location of a valid, well-formed pack, and confirms, **Then** the pack
+   appears in the list immediately and is available for assignment elsewhere in the
+   application.
+2. **Given** a pack is already registered, **When** the user selects remove and confirms in
+   the resulting dialog, **Then** it disappears from the list immediately and is no longer
+   available for assignment.
 3. **Given** the user attempts to add a pack whose contents are invalid or malformed,
    **When** they confirm, **Then** the application shows a clear, specific error and the
    pack is not added.
@@ -132,9 +142,9 @@ confirming the Assignment page displays that pack's name rather than its file lo
   scrolled page's individual controls would be difficult to reach? Scrolling remains the
   fallback in every case; the application does not impose a hard minimum window size that
   blocks controls outright.
-- What happens when a user's input device has no hover capability (e.g., touch-only)? The
-  IP-geolocation explanation must remain discoverable through some other visible means, not
-  exclusively through hovering.
+- What happens when a user's input device has no hover capability (e.g., touch-only)? A
+  persistent info icon next to the IP-geolocation option makes the explanation discoverable
+  by tap, not exclusively through hovering.
 - What happens when a pack has no human-readable name available (e.g., a minimally-formed
   pack)? The Assignment page falls back to a clearly-labeled placeholder rather than reverting
   to a raw file location.
@@ -143,10 +153,12 @@ confirming the Assignment page displays that pack's name rather than its file lo
 
 ### Functional Requirements
 
-- **FR-001**: The settings application MUST let users register a new pack by providing its
-  location, without using a separate command-line tool.
+- **FR-001**: The settings application MUST let users register a new pack by browsing to its
+  location with the desktop's native file/folder picker (the XDG desktop portal's file
+  chooser), without using a separate command-line tool or typing a raw path.
 - **FR-002**: The settings application MUST let users remove a registered pack, without
-  using a separate command-line tool.
+  using a separate command-line tool, and MUST require the user to confirm in a dialog before
+  the removal takes effect.
 - **FR-003**: Registering a pack through the settings application MUST behave identically to
   registering the same pack via the existing command-line tool (idempotent for
   already-registered packs, clear and specific errors for invalid packs, no partial
@@ -164,25 +176,37 @@ confirming the Assignment page displays that pack's name rather than its file lo
   unreachable today.
 - **FR-007**: The settings application MUST let a user discover the IP-geolocation
   explanatory message by hovering the IP-geolocation option, before that option is selected.
-- **FR-008**: The IP-geolocation explanatory message MUST remain discoverable for users who
-  cannot hover (e.g., touch-only input), through whatever non-hover presentation the
-  application already uses today or an equivalent.
+- **FR-008**: The settings application MUST also show a persistent, always-visible info icon
+  next to the IP-geolocation option; tapping or clicking it reveals the same explanatory
+  message, so users who cannot hover (e.g., touch-only input) can discover it before
+  selecting that option too.
 - **FR-009**: The IP-geolocation explanatory message MUST be written as a properly
   capitalized, complete sentence.
 - **FR-010**: The Assignment page MUST display each output's assigned pack, and the
   "same pack everywhere" toggle's active pack, by the pack's name rather than its file
-  location.
-- **FR-011**: The Assignment page MUST show a clearly-labeled placeholder for a pack that has
-  no usable name, rather than falling back to a file location.
+  location. The pack's name is its manifest's `name` field for directory-sourced packs, or a
+  derived name (its filename without extension) for single-image packs, which have no
+  manifest.
+- **FR-011**: Any page displaying a pack's name (Assignment, Packs) MUST show a
+  clearly-labeled placeholder for a pack that has no usable name, rather than falling back to
+  a file location.
+- **FR-012**: The Packs page MUST display each registered pack by the same name resolved per
+  FR-010, instead of its file location, for consistency with the Assignment page.
 
 ### Key Entities
 
 - **Pack registration action**: A user-initiated request, from within the settings
   application, to add or remove a known pack — carries the same identity and validation
-  rules already established for the command-line tool's equivalent actions.
+  rules already established for the command-line tool's equivalent actions. Adding a pack is
+  initiated via the native file/folder picker rather than a typed path.
 - **IP-geolocation explanatory message**: The existing disclosure text describing
   IP-geolocation's one external network touchpoint; unchanged in meaning, changed in when
   and how it's presented and in its exact capitalization.
+- **Pack name**: The human-readable label for a registered pack, shown instead of its file
+  location on both the Packs and Assignment pages. Resolved from the pack's manifest `name`
+  field when it has one (directory-sourced packs); derived from the filename (without
+  extension) for single-image packs, which have no manifest; falls back to a clearly-labeled
+  placeholder when neither is usable.
 
 ## Success Criteria *(mandatory)*
 
@@ -205,9 +229,10 @@ confirming the Assignment page displays that pack's name rather than its file lo
 - This feature extends the standalone settings application delivered previously; it does not
   change the command-line tool's already-complete pack management commands, which remain
   fully supported.
-- "The pack's name" refers to the same human-readable name already shown elsewhere in the
-  application's pack browsing view (as opposed to its on-disk file location) — no new naming
-  concept is introduced.
+- "The pack's name" is resolved as defined in Key Entities ("Pack name") — the manifest
+  `name` field, or a filename-derived fallback for single-image packs. The Packs page (not
+  just Assignment) is also updated to show this name instead of a path, per the 2026-08-14
+  clarification.
 - The IP-geolocation disclosure's actual content (what it says about the external touchpoint)
   is unchanged from what was already reviewed and approved previously; this feature only
   changes when/how it's shown and its capitalization.
