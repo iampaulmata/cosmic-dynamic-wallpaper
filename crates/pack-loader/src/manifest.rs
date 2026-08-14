@@ -21,9 +21,14 @@ pub const MAX_SUPPORTED_SCHEMA_VERSION: u32 = 1;
 /// Scaling/fit mode (FR-005) — matches `cosmic-bg`'s existing vocabulary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScalingMode {
+    /// Scale to fill the output, cropping any excess (aspect ratio preserved).
     Fill,
+    /// Scale to fit entirely within the output, letterboxing any gap with
+    /// `fallback_color` (aspect ratio preserved).
     Fit,
+    /// Scale to exactly match the output, ignoring aspect ratio.
     Stretch,
+    /// Center at native size, letterboxing any gap with `fallback_color`.
     Center,
 }
 
@@ -43,9 +48,14 @@ impl ScalingMode {
 /// or `#RRGGBBAA` hex string.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Color {
+    /// Red channel, 0-255.
     pub r: u8,
+    /// Green channel, 0-255.
     pub g: u8,
+    /// Blue channel, 0-255.
     pub b: u8,
+    /// Alpha channel, 0-255 (255 = fully opaque). Defaults to 255 when parsed from a
+    /// 6-hex-digit `#RRGGBB` string with no explicit alpha.
     pub a: u8,
 }
 
@@ -78,8 +88,12 @@ impl Color {
 /// from their raw TOML string forms).
 #[derive(Debug, Clone)]
 pub struct ManifestImage {
+    /// Path to the image file, relative to the pack directory.
     pub file: String,
+    /// When this image becomes active (spec 1's `TimeAnchor`, reused verbatim).
     pub anchor: TimeAnchor,
+    /// Per-image scaling override, if declared (falls back to the pack's
+    /// `default_scaling` otherwise).
     pub scaling: Option<ScalingMode>,
 }
 
@@ -88,11 +102,19 @@ pub struct ManifestImage {
 /// (those checks need the pack directory, which this module doesn't know about).
 #[derive(Debug, Clone)]
 pub struct PackManifest {
+    /// The manifest's declared schema version (checked against
+    /// [`MAX_SUPPORTED_SCHEMA_VERSION`] before this struct is ever constructed).
     pub schema_version: u32,
+    /// Pack display name.
     pub name: String,
+    /// Optional author/license note.
     pub author: Option<String>,
+    /// Pack-level default scaling mode, applied to any image with no per-image
+    /// override.
     pub default_scaling: ScalingMode,
+    /// Fallback fill color for letterboxed edges under `Fit`/`Center` scaling.
     pub fallback_color: Color,
+    /// The pack's images, in manifest order.
     pub images: Vec<ManifestImage>,
 }
 

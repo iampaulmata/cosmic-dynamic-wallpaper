@@ -29,8 +29,11 @@ pub struct LoadedPack {
     /// Display name — from the manifest, or derived from the filename for a static
     /// pack.
     pub name: String,
+    /// Optional author/license note, from the manifest (`None` for a static pack).
     pub author: Option<String>,
+    /// Pack-level default scaling mode (FR-005).
     pub default_scaling: ScalingMode,
+    /// Fallback fill color for letterboxed edges under `Fit`/`Center` scaling (FR-005).
     pub fallback_color: Color,
     /// Spec 1's validated pack — built by handing every resolved `(image id,
     /// TimeAnchor)` pair to [`schedule_engine::WallpaperPack::validate`] (FR-003).

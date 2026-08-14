@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/schedule-engine",
     "crates/pack-loader",
+    "crates/wallpaperctl",
 ]
 
 [workspace.package]
