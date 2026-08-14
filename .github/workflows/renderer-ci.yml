@@ -1,0 +1,61 @@
+name: renderer CI (pure-logic subset)
+
+# Covers only crates/renderer's pure-logic code (assignment resolution, crossfade
+# progress math, config reading/coalescing, the scheduler bridge, D-Bus response
+# mapping) — see crates/renderer/README.md. The Wayland/GPU rendering code this crate
+# doesn't yet implement has no CI job here; when it lands it needs a
+# Weston-headless (or similar) smoke test per research.md R6, tracked separately in
+# specs/003-wallpaper-renderer/tasks.md T044.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "crates/renderer/**"
+      - "crates/schedule-engine/**"
+      - "crates/pack-loader/**"
+      - "Cargo.toml"
+      - ".github/workflows/renderer-ci.yml"
+  pull_request:
+    paths:
+      - "crates/renderer/**"
+      - "crates/schedule-engine/**"
+      - "crates/pack-loader/**"
+      - "Cargo.toml"
+      - ".github/workflows/renderer-ci.yml"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: cargo test
+        run: cargo test --package renderer --all-targets
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: cargo clippy
+        run: cargo clippy --package renderer --all-targets -- -D warnings
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - name: cargo llvm-cov
+        run: cargo llvm-cov --package renderer --fail-under-lines 80

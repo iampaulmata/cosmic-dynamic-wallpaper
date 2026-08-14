@@ -1,0 +1,22 @@
+[package]
+name = "renderer"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Wallpaper renderer daemon (wallpaperd) for the dynamic wallpaper project — pure-logic subset only, see README.md"
+rust-version = "1.97"
+
+[dependencies]
+schedule-engine = { path = "../schedule-engine" }
+pack-loader = { path = "../pack-loader" }
+serde = { version = "1.0", features = ["derive"] }
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+cosmic-config = { git = "https://github.com/pop-os/libcosmic", default-features = false, features = ["macro"] }
+
+[dev-dependencies]
+tempfile = "3.27"
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
