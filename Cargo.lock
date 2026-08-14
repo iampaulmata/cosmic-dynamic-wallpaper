@@ -5898,9 +5898,13 @@ dependencies = [
 name = "wallpaper-settings"
 version = "0.1.0"
 dependencies = [
+ "cosmic-config",
  "libcosmic",
  "pack-loader",
  "schedule-engine",
+ "tempfile",
+ "tracing",
+ "tracing-subscriber",
  "wallpaper-ipc",
 ]
 
