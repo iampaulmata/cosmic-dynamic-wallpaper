@@ -78,5 +78,11 @@ assets = [
     ["target/release/wallpaperd", "usr/bin/", "755"],
     ["target/release/wallpaperctl", "usr/bin/", "755"],
     ["../../packaging/systemd/wallpaperd.service", "usr/lib/systemd/user/wallpaperd.service", "644"],
+    # Bundled starter pack (spec 7 US2, FR-008) — static, checked-in assets (T043,
+    # tools/generate-starter-pack). `wallpaperd`'s own first-run self-registration
+    # (crates/renderer/src/starter_pack.rs) looks for this exact path
+    # (STARTER_PACK_SYSTEM_PATH) — not a postinst script write, see that module's doc
+    # comment for why.
+    ["../../assets/starter-pack/*", "usr/share/dynamic-wallpaper/starter-pack/", "644"],
 ]
 maintainer-scripts = "../../packaging/debian"

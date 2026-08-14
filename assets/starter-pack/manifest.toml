@@ -1,0 +1,37 @@
+schema_version = 1
+name = "Solar Gradient"
+author = "dynamic-wallpaper project — procedurally generated, no photography, CC0"
+default_scaling = "Fill"
+fallback_color = "#05050f"
+
+[[images]]
+file = "01-astronomical-dawn.png"
+anchor = "astronomical_dawn"
+
+[[images]]
+file = "02-civil-dawn.png"
+anchor = "civil_dawn"
+
+[[images]]
+file = "03-sunrise.png"
+anchor = "sunrise"
+
+[[images]]
+file = "04-solar-noon.png"
+anchor = "solar_noon"
+
+[[images]]
+file = "05-sunset.png"
+anchor = "sunset"
+
+[[images]]
+file = "06-civil-dusk.png"
+anchor = "civil_dusk"
+
+[[images]]
+file = "07-astronomical-dusk.png"
+anchor = "astronomical_dusk"
+
+[[images]]
+file = "08-solar-midnight.png"
+anchor = "solar_midnight"
