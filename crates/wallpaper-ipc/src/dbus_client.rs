@@ -12,16 +12,22 @@ use serde::Serialize;
 
 /// Session-bus well-known name (contracts/wallpaperd-dbus-interface.md).
 pub const BUS_NAME: &str = "com.system76.CosmicWallpaper1";
+/// Object path the interface is served at.
 pub const OBJECT_PATH: &str = "/com/system76/CosmicWallpaper1";
+/// D-Bus interface name.
 pub const INTERFACE: &str = "com.system76.CosmicWallpaper1.Daemon";
 
 /// One output's schedule state, as reported by `QueryOutput`/`QueryAll`
 /// (data-model.md `ScheduleQueryResponse`).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct QueryEntry {
+    /// The output's identifier (spec 3's `OutputId` string form, e.g. `"DP-3"`).
     pub output: String,
+    /// Whether this output currently has a pack assigned.
     pub assigned: bool,
+    /// The currently-active image's id, or empty if unassigned.
     pub active_image: String,
+    /// RFC 3339 timestamp of the next scheduled transition, or empty if none.
     pub next_transition_at: String,
 }
 
@@ -34,7 +40,10 @@ pub enum DbusError {
     /// safer default for any failure that isn't specifically an unmanaged-output error.
     DaemonUnreachable,
     /// The daemon is reachable but doesn't currently manage the named output.
-    OutputNotFound { id: String },
+    OutputNotFound {
+        /// The unmanaged output name that was requested.
+        id: String,
+    },
 }
 
 impl fmt::Display for DbusError {
