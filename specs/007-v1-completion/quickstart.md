@@ -75,6 +75,21 @@ Disconnecting the network before enabling should instead show `ip_status: unavai
 `location get` falling back to any stored manual value or the existing no-location state, exactly
 as it does for spec 6's portal mode.
 
+**Confirmed live during implementation (2026-08-14), the STUN half specifically**: a genuine
+`discover_public_ip_blocking()` round trip against the real default STUN server
+(`stun.l.google.com:19302`) correctly returned this dev machine's real public IP — via a
+throwaway `crates/renderer/examples/stun_smoke.rs` harness, deleted after use. **A real bug was
+found and fixed doing this**: this machine's DNS resolves the STUN server to an IPv6 address
+first; the original implementation bound an IPv4-only wildcard socket, so a naive
+`.to_socket_addrs().next()` silently picked the IPv6 result and failed with an opaque "UDP socket
+error" (an address-family mismatch, not a network problem, and not the kind of thing a fixture
+test would catch — this specific failure mode only exists against real DNS). Fixed to prefer an
+IPv4 result when one exists and bind accordingly; re-verified live after the fix. The database
+half (a real bundled DB-IP Lite lookup) remains unverified in this dev environment — no `.mmdb`
+is present locally (it's a release-process download, `crates/renderer/README.md`'s
+"IP-geolocation database" section, not something available during implementation) — the fixture
+test suite (`ip_geolocation.rs`) is what closes SC coverage for the lookup logic itself.
+
 ## What "done" looks like for this spec
 
 See spec.md's Success Criteria (SC-001–SC-006). `cargo test --workspace` closes SC-004 (hotplug/

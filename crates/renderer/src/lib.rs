@@ -13,6 +13,7 @@ pub mod dbus_service;
 pub mod dbus_types;
 pub mod error;
 pub mod gpu;
+pub mod ip_geolocation;
 pub mod output;
 pub mod portal_location;
 pub mod scheduler_bridge;
