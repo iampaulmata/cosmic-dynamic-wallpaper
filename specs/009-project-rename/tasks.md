@@ -77,11 +77,11 @@ re-touch line 1; only the remaining old-name references below are outstanding.
       (research.md R1 scope)
 - [X] T006 [P] [US1] Update `docs/pack-manifest-schema.md` to use the new project name
       throughout (research.md R1 scope)
-- [ ] T007 [US1] Rename the GitHub repository from `rust-dynamic-wallpaper` to
+- [X] T007 [US1] Rename the GitHub repository from `rust-dynamic-wallpaper` to
       `cosmic-dynamic-wallpaper` — manual step via GitHub's own Settings UI; this
       environment has no `gh`/API write access (research.md R6). **Requires explicit
       user confirmation immediately before doing it.**
-- [ ] T008 [US1] Update the local `origin` git remote URL to the renamed repository
+- [X] T008 [US1] Update the local `origin` git remote URL to the renamed repository
       (depends on T007)
 - [ ] T009 [US1] Rename the local project folder from `dynamic-wallpaper` to
       `cosmic-dynamic-wallpaper` (research.md R7). **Do this last, after every other
