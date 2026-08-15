@@ -48,6 +48,8 @@ fn us1_scenario1_mid_period_resolution() {
     let result = pack.query(Some(&loc), at, crossfade);
     assert_eq!(result.active_before.as_str(), "noon_img");
     assert!(result.transition.is_none());
+    // The image that will be active once `next_transition_at` (sunset) arrives.
+    assert_eq!(result.next_image.as_ref().map(|i| i.as_str()), Some("sunset_img"));
 }
 
 /// Scenario 2: an image anchored to `civil_dawn - 30m`, queried at exactly that offset
@@ -74,6 +76,9 @@ fn us1_scenario2_offset_anchor_transition_start() {
     assert_eq!(transition.incoming.as_str(), "dawn_offset");
     assert_eq!(transition.outgoing.as_str(), "before");
     assert!(transition.progress.abs() < 1e-9, "progress should be ~0.0, was {}", transition.progress);
+    // Mid-transition, `next_image` is the incoming image — the one becoming fully
+    // active once `next_transition_at` (this transition's end) arrives.
+    assert_eq!(result.next_image.as_ref().map(|i| i.as_str()), Some("dawn_offset"));
 }
 
 /// Scenario 3: a timestamp inside a crossfade window reports outgoing, incoming, and a
@@ -183,6 +188,7 @@ fn us2_scenario1_clock_resolution() {
     let result = pack.query(None, at, TimeDelta::minutes(5));
     assert_eq!(result.active_before.as_str(), "b");
     assert!(result.transition.is_none());
+    assert_eq!(result.next_image.as_ref().map(|i| i.as_str()), Some("c"));
 }
 
 /// Scenario 2: a clock-only pack returns a valid result with `location: None` — no
@@ -262,6 +268,7 @@ fn single_image_pack_is_always_active_with_no_transition() {
         assert_eq!(result.active_before.as_str(), "only");
         assert!(result.transition.is_none());
         assert!(result.next_transition_at.is_none());
+        assert!(result.next_image.is_none(), "no next image for a pack that never transitions");
     }
     assert!(pack.next_transition_after(None, local_at(jan1_2016(), 6, 0)).is_none());
 }
