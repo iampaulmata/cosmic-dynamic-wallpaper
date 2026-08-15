@@ -3,7 +3,7 @@
 A pure, deterministic Rust library that answers one question: **given a wallpaper pack and
 an instant in time, which image is active, and how far through a crossfade are we?**
 
-It is the foundation crate of the COSMIC dynamic-wallpaper daemon (specs 2–4 in
+It is the foundation crate of the Cosmic Dynamic Wallpaper daemon (specs 2–4 in
 `docs/PRD.md`'s breakdown build on top of it) and is fully unit-testable standalone — no
 Wayland session, GPU, or network access required.
 

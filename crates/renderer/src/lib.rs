@@ -1,7 +1,8 @@
-//! `renderer` — the wallpaper renderer daemon (`wallpaperd`) for the dynamic wallpaper
-//! project. Implements the pure-logic subset (`output`, `crossfade`'s progress math,
-//! `config`, `scheduler_bridge`, `dbus_types`) plus a real Wayland/GPU rendering path
-//! (`gpu`, `texture`, `crossfade`'s pipeline, `surface`, the `wallpaperd` binary) and a
+//! `renderer` — the wallpaper renderer daemon (`cosmic-wallpaperd`) for the Cosmic
+//! Dynamic Wallpaper project. Implements the pure-logic subset (`output`, `crossfade`'s
+//! progress math, `config`, `scheduler_bridge`, `dbus_types`) plus a real Wayland/GPU
+//! rendering path (`gpu`, `texture`, `crossfade`'s pipeline, `surface`, the
+//! `cosmic-wallpaperd` binary) and a
 //! live D-Bus service (`dbus_service`) — see `README.md` for exactly what's
 //! implemented, what's simplified, and what's still open (hotplug resize handling,
 //! non-Fill scaling modes).

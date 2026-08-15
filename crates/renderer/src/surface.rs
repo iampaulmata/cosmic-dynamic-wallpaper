@@ -198,7 +198,7 @@ impl WallpaperDaemon {
             &self.qh,
             wl_surface.clone(),
             Layer::Background,
-            Some("dynamic-wallpaper"),
+            Some("cosmic-dynamic-wallpaper"),
             Some(&wl_output),
         );
         layer.set_anchor(Anchor::all());

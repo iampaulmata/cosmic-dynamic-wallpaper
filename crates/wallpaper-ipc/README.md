@@ -1,6 +1,6 @@
 # wallpaper-ipc
 
-Shared `cosmic-config` schema types and D-Bus client for the dynamic wallpaper project
+Shared `cosmic-config` schema types and D-Bus client for the Cosmic Dynamic Wallpaper project
 (spec 7 research.md R2, contracts/wallpaper-ipc-crate.md) — the single source of truth
 `crates/renderer`, `crates/wallpaperctl`, and `crates/wallpaper-settings` all depend on,
 replacing three independently-defined copies of the same shapes.

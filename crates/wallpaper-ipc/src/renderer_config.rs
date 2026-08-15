@@ -16,7 +16,12 @@ use serde::{Deserialize, Serialize};
 use pack_loader::PackSource;
 
 /// `cosmic-config` application id for [`RendererConfig`] — shared by every reader/writer.
-pub const RENDERER_CONFIG_ID: &str = "com.system76.CosmicWallpaper.Renderer";
+pub const RENDERER_CONFIG_ID: &str = "com.system76.CosmicDynamicWallpaper.Renderer";
+
+/// The pre-rename application id (spec 009-project-rename, FR-004a) —
+/// [`RendererConfig::migrate_from_old_app_id`] reads this once so an existing
+/// installation's settings survive the rename, never written to again afterward.
+const OLD_RENDERER_CONFIG_ID: &str = "com.system76.CosmicWallpaper.Renderer";
 
 /// A stable identifier for a physical Wayland output, derived from `xdg-output`'s
 /// reported connector name (e.g. `"eDP-1"`, `"DP-3"`) — data-model.md `OutputId`.
@@ -108,6 +113,38 @@ impl RendererConfig {
     /// Persist this entry.
     pub fn save(&self, config: &Config) -> Result<(), cosmic_config::Error> {
         self.write_entry(config)
+    }
+
+    /// Load `new_config`, migrating forward from the pre-rename application id
+    /// (spec 009-project-rename, FR-004a/contracts/config-migration.md) if nothing has
+    /// been written under the new id yet. Use this in place of a bare [`Self::load`] at
+    /// every startup call site — see `contracts/config-migration.md` for the full
+    /// behavior contract (idempotent, never mutates the old store, a fresh install with
+    /// no old store at all is a silent no-op, not an error).
+    pub fn migrate_from_old_app_id(new_config: &Config) -> Self {
+        Self::migrate_core(new_config, Config::new(OLD_RENDERER_CONFIG_ID, Self::VERSION))
+    }
+
+    /// The pure migration core, taking both handles already open — split out from
+    /// [`Self::migrate_from_old_app_id`] purely so tests can construct the old handle
+    /// via [`Self::open_at`]'s custom-path equivalent instead of the real,
+    /// well-known system path `Config::new` always resolves to.
+    fn migrate_core(new_config: &Config, old_config: Result<Config, cosmic_config::Error>) -> Self {
+        let current = Self::load(new_config);
+        if current != Self::default() {
+            return current; // already migrated, or configured fresh under the new id
+        }
+        let Ok(old_config) = old_config else {
+            return current; // no old store at all — fresh install, not an error
+        };
+        let old = Self::load(&old_config);
+        if old == Self::default() {
+            return current; // old install existed but was never actually configured
+        }
+        // Best-effort: a write failure here just means the next call retries the same
+        // migration (the old store is never mutated, so nothing is lost either way).
+        let _ = old.save(new_config);
+        old
     }
 }
 
@@ -260,5 +297,83 @@ mod tests {
         std::fs::write(&overrides_path, r#"{}"#).unwrap();
 
         assert_eq!(RendererConfig::load(&config).crossfade_duration_secs, 45);
+    }
+
+    /// contracts/config-migration.md's 4 required test cases, applied to
+    /// `RendererConfig`.
+    mod migration {
+        use super::*;
+
+        fn old_config(root: &std::path::Path) -> Config {
+            Config::with_custom_path(OLD_RENDERER_CONFIG_ID, RendererConfig::VERSION, root.to_path_buf()).unwrap()
+        }
+
+        fn new_config(root: &std::path::Path) -> Config {
+            Config::with_custom_path(RENDERER_CONFIG_ID, RendererConfig::VERSION, root.to_path_buf()).unwrap()
+        }
+
+        #[test]
+        fn migrates_real_content_and_is_idempotent_on_a_second_call() {
+            let dir = tempfile::tempdir().unwrap();
+            let old = old_config(dir.path());
+            let mut written = RendererConfig::load(&old);
+            written.same_pack_everywhere = Some(source("/old.jpg"));
+            written.save(&old).unwrap();
+
+            let new = new_config(dir.path());
+            let migrated = RendererConfig::migrate_core(&new, Ok(old_config(dir.path())));
+            assert_eq!(migrated.same_pack_everywhere, Some(source("/old.jpg")));
+            assert_eq!(RendererConfig::load(&new).same_pack_everywhere, Some(source("/old.jpg")));
+
+            // Idempotent: a second call sees the new store already populated.
+            let migrated_again = RendererConfig::migrate_core(&new, Ok(old_config(dir.path())));
+            assert_eq!(migrated_again, migrated);
+        }
+
+        /// `cosmic_config::Config::new`/`with_custom_path` create their directory on
+        /// open rather than failing when it doesn't exist yet, so opening the old
+        /// store essentially always succeeds even on a genuinely fresh install — the
+        /// real "nothing to migrate" signal is `load()` returning `Default`, covered
+        /// by the sibling test below. This test instead covers the `Err` branch itself
+        /// (a real open failure, e.g. an invalid application id) to prove it degrades
+        /// to the same no-op rather than panicking.
+        #[test]
+        fn a_failed_old_config_open_is_a_silent_no_op() {
+            let dir = tempfile::tempdir().unwrap();
+            let new = new_config(dir.path());
+            let invalid_open = Config::with_custom_path("../invalid", RendererConfig::VERSION, dir.path().to_path_buf());
+            assert!(invalid_open.is_err(), "fixture assumption: this name is rejected by cosmic-config");
+
+            let result = RendererConfig::migrate_core(&new, invalid_open);
+            assert_eq!(result, RendererConfig::default());
+        }
+
+        #[test]
+        fn old_store_exists_but_was_never_configured_stays_default() {
+            let dir = tempfile::tempdir().unwrap();
+            let _ = old_config(dir.path()); // opened, but nothing ever written to it
+            let new = new_config(dir.path());
+
+            let result = RendererConfig::migrate_core(&new, Ok(old_config(dir.path())));
+            assert_eq!(result, RendererConfig::default());
+            assert_eq!(RendererConfig::load(&new), RendererConfig::default());
+        }
+
+        #[test]
+        fn new_store_already_populated_never_consults_the_old_one() {
+            let dir = tempfile::tempdir().unwrap();
+            let old = old_config(dir.path());
+            let mut old_entry = RendererConfig::load(&old);
+            old_entry.same_pack_everywhere = Some(source("/old.jpg"));
+            old_entry.save(&old).unwrap();
+
+            let new = new_config(dir.path());
+            let mut new_entry = RendererConfig::load(&new);
+            new_entry.same_pack_everywhere = Some(source("/already-configured.jpg"));
+            new_entry.save(&new).unwrap();
+
+            let result = RendererConfig::migrate_core(&new, Ok(old_config(dir.path())));
+            assert_eq!(result.same_pack_everywhere, Some(source("/already-configured.jpg")));
+        }
     }
 }

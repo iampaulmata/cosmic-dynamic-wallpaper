@@ -1,6 +1,6 @@
 # Wallpaper Pack Manifest Schema
 
-This document describes the `manifest.toml` format for a dynamic-wallpaper pack. It's
+This document describes the `manifest.toml` format for a Cosmic Dynamic Wallpaper pack. It's
 written for pack authors — you don't need to read this project's source code or know
 Rust to hand-author a valid pack.
 

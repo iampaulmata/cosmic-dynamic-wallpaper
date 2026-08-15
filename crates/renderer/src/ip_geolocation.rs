@@ -57,7 +57,7 @@ pub fn next_backoff(current: Duration) -> Duration {
 /// committed to this repository or built at compile/test time. Not present at all in a
 /// dev/`cargo run` environment or this project's own CI — handled gracefully (a
 /// resolution failure, not a crash), same posture as `starter_pack.rs`'s system path.
-pub const MMDB_SYSTEM_PATH: &str = "/usr/share/dynamic-wallpaper/geoip.mmdb";
+pub const MMDB_SYSTEM_PATH: &str = "/usr/share/cosmic-dynamic-wallpaper/geoip.mmdb";
 
 /// In-memory-only cache of the last STUN-discovered public IP (data-model.md) — never
 /// written to `cosmic-config`; only the subsequent database lookup's *result*
