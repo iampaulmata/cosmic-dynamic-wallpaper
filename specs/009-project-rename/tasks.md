@@ -223,9 +223,9 @@ empty. No dependency on US1 or US2.
 - [X] T031 Run `cargo deb -p renderer --no-build` and validate the produced `.deb`
       against `quickstart.md`'s SC-003 section (correct filename, correct binary/
       desktop/unit paths inside it)
-- [ ] T032 Execute `quickstart.md`'s SC-005 package-supersession scenario end to end on
+- [X] T032 Execute `quickstart.md`'s SC-005 package-supersession scenario end to end on
       this dev machine (it already has the old package installed and enabled)
-- [ ] T033 Execute `quickstart.md`'s SC-004 migration scenario end to end, confirming
+- [X] T033 Execute `quickstart.md`'s SC-004 migration scenario end to end, confirming
       the location/packs/assignment configured under the old identifiers survive the
       upgrade untouched
 - [X] T034 [P] Prepare a new beta version/release notes for the renamed build, following
