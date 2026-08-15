@@ -14,7 +14,15 @@ use schedule_engine::Location;
 
 /// `cosmic-config` application id for [`LocationConfigEntry`] — shared by every
 /// reader/writer.
-pub const LOCATION_CONFIG_ID: &str = "com.system76.CosmicWallpaper.Location";
+pub const LOCATION_CONFIG_ID: &str = "com.system76.CosmicDynamicWallpaper.Location";
+
+/// The pre-rename application id (spec 009-project-rename, FR-004a) —
+/// [`LocationConfigEntry::migrate_from_old_app_id`] reads this once so an existing
+/// installation's settings survive the rename, never written to again afterward. Reads
+/// at `Self::VERSION` (3), so this composes with — rather than bypasses —
+/// `cosmic-config`'s own existing v2→v3 migration for whatever's already on disk under
+/// the old id.
+const OLD_LOCATION_CONFIG_ID: &str = "com.system76.CosmicWallpaper.Location";
 
 /// Which source [`effective_location`] should resolve from. Default `Manual` —
 /// automatic/IP-geolocation modes are opt-in, never implicit (spec 6 FR-002, spec 7
@@ -104,6 +112,38 @@ impl LocationConfigEntry {
     /// Persist this entry.
     pub fn save(&self, config: &Config) -> Result<(), cosmic_config::Error> {
         self.write_entry(config)
+    }
+
+    /// Load `new_config`, migrating forward from the pre-rename application id
+    /// (spec 009-project-rename, FR-004a/contracts/config-migration.md) if nothing has
+    /// been written under the new id yet. Use this in place of a bare [`Self::load`] at
+    /// every startup call site — see `contracts/config-migration.md` for the full
+    /// behavior contract (idempotent, never mutates the old store, a fresh install with
+    /// no old store at all is a silent no-op, not an error).
+    pub fn migrate_from_old_app_id(new_config: &Config) -> Self {
+        Self::migrate_core(new_config, Config::new(OLD_LOCATION_CONFIG_ID, Self::VERSION))
+    }
+
+    /// The pure migration core, taking both handles already open — split out from
+    /// [`Self::migrate_from_old_app_id`] purely so tests can construct the old handle
+    /// via [`Self::open_at`]'s custom-path equivalent instead of the real,
+    /// well-known system path `Config::new` always resolves to.
+    fn migrate_core(new_config: &Config, old_config: Result<Config, cosmic_config::Error>) -> Self {
+        let current = Self::load(new_config);
+        if current != Self::default() {
+            return current; // already migrated, or configured fresh under the new id
+        }
+        let Ok(old_config) = old_config else {
+            return current; // no old store at all — fresh install, not an error
+        };
+        let old = Self::load(&old_config);
+        if old == Self::default() {
+            return current; // old install existed but was never actually configured
+        }
+        // Best-effort: a write failure here just means the next call retries the same
+        // migration (the old store is never mutated, so nothing is lost either way).
+        let _ = old.save(new_config);
+        old
     }
 }
 
@@ -342,5 +382,72 @@ mod tests {
             ..LocationConfigEntry::default()
         };
         assert_eq!(effective_location(&entry), Some(automatic));
+    }
+
+    /// contracts/config-migration.md's 4 required test cases, applied to
+    /// `LocationConfigEntry`.
+    mod migration {
+        use super::*;
+
+        fn old_config(root: &std::path::Path) -> Config {
+            Config::with_custom_path(OLD_LOCATION_CONFIG_ID, LocationConfigEntry::VERSION, root.to_path_buf()).unwrap()
+        }
+
+        fn new_config(root: &std::path::Path) -> Config {
+            Config::with_custom_path(LOCATION_CONFIG_ID, LocationConfigEntry::VERSION, root.to_path_buf()).unwrap()
+        }
+
+        #[test]
+        fn migrates_real_content_and_is_idempotent_on_a_second_call() {
+            let dir = tempfile::tempdir().unwrap();
+            let loc = Location::new(45.5019, -73.5674).unwrap();
+            let old = old_config(dir.path());
+            LocationConfigEntry { mode: LocationMode::Manual, location: Some(loc), ..LocationConfigEntry::default() }.save(&old).unwrap();
+
+            let new = new_config(dir.path());
+            let migrated = LocationConfigEntry::migrate_core(&new, Ok(old_config(dir.path())));
+            assert_eq!(migrated.location, Some(loc));
+            assert_eq!(LocationConfigEntry::load(&new).location, Some(loc));
+
+            let migrated_again = LocationConfigEntry::migrate_core(&new, Ok(old_config(dir.path())));
+            assert_eq!(migrated_again, migrated);
+        }
+
+        #[test]
+        fn a_failed_old_config_open_is_a_silent_no_op() {
+            let dir = tempfile::tempdir().unwrap();
+            let new = new_config(dir.path());
+            let invalid_open = Config::with_custom_path("../invalid", LocationConfigEntry::VERSION, dir.path().to_path_buf());
+            assert!(invalid_open.is_err(), "fixture assumption: this name is rejected by cosmic-config");
+
+            let result = LocationConfigEntry::migrate_core(&new, invalid_open);
+            assert_eq!(result, LocationConfigEntry::default());
+        }
+
+        #[test]
+        fn old_store_exists_but_was_never_configured_stays_default() {
+            let dir = tempfile::tempdir().unwrap();
+            let _ = old_config(dir.path());
+            let new = new_config(dir.path());
+
+            let result = LocationConfigEntry::migrate_core(&new, Ok(old_config(dir.path())));
+            assert_eq!(result, LocationConfigEntry::default());
+            assert_eq!(LocationConfigEntry::load(&new), LocationConfigEntry::default());
+        }
+
+        #[test]
+        fn new_store_already_populated_never_consults_the_old_one() {
+            let dir = tempfile::tempdir().unwrap();
+            let old_loc = Location::new(45.5019, -73.5674).unwrap();
+            let old = old_config(dir.path());
+            LocationConfigEntry { location: Some(old_loc), ..LocationConfigEntry::default() }.save(&old).unwrap();
+
+            let already_configured = Location::new(51.5072, -0.1276).unwrap();
+            let new = new_config(dir.path());
+            LocationConfigEntry { location: Some(already_configured), ..LocationConfigEntry::default() }.save(&new).unwrap();
+
+            let result = LocationConfigEntry::migrate_core(&new, Ok(old_config(dir.path())));
+            assert_eq!(result.location, Some(already_configured));
+        }
     }
 }

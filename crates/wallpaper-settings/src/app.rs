@@ -70,7 +70,7 @@ fn open_location_config_or_exit() -> cosmic_config::Config {
 
 impl App {
     fn refresh_assignment(&mut self) {
-        let renderer_config = RendererConfig::load(&self.renderer_config_store);
+        let renderer_config = RendererConfig::migrate_from_old_app_id(&self.renderer_config_store);
         let known_outputs = wallpaper_ipc::DbusClient::connect().and_then(|c| c.query_all()).map(|entries| entries.into_iter().map(|e| e.output).collect()).unwrap_or_default();
         let available_packs = self.pack_registry.known_packs().into_iter().map(|e| e.source).collect();
         self.assignment = pages::assignment::State { known_outputs, available_packs, current_config: renderer_config };
@@ -81,8 +81,8 @@ impl App {
     /// location every other page already loads independently — read fresh here rather
     /// than threading a stale copy through.
     fn load_timeline(&self) -> pages::timeline::State {
-        let renderer_config = RendererConfig::load(&self.renderer_config_store);
-        let location = effective_location(&LocationConfigEntry::load(&self.location_config_store));
+        let renderer_config = RendererConfig::migrate_from_old_app_id(&self.renderer_config_store);
+        let location = effective_location(&LocationConfigEntry::migrate_from_old_app_id(&self.location_config_store));
         pages::timeline::State::load(renderer_config, location)
     }
 
@@ -90,9 +90,9 @@ impl App {
         match self.nav_model.active_data::<Page>().copied() {
             Some(Page::Packs) => self.packs = pages::packs::State::load(&mut self.pack_registry),
             Some(Page::Assignment) => self.refresh_assignment(),
-            Some(Page::Location) => self.location = pages::location::State::load(LocationConfigEntry::load(&self.location_config_store)),
+            Some(Page::Location) => self.location = pages::location::State::load(LocationConfigEntry::migrate_from_old_app_id(&self.location_config_store)),
             Some(Page::Timeline) => self.timeline = self.load_timeline(),
-            Some(Page::Crossfade) => self.crossfade = pages::crossfade::State { current_config: RendererConfig::load(&self.renderer_config_store) },
+            Some(Page::Crossfade) => self.crossfade = pages::crossfade::State { current_config: RendererConfig::migrate_from_old_app_id(&self.renderer_config_store) },
             None => {}
         }
     }
@@ -103,7 +103,7 @@ impl cosmic::Application for App {
     type Flags = ();
     type Message = Message;
 
-    const APP_ID: &'static str = "com.system76.CosmicWallpaperSettings";
+    const APP_ID: &'static str = "com.system76.CosmicDynamicWallpaperSettings";
 
     fn core(&self) -> &Core {
         &self.core
@@ -127,12 +127,12 @@ impl cosmic::Application for App {
         let location_config_store = open_location_config_or_exit();
 
         let packs = pages::packs::State::load(&mut pack_registry);
-        let renderer_config = RendererConfig::load(&renderer_config_store);
+        let renderer_config = RendererConfig::migrate_from_old_app_id(&renderer_config_store);
         let known_outputs = wallpaper_ipc::DbusClient::connect().and_then(|c| c.query_all()).map(|entries| entries.into_iter().map(|e| e.output).collect()).unwrap_or_default();
         let available_packs = pack_registry.known_packs().into_iter().map(|e| e.source).collect();
         let assignment = pages::assignment::State { known_outputs, available_packs, current_config: renderer_config.clone() };
-        let location = pages::location::State::load(LocationConfigEntry::load(&location_config_store));
-        let timeline_location = effective_location(&LocationConfigEntry::load(&location_config_store));
+        let location = pages::location::State::load(LocationConfigEntry::migrate_from_old_app_id(&location_config_store));
+        let timeline_location = effective_location(&LocationConfigEntry::migrate_from_old_app_id(&location_config_store));
         let timeline = pages::timeline::State::load(renderer_config.clone(), timeline_location);
         let crossfade = pages::crossfade::State { current_config: renderer_config };
 

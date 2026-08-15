@@ -1,6 +1,6 @@
 # wallpaper-settings
 
-Standalone `libcosmic` settings GUI for the dynamic wallpaper daemon (spec 7 US1,
+Standalone `libcosmic` settings GUI for the Cosmic Dynamic Wallpaper daemon (spec 7 US1,
 contracts/gui-application.md) — the CLI (`wallpaperctl`) remains fully supported
 alongside it, not replaced.
 

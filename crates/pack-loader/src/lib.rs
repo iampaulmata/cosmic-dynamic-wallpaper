@@ -1,4 +1,4 @@
-//! Pack manifest parsing and loading for the dynamic wallpaper daemon.
+//! Pack manifest parsing and loading for the Cosmic Dynamic Wallpaper daemon.
 //!
 //! Turns a directory (manifest + images) or a single image file into a fully validated
 //! [`LoadedPack`] that spec 1's scheduling engine and spec 3's renderer can consume. See

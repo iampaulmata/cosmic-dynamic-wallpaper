@@ -24,7 +24,7 @@ use crate::output::RendererConfig;
 /// The well-known system path the bundled starter pack's static assets are installed
 /// to. Not present at all in a dev/`cargo run` environment — handled gracefully below
 /// (`PackSource::resolve` failing on a missing path), not an error.
-pub const STARTER_PACK_SYSTEM_PATH: &str = "/usr/share/dynamic-wallpaper/starter-pack";
+pub const STARTER_PACK_SYSTEM_PATH: &str = "/usr/share/cosmic-dynamic-wallpaper/starter-pack";
 
 /// Register and assign the bundled starter pack if this looks like a genuinely fresh
 /// install (FR-008) — never if the user has explicitly removed it before (FR-010,

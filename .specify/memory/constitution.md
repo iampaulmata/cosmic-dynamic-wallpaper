@@ -1,45 +1,27 @@
 <!--
 Sync Impact Report
 ==================
-Version change: [TEMPLATE] → 1.0.0 (initial ratification)
-Rationale for MAJOR: First concrete adoption of the constitution — all core principles,
-technology constraints, and governance rules are being defined from an unfilled template.
+Version change: 1.0.0 → 1.0.1 (PATCH — wording only)
+Rationale for PATCH: Project rename to "Cosmic Dynamic Wallpaper" (spec
+009-project-rename, FR-001/FR-005). No principle is added, removed, or redefined, and
+no governance rule changes in substance — only the document title and the Governance
+section's project-slug reference are updated to match the renamed repository/package
+(`cosmic-dynamic-wallpaper`, per specs/009-project-rename/contracts/
+identifier-rename-map.md).
 
-Modified principles: N/A (initial creation; no prior named principles existed)
+Modified principles: none (wording-only change, no principle text touched)
 
-Added sections:
-  - Core Principles I–XI (all new):
-      I.    Independent Renderer, Exclusive Ownership of Managed Outputs
-      II.   Wayland-Native, No X11 Fallbacks
-      III.  GPU-Accelerated Crossfade, Not Per-Frame CPU Blending
-      IV.   Settings Live in cosmic-config, Not a Bespoke Format
-      V.    Solar/Time Logic Is Pure, Deterministic, and Unit-Tested
-      VI.   Two Scheduling Modes: Idle-Wait and Active-Transition
-      VII.  Per-Output Correctness Under Hotplug and Scaling — Fully Owned, Not Inherited
-      VIII. Failures Are Contained, Never Fatal
-      IX.   Native COSMIC Look and Feel for Any UI Surface
-      X.    Config Schema Is Versioned With a Migration Path
-      XI.   Session Integration, Including Cleanly Superseding cosmic-bg
-  - Technology Stack Constraints (new Section 2)
-  - Development Workflow & Quality Gates (new Section 3)
-  - Governance (amendment procedure, versioning policy, compliance review)
+Added sections: none
 
-Removed sections: none (template placeholders only)
+Removed sections: none
 
-Templates requiring follow-up review:
-  - .specify/templates/plan-template.md — verify its Constitution Check gate references
-    principle names/numbers used here (not yet reviewed in this session; flag for next
-    /speckit-plan run).
-  - .specify/templates/spec-template.md — no constitution-specific placeholders expected;
-    low risk.
-  - .specify/templates/tasks-template.md — no constitution-specific placeholders expected;
-    low risk.
-  - README.md / docs — none exist yet in this repo; no update needed.
+Templates requiring follow-up review: none — this amendment doesn't touch anything a
+template's Constitution Check gate references (principle names/numbers are unchanged).
 
-Deferred placeholders: none. All bracketed tokens from the template have been resolved.
+Deferred placeholders: none.
 -->
 
-# Dynamic Wallpaper Constitution
+# Cosmic Dynamic Wallpaper Constitution
 
 ## Core Principles
 
@@ -239,8 +221,9 @@ logout/login and does not autostart — fails the basic use case the whole proje
 ## Governance
 
 This constitution supersedes all other project practices, conventions, and prior informal
-agreements for the `dynamic-wallpaper` project. Where a plan, PR, or design doc conflicts
-with a principle here, the principle wins unless the constitution itself is amended first.
+agreements for the `cosmic-dynamic-wallpaper` project. Where a plan, PR, or design doc
+conflicts with a principle here, the principle wins unless the constitution itself is
+amended first.
 
 **Amendment procedure**: Amendments are proposed as a change to this file (via
 `/speckit-constitution` or an equivalent reviewed PR), must include an updated Sync Impact
@@ -261,4 +244,4 @@ mechanical enforcement point). Complexity or deviation from a principle MUST be 
 the plan's Complexity Tracking section, not silently absorbed. Reviewers treat unresolved
 conflicts with this constitution as blocking, not advisory.
 
-**Version**: 1.0.0 | **Ratified**: 2026-08-11 | **Last Amended**: 2026-08-11
+**Version**: 1.0.1 | **Ratified**: 2026-08-11 | **Last Amended**: 2026-08-15

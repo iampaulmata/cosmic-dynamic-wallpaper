@@ -1,18 +1,18 @@
 # wallpaperctl
 
-The CLI control surface for the dynamic wallpaper daemon (contracts/wallpaperctl-cli.md)
+The CLI control surface for the Cosmic Dynamic Wallpaper daemon (contracts/wallpaperctl-cli.md)
 — the only settings surface until a future GUI exists (constitution Principle IX).
 
 ```sh
-wallpaperctl register <path>                          # directory (manifest pack) or single image file
-wallpaperctl list packs
-wallpaperctl list outputs
-wallpaperctl remove <pack-source>
-wallpaperctl assign --output <output-id> <pack-source>
-wallpaperctl assign --same-everywhere <pack-source>
-wallpaperctl location get|set <lat> <lon>|clear|auto|manual
-wallpaperctl query [--output <output-id>]
-wallpaperctl reevaluate [--output <output-id>]
+cosmic-wallpaperctl register <path>                          # directory (manifest pack) or single image file
+cosmic-wallpaperctl list packs
+cosmic-wallpaperctl list outputs
+cosmic-wallpaperctl remove <pack-source>
+cosmic-wallpaperctl assign --output <output-id> <pack-source>
+cosmic-wallpaperctl assign --same-everywhere <pack-source>
+cosmic-wallpaperctl location get|set <lat> <lon>|clear|auto|manual
+cosmic-wallpaperctl query [--output <output-id>]
+cosmic-wallpaperctl reevaluate [--output <output-id>]
 ```
 
 Add `--json` to any command for machine-readable output (FR-013).
@@ -29,7 +29,7 @@ running:
 
 The daemon-required column has no persisted record to fall back on — "which outputs
 exist" and "what's currently active" are live daemon state, not config. Those three
-commands connect to `wallpaperd` over D-Bus (`com.system76.CosmicWallpaper1`,
+commands connect to `wallpaperd` over D-Bus (`com.system76.CosmicDynamicWallpaper1`,
 contracts/wallpaperd-dbus-interface.md) and fail immediately with a clear
 "daemon unreachable" error (exit code 2) if it isn't running — never a hang.
 

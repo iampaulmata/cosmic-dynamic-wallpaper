@@ -44,31 +44,31 @@ This project differs from prior art in three ways:
 ### Download a release (recommended)
 
 Pre-built `.deb` packages are published on this repository's
-**[Releases page](https://github.com/iampaulmata/rust-dynamic-wallpaper/releases)**. To
+**[Releases page](https://github.com/iampaulmata/cosmic-dynamic-wallpaper/releases)**. To
 install the latest one:
 
 ```sh
 # Download the .deb from the Releases page above, then:
 
-sudo apt install ./dynamic-wallpaper_*.deb
+sudo apt install ./cosmic-dynamic-wallpaper_*.deb
 ```
 
-`wallpaperd` then autostarts with your COSMIC session via the bundled systemd user unit — every
+`cosmic-wallpaperd` then autostarts with your COSMIC session via the bundled systemd user unit — every
 session *after* the one you installed in. The installer (`postinst`) only enables the unit for
 all users (`systemctl --user --global enable`); it deliberately does not try to start it inside
 whatever session you happen to already be logged into, since a root-run install script can't
 reliably reach a specific logged-in user's session bus. **If you install while already logged
-in, log out and back in once (or reboot)** — from then on `wallpaperd` starts automatically every
+in, log out and back in once (or reboot)** — from then on `cosmic-wallpaperd` starts automatically every
 session, registers the bundled starter pack, and actively schedules it, with nothing further to
-configure. Launch **wallpaper-settings** from your app launcher (or `wallpaper-settings` from a
-terminal) to browse packs, change assignment/location/crossfade settings, or use `wallpaperctl
---help` for the CLI equivalent.
+configure. Launch **Cosmic Dynamic Wallpaper Settings** from your app launcher (or
+`cosmic-wallpaper-settings` from a terminal) to browse packs, change assignment/location/
+crossfade settings, or use `cosmic-wallpaperctl --help` for the CLI equivalent.
 
 ### Build from source
 
 ```sh
-git clone https://github.com/iampaulmata/rust-dynamic-wallpaper.git
-cd rust-dynamic-wallpaper
+git clone https://github.com/iampaulmata/cosmic-dynamic-wallpaper.git
+cd cosmic-dynamic-wallpaper
 cargo build --release --workspace
 cargo deb -p renderer          # produces target/debian/*.deb
 sudo apt install ./target/debian/*.deb
