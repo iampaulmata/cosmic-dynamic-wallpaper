@@ -28,13 +28,21 @@ tracing-subscriber = "0.3"
 # (plan.md Constitution Check finding 1) — this crate never links wgpu/
 # smithay-client-toolkit/wayland-client.
 libcosmic = { git = "https://github.com/pop-os/libcosmic", features = ["wgpu", "wayland", "winit", "tokio", "xdg-portal", "a11y", "multi-window"] }
+# Spec 010 (Custom Pack Builder) research.md R2: header-only readability scanning of a
+# manifest-free source folder, mirroring `pack_loader::image_check`'s own check
+# (duplicated intentionally at this small size rather than widening that crate's public
+# API for one caller) — same version/feature set `pack-loader` pins. Promoted from a
+# dev-only dependency (it also still covers pack_display.rs's test fixtures below).
+image = { version = "0.25", default-features = false, features = [
+    "jpeg", "png", "gif", "webp", "bmp", "tiff",
+] }
+# Spec 010 research.md R8: resolves the standard per-user pack storage location
+# (`dirs::data_dir()`). Already resolved in Cargo.lock at v6.0.0 as a transitive
+# dependency of `cosmic-config` — this adds zero new crates to the build.
+dirs = "6.0"
 
 [dev-dependencies]
 tempfile = "3.27"
-# Test-fixture-only: writes synthetic PNGs for pack_display.rs's unit tests (spec 008
-# T002/T032-T034) — same version/features wallpaperctl already uses for the same
-# purpose, not a new mechanism this crate depends on at runtime.
-image = { version = "0.25", default-features = false, features = ["png"] }
 
 [lints.clippy]
 unwrap_used = "deny"
