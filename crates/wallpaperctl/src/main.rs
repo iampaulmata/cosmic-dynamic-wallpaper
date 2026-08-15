@@ -143,10 +143,23 @@ fn run(cli: Cli) -> Result<String, CliError> {
             };
             let registry = Registry::open()?;
             let renderer_config = RendererConfig::open()?;
+            // Migrates forward from the pre-rename application id if nothing has been
+            // written under the new one yet (spec 009-project-rename, FR-004a) — once
+            // per real invocation, right after the real config is opened; the return
+            // value is discarded since `commands::assign::run` immediately reloads
+            // fresh anyway. Deliberately NOT inside `commands::assign::run` itself,
+            // since that function is also exercised directly by unit tests against
+            // tempdir-rooted configs that must stay isolated from this machine's real
+            // `cosmic-config` store.
+            let _ = RendererConfig::migrate_from_old_app_id(&renderer_config);
             commands::assign::run(target, &pack_source, &registry, &renderer_config, json)
         }
         Command::Location { action } => {
             let config = LocationConfigEntry::open()?;
+            // Same one-time-per-invocation migration posture as `renderer_config`
+            // above, and for the same reason (`commands::location`'s functions are
+            // also exercised directly by unit tests against isolated configs).
+            let _ = LocationConfigEntry::migrate_from_old_app_id(&config);
             match action {
                 LocationAction::Get => Ok(commands::location::get(&config, json)),
                 LocationAction::Set { latitude, longitude } => {

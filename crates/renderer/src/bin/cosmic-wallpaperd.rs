@@ -37,7 +37,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut pack_registry = Registry::open().map_err(|e| format!("pack registry: {e}"))?;
     let renderer_config_store = RendererConfig::open()?;
-    let mut renderer_config = RendererConfig::load(&renderer_config_store);
+    // Migrates forward from the pre-rename application id if nothing has been written
+    // under the new one yet (spec 009-project-rename, FR-004a) — only at this one
+    // startup read; every later reload below (the live config-watch closure) uses a
+    // bare `load`, since by then the new store is already populated and re-checking
+    // the old one on every watch event would just be wasted I/O.
+    let mut renderer_config = RendererConfig::migrate_from_old_app_id(&renderer_config_store);
 
     // spec 7 US2 (FR-008/FR-010/FR-011): self-register the bundled starter pack on a
     // genuinely fresh install — see starter_pack.rs's module doc for why this happens
@@ -51,7 +56,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let location_store = LocationConfigEntry::open()?;
-    let initial_location_entry = LocationConfigEntry::load(&location_store);
+    // Same one-time-at-startup migration posture as `renderer_config` above.
+    let initial_location_entry = LocationConfigEntry::migrate_from_old_app_id(&location_store);
     // spec 6 Cross-Spec Dependency (plan.md): scheduling reads the *effective* location
     // — the resolved automatic value when automatic mode is active, falling back to the
     // manual value — never `LocationConfigEntry.location` directly, or automatic mode would
