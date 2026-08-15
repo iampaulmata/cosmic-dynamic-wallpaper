@@ -83,7 +83,7 @@ re-touch line 1; only the remaining old-name references below are outstanding.
       user confirmation immediately before doing it.**
 - [X] T008 [US1] Update the local `origin` git remote URL to the renamed repository
       (depends on T007)
-- [ ] T009 [US1] Rename the local project folder from `dynamic-wallpaper` to
+- [X] T009 [US1] Rename the local project folder from `dynamic-wallpaper` to
       `cosmic-dynamic-wallpaper` (research.md R7). **Do this last, after every other
       task in this feature is committed** — it changes the working directory every
       subsequent command runs from, and requires explicit user confirmation
