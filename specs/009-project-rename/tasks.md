@@ -28,9 +28,9 @@ re-deriving an old→new value from scratch.
 
 ## Phase 1: Setup
 
-- [ ] T001 Create the implementation branch `009-project-rename` off `main` (this
+- [X] T001 Create the implementation branch `009-project-rename` off `main` (this
       project's own established convention — never work directly on `main`)
-- [ ] T002 [P] Capture a pre-rename baseline: run `cargo build --release --workspace`,
+- [X] T002 [P] Capture a pre-rename baseline: run `cargo build --release --workspace`,
       `cargo test --workspace`, and `cargo clippy --workspace --all-targets`; record the
       pass/fail outcome to diff against after the rename (FR-007's "no functional
       behavior change" is only checkable against a concrete baseline)
@@ -61,21 +61,21 @@ re-touch line 1; only the remaining old-name references below are outstanding.
 
 ### Implementation for User Story 1
 
-- [ ] T003 [P] [US1] Update remaining old-name prose in `README.md` — the two
+- [X] T003 [P] [US1] Update remaining old-name prose in `README.md` — the two
       `github.com/iampaulmata/rust-dynamic-wallpaper` URL references and the
       `dynamic-wallpaper_*.deb` install-command example (contracts/
       identifier-rename-map.md §1–2). Do NOT touch the "Cinnamon's **Dynamic
       Wallpaper** extension" or "Apple's `.heic` dynamic-wallpaper metadata format"
       references — those name other projects/formats, not this one (research.md R1)
-- [ ] T004 [P] [US1] Amend `.specify/memory/constitution.md` via `/speckit-constitution`:
+- [X] T004 [P] [US1] Amend `.specify/memory/constitution.md` via `/speckit-constitution`:
       rename the document's title ("Dynamic Wallpaper Constitution" →
       "Cosmic Dynamic Wallpaper Constitution") and the Governance section's "the
       `dynamic-wallpaper` project" reference — a PATCH-level wording amendment
       (1.0.0 → 1.0.1) with an updated Sync Impact Report per the constitution's own
       amendment procedure, not a plain hand-edit
-- [ ] T005 [P] [US1] Update `docs/PRD.md` to use the new project name throughout
+- [X] T005 [P] [US1] Update `docs/PRD.md` to use the new project name throughout
       (research.md R1 scope)
-- [ ] T006 [P] [US1] Update `docs/pack-manifest-schema.md` to use the new project name
+- [X] T006 [P] [US1] Update `docs/pack-manifest-schema.md` to use the new project name
       throughout (research.md R1 scope)
 - [ ] T007 [US1] Rename the GitHub repository from `rust-dynamic-wallpaper` to
       `cosmic-dynamic-wallpaper` — manual step via GitHub's own Settings UI; this

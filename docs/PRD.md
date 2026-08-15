@@ -1,4 +1,4 @@
-# PRD — COSMIC Dynamic Wallpaper Daemon
+# PRD — Cosmic Dynamic Wallpaper Daemon
 
 **Status:** Draft, input to `/speckit.specify`
 **Governs under:** `constitution-principles.md` (11 principles) — every FR below is
