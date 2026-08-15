@@ -2020,7 +2020,7 @@ dependencies = [
 
 [[package]]
 name = "generate-starter-pack"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "image",
 ]
@@ -3970,7 +3970,7 @@ dependencies = [
 
 [[package]]
 name = "pack-loader"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "cosmic-config",
@@ -4554,7 +4554,7 @@ checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
 
 [[package]]
 name = "renderer"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ashpd 0.13.13",
  "async-io",
@@ -4787,7 +4787,7 @@ dependencies = [
 
 [[package]]
 name = "schedule-engine"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "proptest",
@@ -5883,7 +5883,7 @@ dependencies = [
 
 [[package]]
 name = "wallpaper-ipc"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "cosmic-config",
  "pack-loader",
@@ -5896,10 +5896,11 @@ dependencies = [
 
 [[package]]
 name = "wallpaper-settings"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "cosmic-config",
+ "dirs",
  "image",
  "libcosmic",
  "pack-loader",
@@ -5912,7 +5913,7 @@ dependencies = [
 
 [[package]]
 name = "wallpaperctl"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "clap",

@@ -32,6 +32,11 @@ pub struct App {
     location: pages::location::State,
     timeline: pages::timeline::State,
     crossfade: pages::crossfade::State,
+    /// The Custom Pack Builder wizard (spec 010), when open — `Some` takes over the
+    /// main view in place of whichever nav page is selected (research.md R9), the same
+    /// "one extra `Option<T>` field gates an alternate view" shape `packs::State.
+    /// pending_removal` already uses, just page-sized rather than modal-sized.
+    pack_builder: Option<pages::pack_builder::State>,
 }
 
 #[derive(Debug, Clone)]
@@ -41,6 +46,7 @@ pub enum Message {
     Location(pages::location::Message),
     Timeline(pages::timeline::Message),
     Crossfade(pages::crossfade::Message),
+    PackBuilder(pages::pack_builder::Message),
 }
 
 /// Fatal startup failures are reported clearly and exit non-zero — the same posture
@@ -84,6 +90,13 @@ impl App {
         let renderer_config = RendererConfig::migrate_from_old_app_id(&self.renderer_config_store);
         let location = effective_location(&LocationConfigEntry::migrate_from_old_app_id(&self.location_config_store));
         pages::timeline::State::load(renderer_config, location)
+    }
+
+    /// The effective location (spec 6), read fresh — used by the pack-builder wizard's
+    /// solar-mode conflict check (research.md R4), the same source `pages::location`/
+    /// `pages::timeline` already read independently rather than threading a stale copy.
+    fn current_location(&self) -> Option<Location> {
+        effective_location(&LocationConfigEntry::migrate_from_old_app_id(&self.location_config_store))
     }
 
     fn refresh_active_page(&mut self) {
@@ -136,7 +149,19 @@ impl cosmic::Application for App {
         let timeline = pages::timeline::State::load(renderer_config.clone(), timeline_location);
         let crossfade = pages::crossfade::State { current_config: renderer_config };
 
-        let app = App { core, nav_model, pack_registry, renderer_config_store, location_config_store, packs, assignment, location, timeline, crossfade };
+        let app = App {
+            core,
+            nav_model,
+            pack_registry,
+            renderer_config_store,
+            location_config_store,
+            packs,
+            assignment,
+            location,
+            timeline,
+            crossfade,
+            pack_builder: None,
+        };
         (app, Task::none())
     }
 
@@ -192,7 +217,22 @@ impl cosmic::Application for App {
                 // (research.md R1) — nothing to do.
             }
             Message::Packs(pages::packs::Message::AddResult(result)) => {
-                pages::packs::apply_add_result(&mut self.packs, &mut self.pack_registry, result);
+                // Spec 010 (Custom Pack Builder) research.md R1: a picked directory
+                // that fails specifically with `ManifestNotFound` opens the wizard
+                // instead of registering (today's `apply_add_result` never actually
+                // validated a directory before registering it — `should_open_for`'s
+                // `load_pack` call is a real, deliberate tightening, not just a wizard
+                // trigger: it stops a manifest-free folder from silently becoming a
+                // broken registered pack). Every other outcome (success, or any other
+                // load/registration error) is unchanged.
+                match result {
+                    Ok(path) if pages::pack_builder::should_open_for(&path) => {
+                        self.pack_builder = Some(pages::pack_builder::open(path));
+                    }
+                    other => {
+                        pages::packs::apply_add_result(&mut self.packs, &mut self.pack_registry, other);
+                    }
+                }
             }
             Message::Packs(pages::packs::Message::RemoveRequested(source)) => {
                 pages::packs::request_removal(&mut self.packs, source);
@@ -264,6 +304,109 @@ impl cosmic::Application for App {
                     tracing::error!(error = %e, "failed to save crossfade duration");
                 }
             }
+            Message::PackBuilder(pages::pack_builder::Message::ModeChosen(mode)) => {
+                if let Some(state) = self.pack_builder.as_mut() {
+                    pages::pack_builder::set_mode(state, mode);
+                }
+            }
+            Message::PackBuilder(pages::pack_builder::Message::Cancelled) => {
+                // FR-019: dropping the wizard state is the entire cancel operation —
+                // nothing was ever written to the source folder before Generate runs.
+                self.pack_builder = None;
+            }
+            Message::PackBuilder(pages::pack_builder::Message::SolarEventSelected(row, index)) => {
+                let location = self.current_location();
+                if let Some(state) = self.pack_builder.as_mut() {
+                    pages::pack_builder::set_solar_event_by_index(state, row, index, location);
+                }
+            }
+            Message::PackBuilder(pages::pack_builder::Message::SolarOffsetSignToggled(row)) => {
+                let location = self.current_location();
+                if let Some(state) = self.pack_builder.as_mut() {
+                    pages::pack_builder::toggle_solar_offset_sign(state, row, location);
+                }
+            }
+            Message::PackBuilder(pages::pack_builder::Message::SolarOffsetHoursChanged(row, hours)) => {
+                let location = self.current_location();
+                if let Some(state) = self.pack_builder.as_mut() {
+                    pages::pack_builder::set_solar_offset_hours(state, row, hours, location);
+                }
+            }
+            Message::PackBuilder(pages::pack_builder::Message::SolarOffsetMinutesChanged(row, minutes)) => {
+                let location = self.current_location();
+                if let Some(state) = self.pack_builder.as_mut() {
+                    pages::pack_builder::set_solar_offset_minutes(state, row, minutes, location);
+                }
+            }
+            Message::PackBuilder(pages::pack_builder::Message::TimeHourChanged(row, hour)) => {
+                if let Some(state) = self.pack_builder.as_mut() {
+                    pages::pack_builder::set_time_hour(state, row, hour);
+                }
+            }
+            Message::PackBuilder(pages::pack_builder::Message::TimeMinuteChanged(row, minute)) => {
+                if let Some(state) = self.pack_builder.as_mut() {
+                    pages::pack_builder::set_time_minute(state, row, minute);
+                }
+            }
+            Message::PackBuilder(pages::pack_builder::Message::AuthorChanged(author)) => {
+                if let Some(state) = self.pack_builder.as_mut() {
+                    pages::pack_builder::set_author(state, author);
+                }
+            }
+            Message::PackBuilder(pages::pack_builder::Message::GenerateRequested) => {
+                if let Some(state) = self.pack_builder.as_mut() {
+                    pages::pack_builder::generate(state);
+                }
+            }
+            Message::PackBuilder(pages::pack_builder::Message::MoveRequested) => {
+                let closed = self
+                    .pack_builder
+                    .as_mut()
+                    .map(|state| pages::pack_builder::confirm_move(state, &mut self.pack_registry))
+                    .unwrap_or(false);
+                if closed {
+                    self.pack_builder = None;
+                    self.packs = pages::packs::State::load(&mut self.pack_registry);
+                }
+            }
+            Message::PackBuilder(pages::pack_builder::Message::KeepRequested) => {
+                let closed = self
+                    .pack_builder
+                    .as_mut()
+                    .map(|state| pages::pack_builder::confirm_keep(state, &mut self.pack_registry))
+                    .unwrap_or(false);
+                if closed {
+                    self.pack_builder = None;
+                    self.packs = pages::packs::State::load(&mut self.pack_registry);
+                }
+            }
+            Message::PackBuilder(pages::pack_builder::Message::CollisionNameChanged(name)) => {
+                if let Some(state) = self.pack_builder.as_mut() {
+                    pages::pack_builder::set_collision_name(state, name);
+                }
+            }
+            Message::PackBuilder(pages::pack_builder::Message::CollisionConfirmed) => {
+                let closed = self
+                    .pack_builder
+                    .as_mut()
+                    .map(|state| pages::pack_builder::confirm_collision_move(state, &mut self.pack_registry))
+                    .unwrap_or(false);
+                if closed {
+                    self.pack_builder = None;
+                    self.packs = pages::packs::State::load(&mut self.pack_registry);
+                }
+            }
+            Message::PackBuilder(pages::pack_builder::Message::CollisionCancelled) => {
+                let closed = self
+                    .pack_builder
+                    .as_mut()
+                    .map(|state| pages::pack_builder::cancel_collision_to_keep(state, &mut self.pack_registry))
+                    .unwrap_or(false);
+                if closed {
+                    self.pack_builder = None;
+                    self.packs = pages::packs::State::load(&mut self.pack_registry);
+                }
+            }
         }
         Task::none()
     }
@@ -272,6 +415,14 @@ impl cosmic::Application for App {
     /// modal overlay exactly when `packs.pending_removal.is_some()`, titled with the
     /// pack's resolved name so the confirmation itself never shows a raw path either.
     fn dialog(&self) -> Option<Element<'_, Self::Message>> {
+        // Spec 010 (Custom Pack Builder): the placement/collision modal takes priority
+        // — it can only be showing while the wizard itself owns the main view (`view`
+        // below), so there's no real ordering ambiguity with the removal dialog below.
+        if let Some(state) = &self.pack_builder {
+            if let Some(dialog) = pages::pack_builder::placement_dialog(state) {
+                return Some(dialog.map(Message::PackBuilder));
+            }
+        }
         let source = self.packs.pending_removal.as_ref()?;
         let name = pack_display::resolve_pack_name(source).unwrap_or_else(|| "(unnamed pack)".to_string());
         Some(
@@ -291,6 +442,9 @@ impl cosmic::Application for App {
     }
 
     fn view(&self) -> Element<'_, Self::Message> {
+        if let Some(state) = &self.pack_builder {
+            return pages::pack_builder::view(state).map(Message::PackBuilder);
+        }
         match self.nav_model.active_data::<Page>().copied() {
             Some(Page::Packs) | None => pages::packs::view(&self.packs).map(Message::Packs),
             Some(Page::Assignment) => pages::assignment::view(&self.assignment).map(Message::Assignment),
