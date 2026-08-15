@@ -1,8 +1,8 @@
 [Desktop Entry]
 Type=Application
-Name=Wallpaper Settings
-Comment=Configure the dynamic wallpaper daemon
-Exec=wallpaper-settings
+Name=Cosmic Dynamic Wallpaper Settings
+Comment=Configure the Cosmic Dynamic Wallpaper daemon
+Exec=cosmic-wallpaper-settings
 Icon=preferences-desktop-wallpaper
 Terminal=false
 Categories=Settings;DesktopSettings;COSMIC;
