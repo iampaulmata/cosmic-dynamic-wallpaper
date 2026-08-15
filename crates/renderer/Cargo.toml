@@ -64,10 +64,13 @@ expect_used = "deny"
 
 [package.metadata.deb]
 name = "cosmic-dynamic-wallpaper"
-# Debian revision reset to "1" under the new package name (spec 009-project-rename) —
-# distinct package artifact from the old "dynamic-wallpaper" name's beta.1-3 (0.1.0-1
-# through 0.1.0-3); crate semver stays 0.1.0 (no breaking/stable-release change yet).
-revision = "1"
+# Debian revision "2" under the new package name (spec 009-project-rename) — fixes a
+# real bug found via live upgrade testing on the dev machine: the bundled starter
+# pack's registry entry was left pointing at the pre-rename system path (0.1.0-1's
+# gap). Revision "1" is the initial cosmic-dynamic-wallpaper artifact, distinct from
+# the old "dynamic-wallpaper" name's beta.1-3 (0.1.0-1 through 0.1.0-3, different
+# package). Crate semver stays 0.1.0 (no breaking/stable-release change yet).
+revision = "2"
 maintainer = "iampaulmata <paul.mata42@gmail.com>"
 copyright = "2026, iampaulmata <paul.mata42@gmail.com>"
 extended-description = """\
