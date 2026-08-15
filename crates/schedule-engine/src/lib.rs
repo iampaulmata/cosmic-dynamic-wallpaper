@@ -1,4 +1,4 @@
-//! Pure, deterministic solar/clock scheduling logic for the dynamic wallpaper daemon.
+//! Pure, deterministic solar/clock scheduling logic for the Cosmic Dynamic Wallpaper daemon.
 //!
 //! Given a validated pack and a query instant, this crate answers "which image is
 //! active, and how far through a crossfade are we" — for either a solar-event-anchored

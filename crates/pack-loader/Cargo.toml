@@ -3,7 +3,7 @@ name = "pack-loader"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
-description = "Pack manifest parsing and loading for the dynamic wallpaper daemon"
+description = "Pack manifest parsing and loading for the Cosmic Dynamic Wallpaper daemon"
 rust-version = "1.97"
 
 [dependencies]

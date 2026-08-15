@@ -1,4 +1,4 @@
-//! `wallpaper-settings` — standalone libcosmic GUI for the dynamic wallpaper daemon
+//! `wallpaper-settings` — standalone libcosmic GUI for the Cosmic Dynamic Wallpaper daemon
 //! (spec 7 US1, contracts/gui-application.md). A `cosmic::Application`, not a
 //! `cosmic-settings` panel (spec.md Clarifications, research.md R1 — COSMIC has no
 //! general third-party settings-panel extension mechanism). See `README.md` for scope.
