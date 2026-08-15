@@ -1,4 +1,4 @@
-//! `wallpaperctl` — the CLI control surface for the dynamic wallpaper daemon
+//! `wallpaperctl` — the CLI control surface for the Cosmic Dynamic Wallpaper daemon
 //! (contracts/wallpaperctl-cli.md). See `README.md` for the config-only-vs-
 //! daemon-required command split and this crate's explicit non-scope.
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]

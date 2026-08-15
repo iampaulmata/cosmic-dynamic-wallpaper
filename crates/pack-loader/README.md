@@ -1,7 +1,7 @@
 # pack-loader
 
 Turns a directory (manifest + images) or a single image file into a fully validated
-`LoadedPack` — the second crate in the COSMIC dynamic-wallpaper daemon's workspace,
+`LoadedPack` — the second crate in the Cosmic Dynamic Wallpaper daemon's workspace,
 depending on [`schedule-engine`](../schedule-engine) (spec 1) for the time-anchor and
 pack-validation contract every loaded pack must satisfy.
 

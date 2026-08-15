@@ -194,20 +194,20 @@ Independent Test; `quickstart.md`'s SC-001 section).
 
 ### Implementation for User Story 3
 
-- [ ] T025 [P] [US3] Update the `description` field in all 6 crates' `Cargo.toml`
+- [X] T025 [P] [US3] Update the `description` field in all 6 crates' `Cargo.toml`
       (`crates/{renderer,wallpaperctl,wallpaper-settings,schedule-engine,pack-loader,
       wallpaper-ipc}/Cargo.toml`) to the new project name
-- [ ] T026 [P] [US3] Update `crates/{schedule-engine,pack-loader,wallpaper-ipc,
+- [X] T026 [P] [US3] Update `crates/{schedule-engine,pack-loader,wallpaper-ipc,
       renderer,wallpaperctl,wallpaper-settings}/README.md` to the new project name
-- [ ] T027 [P] [US3] Update the D-Bus name references in `crates/wallpaperctl/README.md`
+- [X] T027 [P] [US3] Update the D-Bus name references in `crates/wallpaperctl/README.md`
       and `specs/004-cli-control-surface/contracts/wallpaperd-dbus-interface.md` to
       match T013/T014's renamed values (a living reference doc describing the current
       interface, not frozen history — research.md R1)
-- [ ] T028 [P] [US3] Update project-name comments in `crates/*/src/lib.rs` (all 6
+- [X] T028 [P] [US3] Update project-name comments in `crates/*/src/lib.rs` (all 6
       crates), `crates/renderer/src/{starter_pack,surface,ip_geolocation}.rs`,
       `crates/wallpaperctl/src/main.rs`, `crates/wallpaper-settings/src/main.rs`, and
       `tools/generate-starter-pack/src/main.rs`
-- [ ] T029 [US3] Full-repo audit: run the SC-001 grep from `quickstart.md` and fix any
+- [X] T029 [US3] Full-repo audit: run the SC-001 grep from `quickstart.md` and fix any
       remaining unintentional match it turns up (depends on T003–T028 being complete)
 
 **Checkpoint**: US3 is independently complete and testable — the SC-001 grep returns

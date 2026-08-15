@@ -154,7 +154,7 @@ fn manifest_toml(frames: &[Frame]) -> String {
     let mut out = String::new();
     out.push_str("schema_version = 1\n");
     out.push_str("name = \"Solar Gradient\"\n");
-    out.push_str("author = \"dynamic-wallpaper project — procedurally generated, no photography, CC0\"\n");
+    out.push_str("author = \"Cosmic Dynamic Wallpaper project — procedurally generated, no photography, CC0\"\n");
     out.push_str("default_scaling = \"Fill\"\n");
     out.push_str("fallback_color = \"#05050f\"\n");
     for frame in frames {

@@ -1,6 +1,6 @@
 # renderer
 
-The wallpaper renderer daemon (`wallpaperd`) for the dynamic wallpaper project —
+The wallpaper renderer daemon (`cosmic-wallpaperd`) for the Cosmic Dynamic Wallpaper project —
 Wayland `wlr-layer-shell` background surfaces, GPU-accelerated crossfade via `wgpu`,
 per-output independent scheduling.
 
@@ -90,7 +90,7 @@ disconnect/resize event can't be triggered on this dev machine).
   to 0% once idle (checked via `/proc/[pid]/stat` deltas, not just `ps`'s
   lifetime-averaged `%CPU` column, which is misleading right after the GPU/Vulkan
   startup burst).
-- **`src/bin/wallpaperd.rs`** — the actual daemon binary: connects to Wayland, loads
+- **`src/bin/cosmic-wallpaperd.rs`** — the actual daemon binary: connects to Wayland, loads
   config, runs the `calloop` event loop, wires up the two live `cosmic-config`
   watches below, and serves the D-Bus service.
 - **Precise idle-wait timer** (T021) — `WallpaperDaemon::reschedule_idle_timer`
@@ -203,7 +203,7 @@ once a specific serialization format's own semantics enter the picture.
 ## IP-geolocation database (spec 7 US3, research.md R3, T051)
 
 `ip_geolocation.rs` reads a bundled offline `.mmdb` database at
-`/usr/share/dynamic-wallpaper/geoip.mmdb` (`ip_geolocation::MMDB_SYSTEM_PATH`) — **not**
+`/usr/share/cosmic-dynamic-wallpaper/geoip.mmdb` (`ip_geolocation::MMDB_SYSTEM_PATH`) — **not**
 checked into this repository (`.gitignore`'d under `assets/geoip/`) and **not** a
 build- or test-time dependency (this crate's own tests build a tiny fixture `.mmdb` at
 test time instead, via the `mmdb-writer` dev-dependency — see `ip_geolocation.rs`'s
