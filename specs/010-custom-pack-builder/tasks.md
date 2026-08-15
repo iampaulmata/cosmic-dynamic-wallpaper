@@ -35,11 +35,11 @@ the repository root.
 
 **Purpose**: Give the new code somewhere to live before any logic is written.
 
-- [ ] T001 [P] Add direct (non-dev) dependencies `image` (same version/feature set `pack-loader`
+- [X] T001 [P] Add direct (non-dev) dependencies `image` (same version/feature set `pack-loader`
       already pins: `jpeg, png, gif, webp, bmp, tiff`) and `dirs` (already resolved at v6.0.0 via
       `cosmic-config`, so no new crate enters the build) to `crates/wallpaper-settings/Cargo.toml`
       (research.md R2, R8)
-- [ ] T002 [P] Create `crates/wallpaper-settings/src/pages/pack_builder.rs` with a module-level
+- [X] T002 [P] Create `crates/wallpaper-settings/src/pages/pack_builder.rs` with a module-level
       doc comment describing its scope (spec.md, data-model.md §2), and register
       `pub mod pack_builder;` in `crates/wallpaper-settings/src/pages/mod.rs`
 
@@ -52,52 +52,52 @@ story builds on.
 
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete.
 
-- [ ] T003 Add `ManifestDraft` and `ManifestDraftImage` structs (data-model.md §1) to
+- [X] T003 Add `ManifestDraft` and `ManifestDraftImage` structs (data-model.md §1) to
       `crates/pack-loader/src/manifest.rs`, next to the existing `PackManifest`/`ManifestImage`
-- [ ] T004 Implement `pub fn format_anchor(anchor: &schedule_engine::TimeAnchor) -> String` in
+- [X] T004 Implement `pub fn format_anchor(anchor: &schedule_engine::TimeAnchor) -> String` in
       `crates/pack-loader/src/manifest.rs` as the exact inverse of the existing private
       `parse_anchor`; add unit tests asserting the round-trip property
       `parse_anchor(&format_anchor(&a)) == Ok(a)` for a clock anchor, a bare solar event, and a
       solar event with a positive and a negative offset (contracts/pack-loader-manifest-writer.md)
-- [ ] T005 Implement `pub fn render(draft: &ManifestDraft) -> String` in
+- [X] T005 Implement `pub fn render(draft: &ManifestDraft) -> String` in
       `crates/pack-loader/src/manifest.rs` via a local `#[derive(Serialize)]` raw shape and the
       `toml` crate (never hand-built string interpolation — contracts/pack-loader-manifest-writer.md);
       omit the `author` key when `draft.author` is `None`; add unit tests where an author name
       containing `"` and non-ASCII text, fed through `render` then back through the existing
       `parse`, comes back byte-identical (spec.md Edge Cases)
-- [ ] T006 Export `ManifestDraft`, `ManifestDraftImage`, `render`, and `format_anchor` from
+- [X] T006 Export `ManifestDraft`, `ManifestDraftImage`, `render`, and `format_anchor` from
       `crates/pack-loader/src/lib.rs`
-- [ ] T007 Implement folder image scanning in `crates/wallpaper-settings/src/pages/pack_builder.rs`:
+- [X] T007 Implement folder image scanning in `crates/wallpaper-settings/src/pages/pack_builder.rs`:
       list a directory's entries and keep only those passing a header-only
       `image::ImageReader::open(path)?.with_guessed_format()?.into_dimensions()` check
       (research.md R2), silently skipping non-image files and flagging unreadable ones; returns
       `Vec<ImageRow>` with `solar`/`time` both `None`
-- [ ] T008 Define `AssignmentMode`, `SolarAssignment`, `ImageRow`, `State`, `PendingCollision`,
+- [X] T008 Define `AssignmentMode`, `SolarAssignment`, `ImageRow`, `State`, `PendingCollision`,
       and `GeneratedPlacement` in `crates/wallpaper-settings/src/pages/pack_builder.rs`
       (data-model.md §2)
-- [ ] T009 Implement `fn combine_offset(hours: i32, minutes: u32) -> chrono::TimeDelta` in
+- [X] T009 Implement `fn combine_offset(hours: i32, minutes: u32) -> chrono::TimeDelta` in
       `crates/wallpaper-settings/src/pages/pack_builder.rs`, clamping `minutes` to `0` whenever
       `hours.abs() == 12` (research.md R6, the ±12h clarification cap); add unit tests covering
       the clamp boundary and an ordinary in-range value
-- [ ] T010 Implement `fn effective_author(input: &str) -> String` in
+- [X] T010 Implement `fn effective_author(input: &str) -> String` in
       `crates/wallpaper-settings/src/pages/pack_builder.rs` — blank or whitespace-only input
       returns `"Artist Unknown"` (FR-010); add unit tests for both the blank and non-blank cases
-- [ ] T011 Implement `fn all_assigned(rows: &[ImageRow], mode: AssignmentMode) -> bool` in
+- [X] T011 Implement `fn all_assigned(rows: &[ImageRow], mode: AssignmentMode) -> bool` in
       `crates/wallpaper-settings/src/pages/pack_builder.rs` (research.md R5, FR-009); add unit
       tests for both modes with all-assigned, none-assigned, and partially-assigned rows
-- [ ] T012 Implement
+- [X] T012 Implement
       `fn build_draft(rows: &[ImageRow], mode: AssignmentMode, folder_name: &str, author: &str) -> ManifestDraft`
       in `crates/wallpaper-settings/src/pages/pack_builder.rs`, applying the R10 defaults
       (`name` = `folder_name`, `default_scaling = ScalingMode::Fill`,
       `fallback_color = #000000`) and calling `effective_author`; add a unit test asserting the
       produced draft's shape for a small fixed row set
-- [ ] T013 Add `pack_builder: Option<pages::pack_builder::State>` to `App` in
+- [X] T013 Add `pack_builder: Option<pages::pack_builder::State>` to `App` in
       `crates/wallpaper-settings/src/app.rs`; change the existing `AddResult` handling so that a
       directory failing specifically with `pack_loader::ManifestError::ManifestNotFound` opens
       the wizard (via T007's scan, `mode: None`) instead of setting `packs::State.add_error`
       — every other outcome (success, or any other error) is unchanged (research.md R1, R9,
       FR-001, FR-002)
-- [ ] T014 Implement the mode-choice screen (`State.mode == None`) — two buttons, "By solar
+- [X] T014 Implement the mode-choice screen (`State.mode == None`) — two buttons, "By solar
       period" and "By specific time" — and Cancel handling (clears `App.pack_builder`, no
       filesystem change) in `crates/wallpaper-settings/src/pages/pack_builder.rs` (FR-004,
       FR-019)
@@ -120,32 +120,32 @@ choose "By solar period," assign each image a distinct event, click Generate, an
 
 ### Implementation for User Story 1
 
-- [ ] T015 [US1] Implement the solar-period configuration screen view in
+- [X] T015 [US1] Implement the solar-period configuration screen view in
       `crates/wallpaper-settings/src/pages/pack_builder.rs`: one row per scanned image showing
       its thumbnail (`widget::image`), a `widget::dropdown` of the 8 `SolarEventKind` labels
       (`selected: Option<usize>`, no default selection), and two `widget::spin_button`s for
       signed offset hours (`-12..=12`) and minutes (`0..=59`) (FR-005, FR-006, FR-009, User
       Story 1 Acceptance Scenarios 2, 3, 6)
-- [ ] T016 [US1] Implement solar-mode conflict detection in
+- [X] T016 [US1] Implement solar-mode conflict detection in
       `crates/wallpaper-settings/src/pages/pack_builder.rs`: a location-independent literal
       `(SolarEventKind, Option<TimeDelta>)` equality check across rows, plus
       `schedule_engine::ValidatedPack::check_solar_duplicate_instant` (via
       `wallpaper_ipc::effective_location`, reused exactly as `pages::location`/`pages::timeline`
       already do) when a location is configured (FR-008, research.md R4); add unit tests for the
       literal-duplicate case and (with a fixed `Location`) the location-aware case
-- [ ] T017 [US1] Wire dropdown-selection and offset spin-button messages, and gate the Generate
+- [X] T017 [US1] Wire dropdown-selection and offset spin-button messages, and gate the Generate
       button on `all_assigned(&rows, mode) && conflict.is_none()`, in
       `crates/wallpaper-settings/src/app.rs` and
       `crates/wallpaper-settings/src/pages/pack_builder.rs` (User Story 1 Acceptance Scenarios 4,
       5)
-- [ ] T018 [US1] Implement the Generate action in
+- [X] T018 [US1] Implement the Generate action in
       `crates/wallpaper-settings/src/pages/pack_builder.rs`: `build_draft` →
       `pack_loader::manifest::render` → write `manifest.toml` into the source folder → self-validate
       via `pack_loader::load_pack`, deleting the just-written file and showing a specific error on
       failure rather than treating it as committed (FR-011, FR-012, FR-017,
       contracts/pack-loader-manifest-writer.md's consumer flow); on success, sets
       `State.pending_placement`
-- [ ] T019 [US1] Add an integration test in
+- [X] T019 [US1] Add an integration test in
       `crates/wallpaper-settings/src/pages/pack_builder.rs` (tempfile-backed, mirroring
       `pack-loader`'s own test style): a full solar-mode draft, run through T018's Generate path,
       produces a `manifest.toml` that `pack_loader::load_pack` reads back with every image
@@ -168,21 +168,21 @@ Test).
 
 ### Implementation for User Story 2
 
-- [ ] T020 [US2] Implement the specific-time configuration screen view in
+- [X] T020 [US2] Implement the specific-time configuration screen view in
       `crates/wallpaper-settings/src/pages/pack_builder.rs`: one row per scanned image showing
       its thumbnail and two `widget::spin_button`s (hour `0..=23`, minute `0..=59`, no default
       selection), with no event dropdown or offset control present (FR-007, FR-009, User Story 2
       Acceptance Scenarios 1, 4)
-- [ ] T021 [US2] Extend `detect_conflict`/`all_assigned` in
+- [X] T021 [US2] Extend `detect_conflict`/`all_assigned` in
       `crates/wallpaper-settings/src/pages/pack_builder.rs` to cover `SpecificTime` rows, reusing
       `schedule_engine::WallpaperPack::validate`'s `PackError::DuplicateInstant` for the
       clock-anchor case (FR-008, research.md R4); add unit tests for the duplicate-time and
       distinct-times cases
-- [ ] T022 [US2] Wire time spin-button messages, and mode-switch handling that clears every row's
+- [X] T022 [US2] Wire time spin-button messages, and mode-switch handling that clears every row's
       `solar`/`time` field back to `None` when `State.mode` changes (spec.md Edge Cases), in
       `crates/wallpaper-settings/src/app.rs` and
       `crates/wallpaper-settings/src/pages/pack_builder.rs`
-- [ ] T023 [US2] Add an integration test in
+- [X] T023 [US2] Add an integration test in
       `crates/wallpaper-settings/src/pages/pack_builder.rs`: a full specific-time draft, run
       through the Generate path (T018's routine, mode-agnostic), produces a `manifest.toml` that
       `pack_loader::load_pack` reads back with every image scheduled to its exact time, and two
@@ -207,31 +207,31 @@ and "keep in place" choices leave the pack registered and working afterward (spe
 
 ### Implementation for User Story 3
 
-- [ ] T024 [US3] Add the author `widget::text_input` to the configuration screen (both modes,
+- [X] T024 [US3] Add the author `widget::text_input` to the configuration screen (both modes,
       shared layout) in `crates/wallpaper-settings/src/pages/pack_builder.rs`, labeled to make
       clear that leaving it blank results in "Artist Unknown," and read through
       `effective_author` at Generate time (FR-010, User Story 3 Acceptance Scenarios 1-3)
-- [ ] T025 [US3] Implement standard-pack-location resolution
+- [X] T025 [US3] Implement standard-pack-location resolution
       (`dirs::data_dir().join("cosmic-dynamic-wallpaper").join("packs")`) in
       `crates/wallpaper-settings/src/pages/pack_builder.rs` (research.md R8)
-- [ ] T026 [US3] Implement the copy-then-verify-then-delete move routine in
+- [X] T026 [US3] Implement the copy-then-verify-then-delete move routine in
       `crates/wallpaper-settings/src/pages/pack_builder.rs`: recursively copy the generated
       folder to the destination (T025, or a collision-prompt-supplied name), call
       `pack_loader::load_pack` on the copy to confirm it, then delete the source only after that
       succeeds; on any failure, remove a partial destination copy and leave the source completely
       untouched (FR-013, FR-014, FR-017, research.md R8); add a tempfile-backed unit test for the
       failure-leaves-source-untouched case
-- [ ] T027 [US3] Implement the placement dialog (move vs. keep) via `cosmic::widget::dialog` and
+- [X] T027 [US3] Implement the placement dialog (move vs. keep) via `cosmic::widget::dialog` and
       an `Application::dialog()` override in `crates/wallpaper-settings/src/app.rs`, shown
       whenever `State.pending_placement.is_some()` (FR-013, contracts/pack-builder-gui-flow.md)
-- [ ] T028 [US3] Implement the destination-name-collision prompt
+- [X] T028 [US3] Implement the destination-name-collision prompt
       (`State.pending_collision`: a dialog with a text input pre-filled with the suggested name,
       retrying the move with the typed name on confirm) in
       `crates/wallpaper-settings/src/pages/pack_builder.rs` and
       `crates/wallpaper-settings/src/app.rs` (FR-014a, User Story 3 Acceptance Scenario 6); add a
       tempfile-backed unit test confirming a same-name destination opens this prompt instead of
       overwriting anything
-- [ ] T029 [US3] Wire final registration in `crates/wallpaper-settings/src/app.rs`:
+- [X] T029 [US3] Wire final registration in `crates/wallpaper-settings/src/app.rs`:
       `pack_loader::PackSource::resolve(final_path)` + `Registry::register(...)` — the identical
       call the existing "Add pack folder…" success path already makes — followed by refreshing
       `pages::packs::State` and clearing `App.pack_builder`, on both the move-success and
@@ -246,20 +246,20 @@ and "keep in place" choices leave the pack registered and working afterward (spe
 
 **Purpose**: Edge cases and verification that span more than one story.
 
-- [ ] T030 Add a tempfile-backed test in
+- [X] T030 Add a tempfile-backed test in
       `crates/wallpaper-settings/src/pages/pack_builder.rs` confirming Cancel — from either the
       mode-choice or the configuration screen — leaves the source folder byte-for-byte unchanged
       (FR-019, SC-006)
-- [ ] T031 [P] Add a test in `crates/wallpaper-settings/src/app.rs` confirming a folder that
+- [X] T031 [P] Add a test in `crates/wallpaper-settings/src/app.rs` confirming a folder that
       already contains `manifest.toml` registers exactly as it does today and never opens the
       wizard (FR-002, spec.md Edge Cases)
-- [ ] T032 Add tests in `crates/wallpaper-settings/src/pages/pack_builder.rs` for FR-018's scan
+- [X] T032 Add tests in `crates/wallpaper-settings/src/pages/pack_builder.rs` for FR-018's scan
       failures: zero usable images, and more than `schedule_engine::pack::MAX_ANCHORS` (64)
       images, each producing `State.scan_error` with no rows and no Generate button
-- [ ] T033 Run `cargo clippy -p pack-loader -p wallpaper-settings --all-targets -- -D warnings`
+- [X] T033 Run `cargo clippy -p pack-loader -p wallpaper-settings --all-targets -- -D warnings`
       and `cargo test -p pack-loader -p wallpaper-settings`, fixing any `unwrap()`/`expect()`
       outside `#[cfg(test)]` (constitution Principle VIII)
-- [ ] T034 [P] Walk through [quickstart.md](./quickstart.md)'s manual validation steps end-to-end
+- [X] T034 [P] Walk through [quickstart.md](./quickstart.md)'s manual validation steps end-to-end
       on a real COSMIC session
 
 ---
