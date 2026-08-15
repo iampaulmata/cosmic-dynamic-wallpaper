@@ -11,11 +11,11 @@ use std::fmt;
 use serde::Serialize;
 
 /// Session-bus well-known name (contracts/wallpaperd-dbus-interface.md).
-pub const BUS_NAME: &str = "com.system76.CosmicWallpaper1";
+pub const BUS_NAME: &str = "com.system76.CosmicDynamicWallpaper1";
 /// Object path the interface is served at.
-pub const OBJECT_PATH: &str = "/com/system76/CosmicWallpaper1";
+pub const OBJECT_PATH: &str = "/com/system76/CosmicDynamicWallpaper1";
 /// D-Bus interface name.
-pub const INTERFACE: &str = "com.system76.CosmicWallpaper1.Daemon";
+pub const INTERFACE: &str = "com.system76.CosmicDynamicWallpaper1.Daemon";
 
 /// One output's schedule state, as reported by `QueryOutput`/`QueryAll`
 /// (data-model.md `ScheduleQueryResponse`).

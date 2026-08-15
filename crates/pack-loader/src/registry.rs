@@ -13,11 +13,18 @@ use crate::load::{load_pack, LoadedPack};
 use crate::pack_source::PackSource;
 
 /// The `cosmic-config` application id this crate's registry is stored under.
-pub const REGISTRY_CONFIG_ID: &str = "com.system76.CosmicWallpaper.Registry";
+pub const REGISTRY_CONFIG_ID: &str = "com.system76.CosmicDynamicWallpaper.Registry";
 
 /// The `cosmic-config` application id [`RemovedStarterPacks`] is stored under — its own
 /// small, separate entry (spec 7 data-model.md, contracts/pack-registry-origin.md).
-pub const REMOVED_STARTER_PACKS_CONFIG_ID: &str = "com.system76.CosmicWallpaper.RemovedStarterPacks";
+pub const REMOVED_STARTER_PACKS_CONFIG_ID: &str = "com.system76.CosmicDynamicWallpaper.RemovedStarterPacks";
+
+/// The pre-rename application ids (spec 009-project-rename, FR-004a) —
+/// [`Registry::open`] migrates from these once so an existing installation's known
+/// packs and removed-starter-packs record survive the rename, never written to again
+/// afterward. See `contracts/config-migration.md` for the full behavior contract.
+const OLD_REGISTRY_CONFIG_ID: &str = "com.system76.CosmicWallpaper.Registry";
+const OLD_REMOVED_STARTER_PACKS_CONFIG_ID: &str = "com.system76.CosmicWallpaper.RemovedStarterPacks";
 
 /// Who registered a [`PackRegistryEntry`] (spec 7 data-model.md, contracts/
 /// pack-registry-origin.md). Default `User` — full backward compatibility with every
@@ -99,13 +106,16 @@ pub struct Registry {
 
 impl Registry {
     /// Open (creating if necessary) the real, user-global registry under the standard
-    /// `cosmic-config` XDG location.
+    /// `cosmic-config` XDG location — migrating forward from the pre-rename
+    /// application ids (FR-004a) if nothing has been written under the new ones yet.
     pub fn open() -> Result<Self, RegistryError> {
         let config = Config::new(REGISTRY_CONFIG_ID, RegistryConfig::VERSION)
             .map_err(|e| RegistryError::Storage { message: e.to_string() })?;
         let removed_config = Config::new(REMOVED_STARTER_PACKS_CONFIG_ID, RemovedStarterPacksConfig::VERSION)
             .map_err(|e| RegistryError::Storage { message: e.to_string() })?;
-        Self::from_configs(config, removed_config)
+        let state = migrate_registry_config(&config);
+        let removed_state = migrate_removed_starter_packs_config(&removed_config);
+        Ok(Self { config, state, removed_config, removed_state })
     }
 
     /// Open a registry rooted at a custom path — used by tests (`tempfile`-backed,
@@ -209,6 +219,65 @@ impl Registry {
             .write_entry(&self.config)
             .map_err(|e| RegistryError::Storage { message: e.to_string() })
     }
+}
+
+/// [`Registry::open`]'s production entry point for [`RegistryConfig`]'s migration
+/// (spec 009-project-rename, FR-004a) — see [`migrate_registry_config_core`] for the
+/// actual logic and `contracts/config-migration.md` for the full behavior contract.
+fn migrate_registry_config(new_config: &Config) -> RegistryConfig {
+    migrate_registry_config_core(new_config, Config::new(OLD_REGISTRY_CONFIG_ID, RegistryConfig::VERSION))
+}
+
+/// The pure migration core, taking both handles already open — split out purely so
+/// tests can construct the old handle via a custom path instead of the real,
+/// well-known system path `Config::new` always resolves to.
+fn migrate_registry_config_core(new_config: &Config, old_config: Result<Config, cosmic_config::Error>) -> RegistryConfig {
+    let current = RegistryConfig::get_entry(new_config).unwrap_or_else(|(_errors, default)| default);
+    if current != RegistryConfig::default() {
+        return current; // already migrated, or configured fresh under the new id
+    }
+    let Ok(old_config) = old_config else {
+        return current; // no old store at all — fresh install, not an error
+    };
+    let old = RegistryConfig::get_entry(&old_config).unwrap_or_else(|(_errors, default)| default);
+    if old == RegistryConfig::default() {
+        return current; // old install existed but was never actually configured
+    }
+    // Best-effort: a write failure here just means the next call retries the same
+    // migration (the old store is never mutated, so nothing is lost either way).
+    let _ = old.write_entry(new_config);
+    old
+}
+
+/// [`Registry::open`]'s production entry point for [`RemovedStarterPacksConfig`]'s
+/// migration (spec 009-project-rename, FR-004a) — see
+/// [`migrate_removed_starter_packs_config_core`] for the actual logic.
+fn migrate_removed_starter_packs_config(new_config: &Config) -> RemovedStarterPacksConfig {
+    migrate_removed_starter_packs_config_core(
+        new_config,
+        Config::new(OLD_REMOVED_STARTER_PACKS_CONFIG_ID, RemovedStarterPacksConfig::VERSION),
+    )
+}
+
+/// The pure migration core — see [`migrate_registry_config_core`]'s doc, identical
+/// shape applied to the other of this crate's two `cosmic-config` entries.
+fn migrate_removed_starter_packs_config_core(
+    new_config: &Config,
+    old_config: Result<Config, cosmic_config::Error>,
+) -> RemovedStarterPacksConfig {
+    let current = RemovedStarterPacksConfig::get_entry(new_config).unwrap_or_else(|(_errors, default)| default);
+    if current != RemovedStarterPacksConfig::default() {
+        return current;
+    }
+    let Ok(old_config) = old_config else {
+        return current;
+    };
+    let old = RemovedStarterPacksConfig::get_entry(&old_config).unwrap_or_else(|(_errors, default)| default);
+    if old == RemovedStarterPacksConfig::default() {
+        return current;
+    }
+    let _ = old.write_entry(new_config);
+    old
 }
 
 #[cfg(test)]
@@ -399,5 +468,130 @@ mod tests {
         registry.remove(&starter_src).unwrap();
 
         assert!(registry.is_removed_starter_pack(&starter_src));
+    }
+
+    /// contracts/config-migration.md's 4 required test cases, applied to both of this
+    /// crate's `cosmic-config` entries.
+    mod migration {
+        use super::*;
+
+        fn old_registry(root: &std::path::Path) -> Config {
+            Config::with_custom_path(OLD_REGISTRY_CONFIG_ID, RegistryConfig::VERSION, root.to_path_buf()).unwrap()
+        }
+
+        fn new_registry(root: &std::path::Path) -> Config {
+            Config::with_custom_path(REGISTRY_CONFIG_ID, RegistryConfig::VERSION, root.to_path_buf()).unwrap()
+        }
+
+        fn entry(path: &str) -> PackRegistryEntry {
+            PackRegistryEntry { source: PackSource::StaticFile(path.into()), status: RegistryStatus::Known, origin: PackOrigin::User }
+        }
+
+        #[test]
+        fn registry_migrates_real_content_and_is_idempotent_on_a_second_call() {
+            let dir = tempfile::tempdir().unwrap();
+            let old = old_registry(dir.path());
+            RegistryConfig { entries: vec![entry("/old.jpg")] }.write_entry(&old).unwrap();
+
+            let new = new_registry(dir.path());
+            let migrated = migrate_registry_config_core(&new, Ok(old_registry(dir.path())));
+            assert_eq!(migrated.entries, vec![entry("/old.jpg")]);
+            assert_eq!(RegistryConfig::get_entry(&new).unwrap().entries, vec![entry("/old.jpg")]);
+
+            let migrated_again = migrate_registry_config_core(&new, Ok(old_registry(dir.path())));
+            assert_eq!(migrated_again, migrated);
+        }
+
+        #[test]
+        fn registry_failed_old_config_open_is_a_silent_no_op() {
+            let dir = tempfile::tempdir().unwrap();
+            let new = new_registry(dir.path());
+            let invalid_open = Config::with_custom_path("../invalid", RegistryConfig::VERSION, dir.path().to_path_buf());
+            assert!(invalid_open.is_err(), "fixture assumption: this name is rejected by cosmic-config");
+
+            let result = migrate_registry_config_core(&new, invalid_open);
+            assert_eq!(result, RegistryConfig::default());
+        }
+
+        #[test]
+        fn registry_old_store_exists_but_was_never_configured_stays_default() {
+            let dir = tempfile::tempdir().unwrap();
+            let _ = old_registry(dir.path());
+            let new = new_registry(dir.path());
+
+            let result = migrate_registry_config_core(&new, Ok(old_registry(dir.path())));
+            assert_eq!(result, RegistryConfig::default());
+        }
+
+        #[test]
+        fn registry_new_store_already_populated_never_consults_the_old_one() {
+            let dir = tempfile::tempdir().unwrap();
+            let old = old_registry(dir.path());
+            RegistryConfig { entries: vec![entry("/old.jpg")] }.write_entry(&old).unwrap();
+
+            let new = new_registry(dir.path());
+            RegistryConfig { entries: vec![entry("/already-configured.jpg")] }.write_entry(&new).unwrap();
+
+            let result = migrate_registry_config_core(&new, Ok(old_registry(dir.path())));
+            assert_eq!(result.entries, vec![entry("/already-configured.jpg")]);
+        }
+
+        fn old_removed(root: &std::path::Path) -> Config {
+            Config::with_custom_path(OLD_REMOVED_STARTER_PACKS_CONFIG_ID, RemovedStarterPacksConfig::VERSION, root.to_path_buf()).unwrap()
+        }
+
+        fn new_removed(root: &std::path::Path) -> Config {
+            Config::with_custom_path(REMOVED_STARTER_PACKS_CONFIG_ID, RemovedStarterPacksConfig::VERSION, root.to_path_buf()).unwrap()
+        }
+
+        #[test]
+        fn removed_starter_packs_migrates_real_content_and_is_idempotent() {
+            let dir = tempfile::tempdir().unwrap();
+            let old = old_removed(dir.path());
+            let removed_src = PackSource::StaticFile("/starter.jpg".into());
+            RemovedStarterPacksConfig { removed: vec![removed_src.clone()] }.write_entry(&old).unwrap();
+
+            let new = new_removed(dir.path());
+            let migrated = migrate_removed_starter_packs_config_core(&new, Ok(old_removed(dir.path())));
+            assert_eq!(migrated.removed, vec![removed_src.clone()]);
+
+            let migrated_again = migrate_removed_starter_packs_config_core(&new, Ok(old_removed(dir.path())));
+            assert_eq!(migrated_again, migrated);
+        }
+
+        #[test]
+        fn removed_starter_packs_failed_old_config_open_is_a_silent_no_op() {
+            let dir = tempfile::tempdir().unwrap();
+            let new = new_removed(dir.path());
+            let invalid_open = Config::with_custom_path("../invalid", RemovedStarterPacksConfig::VERSION, dir.path().to_path_buf());
+            assert!(invalid_open.is_err(), "fixture assumption: this name is rejected by cosmic-config");
+
+            let result = migrate_removed_starter_packs_config_core(&new, invalid_open);
+            assert_eq!(result, RemovedStarterPacksConfig::default());
+        }
+
+        #[test]
+        fn removed_starter_packs_old_store_exists_but_was_never_configured_stays_default() {
+            let dir = tempfile::tempdir().unwrap();
+            let _ = old_removed(dir.path());
+            let new = new_removed(dir.path());
+
+            let result = migrate_removed_starter_packs_config_core(&new, Ok(old_removed(dir.path())));
+            assert_eq!(result, RemovedStarterPacksConfig::default());
+        }
+
+        #[test]
+        fn removed_starter_packs_new_store_already_populated_never_consults_the_old_one() {
+            let dir = tempfile::tempdir().unwrap();
+            let old = old_removed(dir.path());
+            RemovedStarterPacksConfig { removed: vec![PackSource::StaticFile("/old.jpg".into())] }.write_entry(&old).unwrap();
+
+            let already_configured = PackSource::StaticFile("/already-configured.jpg".into());
+            let new = new_removed(dir.path());
+            RemovedStarterPacksConfig { removed: vec![already_configured.clone()] }.write_entry(&new).unwrap();
+
+            let result = migrate_removed_starter_packs_config_core(&new, Ok(old_removed(dir.path())));
+            assert_eq!(result.removed, vec![already_configured]);
+        }
     }
 }

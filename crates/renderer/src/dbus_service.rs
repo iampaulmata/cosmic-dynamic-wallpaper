@@ -35,12 +35,12 @@ use crate::output::OutputId;
 
 /// D-Bus bus name this daemon registers — must match
 /// `wallpaperctl::dbus_client::BUS_NAME` exactly.
-pub const BUS_NAME: &str = "com.system76.CosmicWallpaper1";
+pub const BUS_NAME: &str = "com.system76.CosmicDynamicWallpaper1";
 /// Object path the interface below is served at — must match
 /// `wallpaperctl::dbus_client::OBJECT_PATH` exactly.
-pub const OBJECT_PATH: &str = "/com/system76/CosmicWallpaper1";
+pub const OBJECT_PATH: &str = "/com/system76/CosmicDynamicWallpaper1";
 /// D-Bus interface name — must match `wallpaperctl::dbus_client::INTERFACE` exactly.
-pub const INTERFACE: &str = "com.system76.CosmicWallpaper1.Daemon";
+pub const INTERFACE: &str = "com.system76.CosmicDynamicWallpaper1.Daemon";
 
 /// A pending `Reevaluate`/`ReevaluateAll` call — drained by the main loop, since only
 /// `&mut WallpaperDaemon` can actually re-evaluate and redraw.
@@ -93,7 +93,7 @@ pub struct DaemonInterface {
     pub state: Arc<Mutex<DbusState>>,
 }
 
-#[zbus::interface(interface = "com.system76.CosmicWallpaper1.Daemon")]
+#[zbus::interface(interface = "com.system76.CosmicDynamicWallpaper1.Daemon")]
 impl DaemonInterface {
     /// `QueryOutput(output_id) -> (assigned, active_image, next_transition_at)` per
     /// the contract — an unmanaged `output_id` is a D-Bus `InvalidArgs` error, which

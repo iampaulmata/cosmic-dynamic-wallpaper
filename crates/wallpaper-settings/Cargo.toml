@@ -7,7 +7,7 @@ description = "Standalone libcosmic settings GUI for the dynamic wallpaper daemo
 rust-version = "1.97"
 
 [[bin]]
-name = "wallpaper-settings"
+name = "cosmic-wallpaper-settings"
 path = "src/main.rs"
 
 [dependencies]

@@ -7,7 +7,7 @@ description = "CLI control surface for the dynamic wallpaper daemon"
 rust-version = "1.97"
 
 [[bin]]
-name = "wallpaperctl"
+name = "cosmic-wallpaperctl"
 path = "src/main.rs"
 
 [dependencies]

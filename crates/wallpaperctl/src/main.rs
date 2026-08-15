@@ -19,7 +19,7 @@ use crate::config::{LocationConfigEntry, RendererConfig};
 use crate::error::CliError;
 
 #[derive(Parser)]
-#[command(name = "wallpaperctl", about = "Control surface for the dynamic wallpaper daemon")]
+#[command(name = "cosmic-wallpaperctl", about = "Control surface for the Cosmic Dynamic Wallpaper daemon")]
 struct Cli {
     /// Machine-readable output (FR-013).
     #[arg(long, global = true)]

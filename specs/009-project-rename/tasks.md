@@ -121,27 +121,27 @@ enabled (spec.md US2's own Independent Test; `quickstart.md`'s SC-004/SC-005 sec
 
 **D-Bus identifiers** (contracts §4 — the two files must stay byte-identical):
 
-- [ ] T013 [US2] Rename `BUS_NAME`/`OBJECT_PATH`/`INTERFACE` constants in
+- [X] T013 [US2] Rename `BUS_NAME`/`OBJECT_PATH`/`INTERFACE` constants in
       `crates/wallpaper-ipc/src/dbus_client.rs`
-- [ ] T014 [US2] Rename the matching constants and the
+- [X] T014 [US2] Rename the matching constants and the
       `#[zbus::interface(interface = "...")]` attribute in
       `crates/renderer/src/dbus_service.rs` (must match T013 exactly)
 
 **`cosmic-config` application IDs + migrations** (data-model.md,
 contracts/config-migration.md):
 
-- [ ] T015 [P] [US2] Rename `RENDERER_CONFIG_ID` in
+- [X] T015 [P] [US2] Rename `RENDERER_CONFIG_ID` in
       `crates/wallpaper-ipc/src/renderer_config.rs` and implement
       `migrate_from_old_app_id` for `RendererConfig` per
       contracts/config-migration.md's behavior contract, with its 4 required test cases
-- [ ] T016 [P] [US2] Rename `LOCATION_CONFIG_ID` in
+- [X] T016 [P] [US2] Rename `LOCATION_CONFIG_ID` in
       `crates/wallpaper-ipc/src/location_config.rs` and implement
       `migrate_from_old_app_id` for `LocationConfigEntry` per
       contracts/config-migration.md, with its 4 required test cases
-- [ ] T017 [P] [US2] Rename `REGISTRY_CONFIG_ID` in `crates/pack-loader/src/registry.rs`
+- [X] T017 [P] [US2] Rename `REGISTRY_CONFIG_ID` in `crates/pack-loader/src/registry.rs`
       and implement `migrate_from_old_app_id` for `RegistryConfig` per
       contracts/config-migration.md, with its 4 required test cases
-- [ ] T018 [P] [US2] Rename `REMOVED_STARTER_PACKS_CONFIG_ID` in
+- [X] T018 [P] [US2] Rename `REMOVED_STARTER_PACKS_CONFIG_ID` in
       `crates/pack-loader/src/registry.rs` and implement `migrate_from_old_app_id` for
       `RemovedStarterPacksConfig` per contracts/config-migration.md, with its 4 required
       test cases
