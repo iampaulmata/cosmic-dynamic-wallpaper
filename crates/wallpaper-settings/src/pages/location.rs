@@ -67,6 +67,51 @@ fn status_label(status: &ResolutionStatus) -> String {
     }
 }
 
+/// A short, plain-language reason for the Portal status row specifically — the raw
+/// failure text `renderer::portal_location::apply_failure` stores is `ashpd`'s own
+/// error `Display`, which embeds the underlying `org.freedesktop.portal.Error.*`
+/// D-Bus error name (zbus's `DBusError` derive formats every such error as
+/// `"<dbus error name>: <description>"`) and isn't meant for an end user to read.
+/// Matched leniently (case-insensitive substring, singular/plural-agnostic) since the
+/// exact wire text varies by portal backend and by which of `ashpd`'s wrapper variants
+/// (`Portal`, `Zbus`, a bare timeout string, …) produced it — an unrecognized reason
+/// still degrades to a plain "unavailable" rather than leaking anything raw.
+fn simplify_portal_reason(reason: &str) -> &'static str {
+    let normalized = reason.to_ascii_lowercase();
+    let contains = |needle: &str| normalized.contains(needle);
+
+    if contains("invalidargument") {
+        "invalid request"
+    } else if contains("notfound") {
+        "location services unavailable"
+    } else if contains("exist") {
+        "session already active"
+    } else if contains("notallowed") {
+        "permission denied"
+    } else if contains("cancelled") || contains("canceled") {
+        "request cancelled"
+    } else if contains("sessionexpired") || contains("windowdestroyed") {
+        "session expired"
+    } else if contains("failed") {
+        "request failed"
+    } else {
+        "unavailable"
+    }
+}
+
+/// The Portal status row's label (spec.md's "clean up the language for the portal
+/// status" ask) — identical to [`status_label`] for `Unresolved`/`Resolved`, but the
+/// `Unavailable` case shows [`simplify_portal_reason`]'s short message instead of the
+/// raw D-Bus error text. IP-geolocation status keeps using [`status_label`] as-is: its
+/// failures come from STUN/HTTP lookups, not portal D-Bus errors, so this mapping
+/// doesn't apply there.
+fn portal_status_label(status: &ResolutionStatus) -> String {
+    match status {
+        ResolutionStatus::Unavailable { reason } => simplify_portal_reason(reason).to_string(),
+        _ => status_label(status),
+    }
+}
+
 pub fn view(state: &State) -> Element<'_, Message> {
     let mut mode_section = widget::settings::section().title("Location mode");
     for mode in [LocationMode::Manual, LocationMode::Automatic, LocationMode::IpGeolocation] {
@@ -78,10 +123,16 @@ pub fn view(state: &State) -> Element<'_, Message> {
             // capability — independent of the tooltip above.
             let info_icon = widget::button::icon(widget::icon::from_name("dialog-information-symbolic"))
                 .on_press(Message::ToggleIpDisclosure);
+            // Info icon goes to the left of the radio button (not the usual
+            // convention) so the radio itself stays aligned with the other rows'
+            // radio buttons instead of being pushed out of line. The icon button is
+            // taller than the bare radio, so the row needs explicit vertical
+            // centering or the radio sits above-center next to it.
             let row = widget::row::with_capacity(2)
                 .spacing(cosmic::theme::spacing().space_xs)
-                .push(with_tooltip)
-                .push(info_icon);
+                .align_y(cosmic::iced::Alignment::Center)
+                .push(info_icon)
+                .push(with_tooltip);
             mode_section = mode_section.add(widget::settings::item(mode_label(mode), row));
             if state.show_ip_disclosure {
                 mode_section = mode_section.add(widget::text::caption(IP_GEOLOCATION_DISCLOSURE));
@@ -97,7 +148,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
         "Effective location",
         widget::text::body(effective.map(|l| format!("{} {}", l.latitude(), l.longitude())).unwrap_or_else(|| "none".to_string())),
     ));
-    status_section = status_section.add(widget::settings::item("Portal status", widget::text::body(status_label(&state.entry.automatic_status))));
+    status_section = status_section.add(widget::settings::item("Portal status", widget::text::body(portal_status_label(&state.entry.automatic_status))));
     status_section = status_section.add(widget::settings::item("IP-geolocation status", widget::text::body(status_label(&state.entry.ip_status))));
 
     let manual_section = widget::settings::section()
@@ -125,6 +176,49 @@ pub fn view(state: &State) -> Element<'_, Message> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `simplify_portal_reason` recognizes every `org.freedesktop.portal.Error.*`
+    /// D-Bus error name it's documented to handle, matched inside the full raw text
+    /// `ashpd`'s `Display` actually produces (zbus's `DBusError` derive formats each
+    /// as `"<name>: <description>"`, and `ashpd::Error::Portal`'s own `Display` wraps
+    /// that again in `"Portal request failed: {inner}"`).
+    #[test]
+    fn simplify_portal_reason_maps_every_known_dbus_error_name() {
+        let cases = [
+            ("Portal request failed: org.freedesktop.portal.Error.InvalidArgument: bad accuracy", "invalid request"),
+            ("Portal request failed: org.freedesktop.portal.Error.NotFound: no such session", "location services unavailable"),
+            ("Portal request failed: org.freedesktop.portal.Error.Exist: session already exists", "session already active"),
+            ("Portal request failed: org.freedesktop.portal.Error.NotAllowed: Location services disabled", "permission denied"),
+            ("Portal request failed: org.freedesktop.portal.Error.Cancelled: user dismissed the prompt", "request cancelled"),
+            ("Portal request failed: org.freedesktop.portal.Error.WindowDestroyed: window closed", "session expired"),
+            ("Portal request failed: org.freedesktop.portal.Error.Failed: unknown backend error", "request failed"),
+        ];
+        for (reason, expected) in cases {
+            assert_eq!(simplify_portal_reason(reason), expected, "reason: {reason}");
+        }
+    }
+
+    /// An unrecognized reason (a bare timeout string, a zbus service-unknown error, …)
+    /// still degrades to a plain "unavailable" rather than leaking raw D-Bus text.
+    #[test]
+    fn simplify_portal_reason_falls_back_to_unavailable_for_anything_unrecognized() {
+        assert_eq!(simplify_portal_reason("resolution attempt timed out"), "unavailable");
+        assert_eq!(simplify_portal_reason("portal session ended"), "unavailable");
+    }
+
+    /// `portal_status_label` only simplifies the `Unavailable` case — `Resolved`/
+    /// `Unresolved` match `status_label` exactly, same as the IP-geolocation row.
+    #[test]
+    fn portal_status_label_simplifies_only_the_unavailable_case() {
+        assert_eq!(portal_status_label(&ResolutionStatus::Resolved), "resolved");
+        assert_eq!(portal_status_label(&ResolutionStatus::Unresolved), "unresolved");
+        assert_eq!(
+            portal_status_label(&ResolutionStatus::Unavailable {
+                reason: "Portal request failed: org.freedesktop.portal.Error.NotAllowed: Location services disabled".to_string()
+            }),
+            "permission denied"
+        );
+    }
 
     /// T021: `set_mode` writes the identical shape for all three modes.
     #[test]

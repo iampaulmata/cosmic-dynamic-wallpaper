@@ -35,6 +35,12 @@ pub struct ScheduleQueryResult {
     /// When the next transition begins. `None` only for the degenerate single-image/
     /// static-mode pack, which never transitions (Edge Cases).
     pub next_transition_at: Option<DateTime<Local>>,
+    /// The image that will be active once `next_transition_at` arrives — `Some` and
+    /// `None` in exact lockstep with `next_transition_at` (same degenerate-pack
+    /// exception). Mid-transition this is the incoming image itself (the one
+    /// `next_transition_at`'s instant marks as fully active); outside a transition
+    /// it's the image belonging to the upcoming anchor.
+    pub next_image: Option<ImageId>,
 }
 
 /// The crossfade in progress at a queried instant (data-model.md `TransitionState`).
@@ -93,6 +99,7 @@ fn resolve(
             active_before: images[0].id.clone(),
             transition: None,
             next_transition_at: None,
+            next_image: None,
         };
     }
 
@@ -133,7 +140,7 @@ fn build_result(
 ) -> ScheduleQueryResult {
     let (prev_instant, prev_idx) = prev;
     let (_, prev_prev_idx) = prev_prev;
-    let (next_instant, _) = next;
+    let (next_instant, next_idx) = next;
 
     let transition_end = prev_instant + crossfade_duration;
     if crossfade_duration > TimeDelta::zero() && at < transition_end {
@@ -147,12 +154,16 @@ fn build_result(
                 progress,
             }),
             next_transition_at: Some(transition_end),
+            // The incoming image is exactly what becomes active once this
+            // transition ends at `transition_end`.
+            next_image: Some(images[prev_idx].id.clone()),
         }
     } else {
         ScheduleQueryResult {
             active_before: images[prev_idx].id.clone(),
             transition: None,
             next_transition_at: Some(next_instant),
+            next_image: Some(images[next_idx].id.clone()),
         }
     }
 }
@@ -186,6 +197,7 @@ fn fallback_result(
         active_before: images[idx].id.clone(),
         transition: None,
         next_transition_at: None,
+        next_image: None,
     }
 }
 

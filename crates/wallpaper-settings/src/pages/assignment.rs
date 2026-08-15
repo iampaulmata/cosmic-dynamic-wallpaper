@@ -94,7 +94,10 @@ pub fn view(state: &State) -> Element<'_, Message> {
         .collect();
 
     let enabled = state.current_config.same_pack_everywhere.is_some();
-    let toggle = widget::toggler(enabled).label("Same pack everywhere".to_string()).on_toggle(Message::ToggleSameEverywhere);
+    let toggle = widget::toggler(enabled)
+        .label("Same pack everywhere".to_string())
+        .spacing(cosmic::theme::spacing().space_xs)
+        .on_toggle(Message::ToggleSameEverywhere);
     section = section.add(widget::settings::item("Same pack everywhere", toggle));
 
     if enabled {
