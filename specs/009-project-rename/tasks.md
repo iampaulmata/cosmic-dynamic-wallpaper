@@ -145,7 +145,7 @@ contracts/config-migration.md):
       `crates/pack-loader/src/registry.rs` and implement `migrate_from_old_app_id` for
       `RemovedStarterPacksConfig` per contracts/config-migration.md, with its 4 required
       test cases
-- [ ] T019 [US2] Wire every existing load call site (`wallpaperd`'s and
+- [X] T019 [US2] Wire every existing load call site (`wallpaperd`'s and
       `wallpaper-settings`'s startup paths, and any other current `::load`/`::open`
       caller for these four stores) to call the new `migrate_from_old_app_id` functions
       from T015–T018 in place of a bare load (depends on T015–T018)
