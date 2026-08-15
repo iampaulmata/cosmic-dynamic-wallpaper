@@ -12,20 +12,38 @@ use pack_loader::{PackRegistryEntry, PackSource, Registry, RegistryStatus};
 
 use crate::pack_display;
 
-/// One row in the Packs page's list — enough to identify a pack, show its
-/// reachability at a glance, and preview it (spec.md Acceptance Scenario 1, FR-018).
+/// One row in the Packs page's list — enough to identify a pack, show its author at a
+/// glance, and preview it (spec.md Acceptance Scenario 1, FR-018).
 #[derive(Debug, Clone, PartialEq)]
 pub struct PackRow {
     pub name: String,
     pub source: PackSource,
     pub status: &'static str,
+    pub author: String,
     pub thumbnail: Option<PathBuf>,
 }
 
+/// Fixed column widths for the Name/Author/Thumbnail columns, so every row's cells
+/// line up with the header above them.
+const NAME_COLUMN_WIDTH: u16 = 180;
+const AUTHOR_COLUMN_WIDTH: u16 = 140;
+const THUMBNAIL_COLUMN_WIDTH: u16 = 48;
+
+/// Character budgets the Name/Author columns truncate to (with `truncate_with_ellipsis`)
+/// — sized to comfortably fit within the column widths above.
+const NAME_MAX_CHARS: usize = 26;
+const AUTHOR_MAX_CHARS: usize = 20;
+
+/// The placeholder shown for a pack with no declared author, or one that can't be
+/// loaded at all (FR-011) — mirrors `pack_display::resolve_pack_name`'s "(unnamed
+/// pack)" placeholder for the same two cases.
+const UNKNOWN_AUTHOR: &str = "(unknown)";
+
 /// Pure mapping from a registry listing to display rows — independent of `libcosmic`
-/// rendering, so this stays a plain, fast unit test. Name and thumbnail both come from
-/// `pack_display` (spec 008 research.md R2/R7), falling back to a clearly-labeled
-/// placeholder (FR-011) when a source can't be loaded, rather than a raw path.
+/// rendering, so this stays a plain, fast unit test. Name, author, and thumbnail all
+/// come from `pack_display` (spec 008 research.md R2/R7), falling back to a
+/// clearly-labeled placeholder (FR-011) when a source can't be loaded, rather than a
+/// raw path.
 pub fn rows_from_registry(entries: &[PackRegistryEntry]) -> Vec<PackRow> {
     entries
         .iter()
@@ -36,10 +54,25 @@ pub fn rows_from_registry(entries: &[PackRegistryEntry]) -> Vec<PackRow> {
             };
             let name = pack_display::resolve_pack_name(&entry.source)
                 .unwrap_or_else(|| "(unnamed pack)".to_string());
+            let author = pack_display::resolve_pack_author(&entry.source)
+                .unwrap_or_else(|| UNKNOWN_AUTHOR.to_string());
             let thumbnail = pack_display::resolve_thumbnail_path(&entry.source);
-            PackRow { name, source: entry.source.clone(), status, thumbnail }
+            PackRow { name, source: entry.source.clone(), status, author, thumbnail }
         })
         .collect()
+}
+
+/// Truncates `s` to at most `max_chars` characters, replacing the tail with an
+/// ellipsis when it doesn't fit — keeps the Name/Author columns from stretching the
+/// page out when a pack declares a long one.
+fn truncate_with_ellipsis(s: &str, max_chars: usize) -> String {
+    if s.chars().count() <= max_chars {
+        s.to_string()
+    } else {
+        let mut truncated: String = s.chars().take(max_chars.saturating_sub(1)).collect();
+        truncated.push('…');
+        truncated
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -123,10 +156,11 @@ pub fn cancel_removal(state: &mut State) {
 }
 
 pub fn view(state: &State) -> Element<'_, Message> {
-    let add_row = widget::row::with_capacity(2)
+    let add_row = widget::row::with_capacity(3)
         .spacing(cosmic::theme::spacing().space_xs)
         .push(widget::button::standard("Add pack folder…").on_press(Message::AddFolderRequested))
-        .push(widget::button::standard("Add image file…").on_press(Message::AddFileRequested));
+        .push(widget::button::standard("Add image file…").on_press(Message::AddFileRequested))
+        .push(widget::button::standard("Refresh").on_press(Message::Refresh));
 
     let mut top = widget::column::with_capacity(2).push(add_row);
     if let Some(reason) = &state.add_error {
@@ -137,21 +171,33 @@ pub fn view(state: &State) -> Element<'_, Message> {
     if state.rows.is_empty() {
         section = section.add(widget::text::body("No packs registered yet. Add one above."));
     } else {
+        // Labeled Name/Author/Thumbnail columns (status is intentionally not shown
+        // here), spaced apart so the row doesn't feel crowded; Name and Author are
+        // fixed-width and truncated with an ellipsis so a long one can't stretch the
+        // page or crowd its neighbors.
+        let header = widget::row::with_capacity(3)
+            .spacing(cosmic::theme::spacing().space_m)
+            .push(widget::text::caption_heading("Name").width(NAME_COLUMN_WIDTH))
+            .push(widget::text::caption_heading("Author").width(AUTHOR_COLUMN_WIDTH))
+            .push(widget::text::caption_heading("Thumbnail").width(THUMBNAIL_COLUMN_WIDTH));
+        section = section.add(header);
+
         for row in &state.rows {
             let thumbnail: Element<'_, Message> = match &row.thumbnail {
-                Some(path) => widget::image(path.clone()).width(48).height(48).into(),
+                Some(path) => widget::image(path.clone()).width(THUMBNAIL_COLUMN_WIDTH).height(THUMBNAIL_COLUMN_WIDTH).into(),
                 None => widget::text::caption("(no preview available)").into(),
             };
-            let detail = widget::row::with_capacity(3)
-                .spacing(cosmic::theme::spacing().space_xs)
+            let detail = widget::row::with_capacity(4)
+                .spacing(cosmic::theme::spacing().space_m)
+                .align_y(cosmic::iced::Alignment::Center)
+                .push(widget::text::body(truncate_with_ellipsis(&row.name, NAME_MAX_CHARS)).width(NAME_COLUMN_WIDTH))
+                .push(widget::text::body(truncate_with_ellipsis(&row.author, AUTHOR_MAX_CHARS)).width(AUTHOR_COLUMN_WIDTH))
                 .push(thumbnail)
-                .push(widget::text::body(format!("status: {}", row.status)))
                 .push(widget::button::destructive("Remove").on_press(Message::RemoveRequested(row.source.clone())));
-            section = section.add(widget::settings::item(row.name.clone(), detail));
+            section = section.add(detail);
         }
     }
-    let refresh = widget::button::standard("Refresh").on_press(Message::Refresh);
-    widget::scrollable(widget::column::with_capacity(3).push(top).push(refresh).push(section)).into()
+    widget::scrollable(widget::column::with_capacity(2).push(top).push(section)).into()
 }
 
 #[cfg(test)]
@@ -173,7 +219,8 @@ mod tests {
     }
 
     /// Preserves the original "browse registered packs" coverage, now against names/
-    /// thumbnails instead of raw paths.
+    /// thumbnails instead of raw paths. A static-file pack has no manifest, so its
+    /// author is always the placeholder.
     #[test]
     fn maps_registry_entries_to_rows_with_status_and_name() {
         let dir = tempfile::tempdir().unwrap();
@@ -185,16 +232,31 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].status, "known");
         assert_eq!(rows[0].name, "sunrise");
+        assert_eq!(rows[0].author, UNKNOWN_AUTHOR);
         assert_eq!(rows[0].thumbnail.as_deref(), Some(file.as_path()));
     }
 
     #[test]
-    fn a_source_that_fails_to_load_falls_back_to_the_placeholder_name() {
+    fn a_source_that_fails_to_load_falls_back_to_the_placeholder_name_and_author() {
         let entries = vec![entry(std::path::Path::new("/does/not/exist.png"), RegistryStatus::Unavailable)];
         let rows = rows_from_registry(&entries);
 
         assert_eq!(rows[0].name, "(unnamed pack)");
+        assert_eq!(rows[0].author, UNKNOWN_AUTHOR);
         assert_eq!(rows[0].thumbnail, None);
+    }
+
+    #[test]
+    fn truncate_with_ellipsis_leaves_short_strings_untouched() {
+        assert_eq!(truncate_with_ellipsis("sunrise", 26), "sunrise");
+        assert_eq!(truncate_with_ellipsis("exactly-ten", 11), "exactly-ten");
+    }
+
+    #[test]
+    fn truncate_with_ellipsis_shortens_and_marks_long_strings() {
+        let truncated = truncate_with_ellipsis("a very long pack name indeed", 10);
+        assert_eq!(truncated, "a very lo…");
+        assert_eq!(truncated.chars().count(), 10, "stays within the character budget, ellipsis included");
     }
 
     #[test]
