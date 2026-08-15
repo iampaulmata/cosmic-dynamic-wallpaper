@@ -109,13 +109,13 @@ enabled (spec.md US2's own Independent Test; `quickstart.md`'s SC-004/SC-005 sec
 
 **Binaries** (contracts/identifier-rename-map.md §3):
 
-- [ ] T010 [P] [US2] Rename `crates/renderer/src/bin/wallpaperd.rs` →
+- [X] T010 [P] [US2] Rename `crates/renderer/src/bin/wallpaperd.rs` →
       `crates/renderer/src/bin/cosmic-wallpaperd.rs`
-- [ ] T011 [P] [US2] Rename the `wallpaperctl` binary to `cosmic-wallpaperctl`: update
+- [X] T011 [P] [US2] Rename the `wallpaperctl` binary to `cosmic-wallpaperctl`: update
       `[[bin]] name` in `crates/wallpaperctl/Cargo.toml` and the
       `#[command(name = ..., about = ...)]` attribute in
       `crates/wallpaperctl/src/main.rs` (contracts §3, §9)
-- [ ] T012 [P] [US2] Rename the `wallpaper-settings` binary to
+- [X] T012 [P] [US2] Rename the `wallpaper-settings` binary to
       `cosmic-wallpaper-settings` via `[[bin]] name` in
       `crates/wallpaper-settings/Cargo.toml` (contracts §3)
 
@@ -217,10 +217,10 @@ empty. No dependency on US1 or US2.
 
 ## Phase 6: Polish & Cross-Cutting Concerns
 
-- [ ] T030 Re-run `cargo build --release --workspace`, `cargo test --workspace`, and
+- [X] T030 Re-run `cargo build --release --workspace`, `cargo test --workspace`, and
       `cargo clippy --workspace --all-targets`; diff against T002's baseline and confirm
       an identical pass/fail outcome (FR-007)
-- [ ] T031 Run `cargo deb -p renderer --no-build` and validate the produced `.deb`
+- [X] T031 Run `cargo deb -p renderer --no-build` and validate the produced `.deb`
       against `quickstart.md`'s SC-003 section (correct filename, correct binary/
       desktop/unit paths inside it)
 - [ ] T032 Execute `quickstart.md`'s SC-005 package-supersession scenario end to end on
@@ -228,7 +228,7 @@ empty. No dependency on US1 or US2.
 - [ ] T033 Execute `quickstart.md`'s SC-004 migration scenario end to end, confirming
       the location/packs/assignment configured under the old identifiers survive the
       upgrade untouched
-- [ ] T034 [P] Prepare a new beta version/release notes for the renamed build, following
+- [X] T034 [P] Prepare a new beta version/release notes for the renamed build, following
       this project's own established release convention (deb revision bump, tag, notes)
 
 ---
