@@ -5,5 +5,6 @@
 pub mod assignment;
 pub mod crossfade;
 pub mod location;
+pub mod pack_builder;
 pub mod packs;
 pub mod timeline;
