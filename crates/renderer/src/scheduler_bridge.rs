@@ -51,6 +51,33 @@ pub fn evaluate(
     Ok(Some(pack.pack.query(location, at, crossfade_duration)))
 }
 
+/// The next transition instant for one output's loaded pack — the idle-wait timer's
+/// per-output contribution to `WallpaperDaemon::next_wake` (T021, FR-003).
+///
+/// **Bug fixed (GitHub issue #7)**: `ValidatedPack::next_transition_after` has the
+/// exact same "panics if called with `location: None` on a solar-anchored pack" hazard
+/// this module's own doc already describes for `query`/[`evaluate`] — but the
+/// idle-wait path called into spec 1 directly, skipping this module's guard entirely.
+/// On a clean install with the (solar-anchored) starter pack auto-assigned and no
+/// location configured yet, that direct call ran as part of the very first idle-wait
+/// reschedule and crashed the daemon immediately — the only way out was `wallpaperctl
+/// location set <lat> <long>` from the command line before the daemon could even stay
+/// up long enough to be configured from the GUI.
+///
+/// `None` both when there's no pack loaded (unassigned) or it never transitions (a
+/// single-image/static pack), *and* — the fix — when it's solar-anchored with no
+/// location available yet: that output simply doesn't contribute a wake deadline until
+/// a location becomes available, rather than panicking the whole daemon. Every
+/// location change already calls `reschedule_idle_timer()` again (see its own doc), so
+/// this output starts contributing as soon as one is.
+pub fn next_wake_for(pack: Option<&LoadedPack>, location: Option<&Location>, at: DateTime<Local>) -> Option<DateTime<Local>> {
+    let pack = pack?;
+    if pack.pack.anchor_kind() == AnchorKind::Solar && location.is_none() {
+        return None;
+    }
+    pack.pack.next_transition_after(location, at)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,5 +141,34 @@ mod tests {
         let loaded = loaded_pack(clock_pack());
         let result = evaluate(&OutputId::new("DP-3"), Some(&loaded), None, Local::now(), TimeDelta::seconds(45));
         assert!(matches!(result, Ok(Some(_))));
+    }
+
+    /// GitHub issue #7 regression: a solar-anchored pack with no location must not
+    /// panic `next_wake_for` — it degrades to no wake-deadline contribution instead
+    /// (this is the fix; before it, this exact call sequence crashed `wallpaperd` on
+    /// every clean install, since the starter pack is solar-anchored and there's no
+    /// location configured yet at first launch).
+    #[test]
+    fn next_wake_for_a_solar_pack_without_location_does_not_panic_and_returns_none() {
+        let loaded = loaded_pack(solar_pack());
+        assert_eq!(next_wake_for(Some(&loaded), None, Local::now()), None);
+    }
+
+    #[test]
+    fn next_wake_for_a_solar_pack_with_location_returns_the_next_anchor_instant() {
+        let loaded = loaded_pack(solar_pack());
+        let loc = Location::new(45.5019, -73.5674).unwrap();
+        assert!(next_wake_for(Some(&loaded), Some(&loc), Local::now()).is_some());
+    }
+
+    #[test]
+    fn next_wake_for_a_clock_pack_never_needs_a_location() {
+        let loaded = loaded_pack(clock_pack());
+        assert!(next_wake_for(Some(&loaded), None, Local::now()).is_some());
+    }
+
+    #[test]
+    fn next_wake_for_no_pack_is_none() {
+        assert_eq!(next_wake_for(None, None, Local::now()), None);
     }
 }
