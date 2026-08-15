@@ -75,6 +75,7 @@ mod tests {
             active_before: ImageId::new("dawn.jpg"),
             transition: None,
             next_transition_at: Some(chrono::Local::now()),
+            next_image: Some(ImageId::new("noon.jpg")),
         };
         let r = QueryResponse::from_schedule_result(OutputId::new("DP-3"), &result);
         assert!(r.assigned);
@@ -92,6 +93,7 @@ mod tests {
                 progress: 0.5,
             }),
             next_transition_at: None,
+            next_image: Some(ImageId::new("noon.jpg")),
         };
         let r = QueryResponse::from_schedule_result(OutputId::new("DP-3"), &result);
         assert_eq!(r.active_image, "noon.jpg");

@@ -8,7 +8,7 @@ use cosmic::app::Task;
 use cosmic::widget::{self, nav_bar};
 use cosmic::{executor, Core, Element};
 use schedule_engine::Location;
-use wallpaper_ipc::{LocationConfigEntry, RendererConfig};
+use wallpaper_ipc::{effective_location, LocationConfigEntry, RendererConfig};
 
 use crate::{pack_display, pages};
 
@@ -76,12 +76,22 @@ impl App {
         self.assignment = pages::assignment::State { known_outputs, available_packs, current_config: renderer_config };
     }
 
+    /// The current/next thumbnails on the Timeline page (`pack_display::
+    /// resolve_schedule_snapshot`) need the same renderer config and effective
+    /// location every other page already loads independently — read fresh here rather
+    /// than threading a stale copy through.
+    fn load_timeline(&self) -> pages::timeline::State {
+        let renderer_config = RendererConfig::load(&self.renderer_config_store);
+        let location = effective_location(&LocationConfigEntry::load(&self.location_config_store));
+        pages::timeline::State::load(renderer_config, location)
+    }
+
     fn refresh_active_page(&mut self) {
         match self.nav_model.active_data::<Page>().copied() {
             Some(Page::Packs) => self.packs = pages::packs::State::load(&mut self.pack_registry),
             Some(Page::Assignment) => self.refresh_assignment(),
             Some(Page::Location) => self.location = pages::location::State::load(LocationConfigEntry::load(&self.location_config_store)),
-            Some(Page::Timeline) => self.timeline = pages::timeline::State::load(),
+            Some(Page::Timeline) => self.timeline = self.load_timeline(),
             Some(Page::Crossfade) => self.crossfade = pages::crossfade::State { current_config: RendererConfig::load(&self.renderer_config_store) },
             None => {}
         }
@@ -122,7 +132,8 @@ impl cosmic::Application for App {
         let available_packs = pack_registry.known_packs().into_iter().map(|e| e.source).collect();
         let assignment = pages::assignment::State { known_outputs, available_packs, current_config: renderer_config.clone() };
         let location = pages::location::State::load(LocationConfigEntry::load(&location_config_store));
-        let timeline = pages::timeline::State::load();
+        let timeline_location = effective_location(&LocationConfigEntry::load(&location_config_store));
+        let timeline = pages::timeline::State::load(renderer_config.clone(), timeline_location);
         let crossfade = pages::crossfade::State { current_config: renderer_config };
 
         let app = App { core, nav_model, pack_registry, renderer_config_store, location_config_store, packs, assignment, location, timeline, crossfade };
@@ -245,7 +256,7 @@ impl cosmic::Application for App {
                 }
             }
             Message::Timeline(pages::timeline::Message::Refresh) => {
-                self.timeline = pages::timeline::State::load();
+                self.timeline = self.load_timeline();
             }
             Message::Crossfade(pages::crossfade::Message::DurationChanged(value)) => {
                 pages::crossfade::set_duration(&mut self.crossfade.current_config, value.round() as u32);
