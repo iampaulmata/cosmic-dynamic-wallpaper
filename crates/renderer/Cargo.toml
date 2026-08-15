@@ -63,49 +63,61 @@ unwrap_used = "deny"
 expect_used = "deny"
 
 [package.metadata.deb]
-name = "dynamic-wallpaper"
-# Debian revision bump for the third beta build (v0.1.0-beta.3, GitHub issue #7's
-# first-launch crash fix) — crate semver stays 0.1.0 (no breaking/stable-release
-# change yet), this just distinguishes the package artifact from beta.2's 0.1.0-2.
-revision = "3"
+name = "cosmic-dynamic-wallpaper"
+# Debian revision reset to "1" under the new package name (spec 009-project-rename) —
+# distinct package artifact from the old "dynamic-wallpaper" name's beta.1-3 (0.1.0-1
+# through 0.1.0-3); crate semver stays 0.1.0 (no breaking/stable-release change yet).
+revision = "1"
 maintainer = "iampaulmata <paul.mata42@gmail.com>"
 copyright = "2026, iampaulmata <paul.mata42@gmail.com>"
 extended-description = """\
-A from-scratch, COSMIC-native dynamic wallpaper daemon. Rotates wallpapers across the day \
+A from-scratch, COSMIC-native Cosmic Dynamic Wallpaper daemon. Rotates wallpapers across the day \
 following real solar events (sunrise, sunset, civil/astronomical twilight, solar noon) for \
 your location, or a fully custom location-free manual schedule, crossfading smoothly between \
-images. Ships wallpaperd (the renderer daemon) and wallpaperctl (its CLI control surface), \
-plus a systemd user unit so wallpaperd autostarts with your COSMIC session."""
+images. Ships cosmic-wallpaperd (the renderer daemon) and cosmic-wallpaperctl (its CLI control \
+surface), plus a systemd user unit so cosmic-wallpaperd autostarts with your COSMIC session."""
 depends = "$auto"
 # Soft dependency only (spec 6 research.md R2, applied here per spec 7 research.md R8):
 # automatic portal-based location (spec 6) works correctly without GeoClue2 installed
 # (FR-005's graceful degrade), but a fresh install offers it out of the box on distros
 # that carry the package.
 recommends = "geoclue-2.0"
+# Supersedes the pre-rename package name (spec 009-project-rename FR-004b, resolved via
+# clarification): a normal `apt install`/upgrade of this package removes
+# "dynamic-wallpaper" first — running its already-existing prerm, which disables its
+# systemd unit — rather than leaving both packages (and both systemd units, both sets
+# of binaries) installed side by side. This is what makes the cosmic-config migration
+# (wallpaper-ipc's/pack-loader's `migrate_from_old_app_id`) reachable through an
+# ordinary upgrade, and it's what guarantees the two renderer daemons are never both
+# enabled at once (constitution Principle I: exclusive ownership of the background
+# surface).
+replaces = "dynamic-wallpaper"
+conflicts = "dynamic-wallpaper"
+breaks = "dynamic-wallpaper"
 section = "x11"
 priority = "optional"
 assets = [
-    ["target/release/wallpaperd", "usr/bin/", "755"],
-    ["target/release/wallpaperctl", "usr/bin/", "755"],
+    ["target/release/cosmic-wallpaperd", "usr/bin/", "755"],
+    ["target/release/cosmic-wallpaperctl", "usr/bin/", "755"],
     # The GUI (spec 7 US1) — real gap found and fixed 2026-08-14 (release-prep pass):
     # this binary and its .desktop entry were missing from the package entirely, so
-    # wallpaper-settings never actually appeared in an app launcher despite the root
+    # the settings GUI never actually appeared in an app launcher despite the root
     # README describing that workflow.
-    ["target/release/wallpaper-settings", "usr/bin/", "755"],
-    ["../../packaging/desktop/com.system76.CosmicWallpaperSettings.desktop", "usr/share/applications/com.system76.CosmicWallpaperSettings.desktop", "644"],
-    ["../../packaging/systemd/wallpaperd.service", "usr/lib/systemd/user/wallpaperd.service", "644"],
+    ["target/release/cosmic-wallpaper-settings", "usr/bin/", "755"],
+    ["../../packaging/desktop/com.system76.CosmicDynamicWallpaperSettings.desktop", "usr/share/applications/com.system76.CosmicDynamicWallpaperSettings.desktop", "644"],
+    ["../../packaging/systemd/cosmic-wallpaperd.service", "usr/lib/systemd/user/cosmic-wallpaperd.service", "644"],
     # Bundled starter pack (spec 7 US2, FR-008) — static, checked-in assets (T043,
-    # tools/generate-starter-pack). `wallpaperd`'s own first-run self-registration
+    # tools/generate-starter-pack). `cosmic-wallpaperd`'s own first-run self-registration
     # (crates/renderer/src/starter_pack.rs) looks for this exact path
     # (STARTER_PACK_SYSTEM_PATH) — not a postinst script write, see that module's doc
     # comment for why.
-    ["../../assets/starter-pack/*", "usr/share/dynamic-wallpaper/starter-pack/", "644"],
+    ["../../assets/starter-pack/*", "usr/share/cosmic-dynamic-wallpaper/starter-pack/", "644"],
     # IP-geolocation database (spec 7 US3, research.md R3, T051) — NOT checked into
     # this repository (.gitignore'd, `assets/geoip/`). A release-process download step
     # (README.md's "IP-geolocation database" section) must place a fresh DB-IP Lite
     # snapshot here before running `cargo deb` — this line intentionally makes
     # packaging fail loudly if that step was skipped, rather than shipping without it.
     # Destination matches `ip_geolocation::MMDB_SYSTEM_PATH` exactly.
-    ["../../assets/geoip/dbip-city-lite.mmdb", "usr/share/dynamic-wallpaper/geoip.mmdb", "644"],
+    ["../../assets/geoip/dbip-city-lite.mmdb", "usr/share/cosmic-dynamic-wallpaper/geoip.mmdb", "644"],
 ]
 maintainer-scripts = "../../packaging/debian"

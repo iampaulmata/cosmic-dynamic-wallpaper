@@ -152,27 +152,27 @@ contracts/config-migration.md):
 
 **`.desktop` entry** (contracts §6):
 
-- [ ] T020 [P] [US2] Rename
+- [X] T020 [P] [US2] Rename
       `packaging/desktop/com.system76.CosmicWallpaperSettings.desktop` →
       `com.system76.CosmicDynamicWallpaperSettings.desktop` and update its `Name=`
       (`Cosmic Dynamic Wallpaper Settings`), `Comment=`, and `Exec=` (→
       `cosmic-wallpaper-settings`, matching T012) fields
-- [ ] T021 [P] [US2] Update the `APP_ID` constant in
+- [X] T021 [P] [US2] Update the `APP_ID` constant in
       `crates/wallpaper-settings/src/app.rs` to
       `com.system76.CosmicDynamicWallpaperSettings` (matches T020)
 
 **systemd unit** (contracts §8):
 
-- [ ] T022 [P] [US2] Rename `packaging/systemd/wallpaperd.service` →
+- [X] T022 [P] [US2] Rename `packaging/systemd/wallpaperd.service` →
       `cosmic-wallpaperd.service` and update its `Description=`, `Documentation=`, and
       `ExecStart=` (→ `/usr/bin/cosmic-wallpaperd`, matching T010) fields
-- [ ] T023 [US2] Update the unit filename referenced in `packaging/debian/postinst` and
+- [X] T023 [US2] Update the unit filename referenced in `packaging/debian/postinst` and
       `packaging/debian/prerm`'s `systemctl --user --global {enable,disable}
       wallpaperd.service` calls to `cosmic-wallpaperd.service` (depends on T022)
 
 **Debian packaging** (contracts §7):
 
-- [ ] T024 [US2] In `crates/renderer/Cargo.toml`'s `[package.metadata.deb]`: rename
+- [X] T024 [US2] In `crates/renderer/Cargo.toml`'s `[package.metadata.deb]`: rename
       `name` to `cosmic-dynamic-wallpaper`; add `replaces`, `conflicts`, and `breaks`
       all set to `"dynamic-wallpaper"`; update `extended-description`; and update every
       `assets` path to the renamed binaries/`.desktop`/systemd-unit filenames (depends

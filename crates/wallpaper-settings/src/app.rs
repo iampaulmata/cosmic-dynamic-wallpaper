@@ -103,7 +103,7 @@ impl cosmic::Application for App {
     type Flags = ();
     type Message = Message;
 
-    const APP_ID: &'static str = "com.system76.CosmicWallpaperSettings";
+    const APP_ID: &'static str = "com.system76.CosmicDynamicWallpaperSettings";
 
     fn core(&self) -> &Core {
         &self.core
