@@ -32,6 +32,13 @@ This project differs from prior art in three ways:
 - Feels like a native part of COSMIC - install, configure, and forget
 - Idle cost (when no transition is happening) is effectively zero
 
+## Screenshots
+
+![The Packs page in Cosmic Dynamic Wallpaper Settings, showing two registered packs](docs/images/settings-packs-page.png)
+
+The **Packs** page of `cosmic-wallpaper-settings` — add a pack folder or single image,
+remove one, and see each pack's author and thumbnail at a glance.
+
 ## Future goals
 
 - Update the pack configuration from the GUI
