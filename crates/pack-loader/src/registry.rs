@@ -26,6 +26,21 @@ pub const REMOVED_STARTER_PACKS_CONFIG_ID: &str = "com.system76.CosmicDynamicWal
 const OLD_REGISTRY_CONFIG_ID: &str = "com.system76.CosmicWallpaper.Registry";
 const OLD_REMOVED_STARTER_PACKS_CONFIG_ID: &str = "com.system76.CosmicWallpaper.RemovedStarterPacks";
 
+/// **Real bug found post-implementation** (spec 009-project-rename): the application-id
+/// migration above is deliberately content-preserving, not content-transforming — exactly
+/// right for a user's own registered pack paths, which this rename never touches. But
+/// the *bundled starter pack itself* is a system-installed path that this same rename
+/// relocated (`crates/renderer/src/starter_pack.rs`'s `STARTER_PACK_SYSTEM_PATH`), so a
+/// verbatim copy leaves an existing installation's starter-pack registry entry (and any
+/// removed-starter-pack record) pointing at a path that no longer exists once the old
+/// `.deb` is gone. [`Registry::open`] repairs this by rewriting an exact match of the
+/// old path to the new one, in both stores. Must match `starter_pack.rs`'s own constant
+/// exactly — duplicated here (not imported) because `pack-loader` is a dependency of
+/// `renderer`, not the other way around, the same reason `wallpaper-ipc`'s D-Bus
+/// constants are duplicated rather than shared.
+const OLD_STARTER_PACK_SYSTEM_PATH: &str = "/usr/share/dynamic-wallpaper/starter-pack";
+const NEW_STARTER_PACK_SYSTEM_PATH: &str = "/usr/share/cosmic-dynamic-wallpaper/starter-pack";
+
 /// Who registered a [`PackRegistryEntry`] (spec 7 data-model.md, contracts/
 /// pack-registry-origin.md). Default `User` — full backward compatibility with every
 /// registry entry that existed before this field, read forward with no behavior change
@@ -113,8 +128,18 @@ impl Registry {
             .map_err(|e| RegistryError::Storage { message: e.to_string() })?;
         let removed_config = Config::new(REMOVED_STARTER_PACKS_CONFIG_ID, RemovedStarterPacksConfig::VERSION)
             .map_err(|e| RegistryError::Storage { message: e.to_string() })?;
-        let state = migrate_registry_config(&config);
-        let removed_state = migrate_removed_starter_packs_config(&removed_config);
+        let mut state = migrate_registry_config(&config);
+        let mut removed_state = migrate_removed_starter_packs_config(&removed_config);
+        // Real bug found post-implementation (spec 009-project-rename): repair any
+        // entry left pointing at the pre-rename starter-pack system path — see
+        // `OLD_STARTER_PACK_SYSTEM_PATH`'s doc comment for why the migration above
+        // can't already handle this on its own.
+        if repair_relocated_starter_pack_entries(&mut state.entries) {
+            state.write_entry(&config).map_err(|e| RegistryError::Storage { message: e.to_string() })?;
+        }
+        if repair_relocated_starter_pack_removed(&mut removed_state.removed) {
+            removed_state.write_entry(&removed_config).map_err(|e| RegistryError::Storage { message: e.to_string() })?;
+        }
         Ok(Self { config, state, removed_config, removed_state })
     }
 
@@ -278,6 +303,35 @@ fn migrate_removed_starter_packs_config_core(
     }
     let _ = old.write_entry(new_config);
     old
+}
+
+/// Rewrites `source` in place if it's an exact match for the pre-rename starter-pack
+/// system path, returning whether it changed anything. Only the `Directory` variant is
+/// checked — the bundled starter pack is always a manifest-based directory pack, never
+/// a `StaticFile` (see `starter_pack.rs`'s own doc comment).
+fn repair_source_if_relocated(source: &mut PackSource) -> bool {
+    let PackSource::Directory(path) = source else { return false };
+    if path.as_path() != std::path::Path::new(OLD_STARTER_PACK_SYSTEM_PATH) {
+        return false;
+    }
+    *path = std::path::PathBuf::from(NEW_STARTER_PACK_SYSTEM_PATH);
+    true
+}
+
+/// [`Registry::open`]'s repair pass over every registered pack's source. Deliberately
+/// `fold`, not `any` — `any` short-circuits on the first match, which would silently
+/// leave every subsequent relocated entry unrepaired; every element must be visited for
+/// its mutating side effect regardless of what earlier ones returned.
+#[allow(clippy::unnecessary_fold)]
+fn repair_relocated_starter_pack_entries(entries: &mut [PackRegistryEntry]) -> bool {
+    entries.iter_mut().fold(false, |changed, entry| repair_source_if_relocated(&mut entry.source) || changed)
+}
+
+/// [`Registry::open`]'s repair pass over the removed-starter-packs record — see
+/// [`repair_relocated_starter_pack_entries`]'s doc for why this is `fold`, not `any`.
+#[allow(clippy::unnecessary_fold)]
+fn repair_relocated_starter_pack_removed(removed: &mut [PackSource]) -> bool {
+    removed.iter_mut().fold(false, |changed, source| repair_source_if_relocated(source) || changed)
 }
 
 #[cfg(test)]
@@ -592,6 +646,61 @@ mod tests {
 
             let result = migrate_removed_starter_packs_config_core(&new, Ok(old_removed(dir.path())));
             assert_eq!(result.removed, vec![already_configured]);
+        }
+    }
+
+    /// Real bug regression (spec 009-project-rename): a registry entry migrated
+    /// verbatim from the old application id still points at the pre-rename
+    /// starter-pack system path, which no longer exists once the old package is
+    /// removed — `Registry::open`'s repair pass must fix this up.
+    mod starter_pack_relocation {
+        use super::*;
+
+        fn registry_entry(source: PackSource, origin: PackOrigin) -> PackRegistryEntry {
+            PackRegistryEntry { source, status: RegistryStatus::Unavailable, origin }
+        }
+
+        #[test]
+        fn repairs_a_registered_entry_pointing_at_the_old_starter_pack_path() {
+            let mut entries =
+                vec![registry_entry(PackSource::Directory(OLD_STARTER_PACK_SYSTEM_PATH.into()), PackOrigin::Package)];
+
+            assert!(repair_relocated_starter_pack_entries(&mut entries));
+            assert_eq!(entries[0].source, PackSource::Directory(NEW_STARTER_PACK_SYSTEM_PATH.into()));
+        }
+
+        #[test]
+        fn leaves_an_unrelated_entry_untouched() {
+            let mut entries = vec![registry_entry(PackSource::Directory("/home/user/my-pack".into()), PackOrigin::User)];
+            let original = entries.clone();
+
+            assert!(!repair_relocated_starter_pack_entries(&mut entries));
+            assert_eq!(entries, original);
+        }
+
+        #[test]
+        fn is_a_harmless_noop_once_already_repaired() {
+            let mut entries =
+                vec![registry_entry(PackSource::Directory(NEW_STARTER_PACK_SYSTEM_PATH.into()), PackOrigin::Package)];
+
+            assert!(!repair_relocated_starter_pack_entries(&mut entries));
+        }
+
+        #[test]
+        fn repairs_the_removed_starter_packs_record_too() {
+            let mut removed = vec![PackSource::Directory(OLD_STARTER_PACK_SYSTEM_PATH.into())];
+
+            assert!(repair_relocated_starter_pack_removed(&mut removed));
+            assert_eq!(removed, vec![PackSource::Directory(NEW_STARTER_PACK_SYSTEM_PATH.into())]);
+        }
+
+        #[test]
+        fn does_not_touch_a_static_file_source_even_with_a_matching_path() {
+            // The starter pack is always a Directory pack — a StaticFile source is
+            // never relocated even if (implausibly) its path matched.
+            let mut source = PackSource::StaticFile(OLD_STARTER_PACK_SYSTEM_PATH.into());
+            assert!(!repair_source_if_relocated(&mut source));
+            assert_eq!(source, PackSource::StaticFile(OLD_STARTER_PACK_SYSTEM_PATH.into()));
         }
     }
 }
