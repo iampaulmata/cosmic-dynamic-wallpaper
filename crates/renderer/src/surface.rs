@@ -522,14 +522,11 @@ impl WallpaperDaemon {
     }
 
     /// The next instant any managed output needs re-evaluating — the idle-wait timer
-    /// deadline (T021, FR-003).
+    /// deadline (T021, FR-003). Per-output logic (including GitHub issue #7's crash
+    /// fix) lives in [`scheduler_bridge::next_wake_for`] — see its doc.
     pub fn next_wake(&self) -> Option<chrono::DateTime<chrono::Local>> {
-        self.outputs
-            .iter()
-            .filter_map(|o| o.loaded_pack.as_ref().map(|p| (o, p)))
-            .filter_map(|(o, pack)| pack.pack.next_transition_after(self.location.as_ref(), chrono::Local::now()).map(|t| (o.id.clone(), t)))
-            .map(|(_, t)| t)
-            .min()
+        let now = chrono::Local::now();
+        self.outputs.iter().filter_map(|o| scheduler_bridge::next_wake_for(o.loaded_pack.as_ref(), self.location.as_ref(), now)).min()
     }
 
     /// Reload every output's assignment/pack from the current `renderer_config` — the

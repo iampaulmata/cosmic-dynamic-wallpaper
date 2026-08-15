@@ -64,11 +64,10 @@ expect_used = "deny"
 
 [package.metadata.deb]
 name = "dynamic-wallpaper"
-# Debian revision bump for the second beta build (v0.1.0-beta.2) — crate semver stays
-# 0.1.0 (no breaking/stable-release change yet), this just distinguishes the package
-# artifact from the first beta's 0.1.0-1 (cargo-deb defaults to revision "1" when
-# unset, which is what v0.1.0-beta.1 shipped as).
-revision = "2"
+# Debian revision bump for the third beta build (v0.1.0-beta.3, GitHub issue #7's
+# first-launch crash fix) — crate semver stays 0.1.0 (no breaking/stable-release
+# change yet), this just distinguishes the package artifact from beta.2's 0.1.0-2.
+revision = "3"
 maintainer = "iampaulmata <paul.mata42@gmail.com>"
 copyright = "2026, iampaulmata <paul.mata42@gmail.com>"
 extended-description = """\
