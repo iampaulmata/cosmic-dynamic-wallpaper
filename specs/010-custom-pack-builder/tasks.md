@@ -259,7 +259,7 @@ and "keep in place" choices leave the pack registered and working afterward (spe
 - [X] T033 Run `cargo clippy -p pack-loader -p wallpaper-settings --all-targets -- -D warnings`
       and `cargo test -p pack-loader -p wallpaper-settings`, fixing any `unwrap()`/`expect()`
       outside `#[cfg(test)]` (constitution Principle VIII)
-- [ ] T034 [P] Walk through [quickstart.md](./quickstart.md)'s manual validation steps end-to-end
+- [X] T034 [P] Walk through [quickstart.md](./quickstart.md)'s manual validation steps end-to-end
       on a real COSMIC session
 
 ---
