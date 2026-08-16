@@ -58,6 +58,85 @@ use crate::texture::GpuTexture;
 /// the schema's own default).
 pub const CROSSFADE_DURATION: Duration = Duration::from_secs(45);
 
+/// The most distinct decoded textures [`TextureCache`] keeps resident per output at
+/// once (spec 011 US7 FR-036, research.md R31) — an unbounded cache previously grew
+/// without limit for a large pack (many distinct images across countless solar/
+/// time-of-day anchors), each held GPU memory forever. 16 comfortably covers a
+/// realistic pack's actively-cycling working set (a crossfade only ever needs 2 at
+/// once) with headroom, while still bounding the worst case.
+pub const MAX_CACHED_TEXTURES_PER_OUTPUT: usize = 16;
+
+/// A bounded least-recently-used cache of decoded GPU textures for one output (spec 011
+/// US7 FR-036, research.md R31), replacing a plain `HashMap<ImageId, GpuTexture>`.
+/// Evicts the least-recently-*used* entry (not least-recently-inserted — both a cache
+/// hit via [`Self::contains_key`] and a fresh [`Self::insert`] mark an entry
+/// most-recently-used) once a fresh insert would exceed
+/// [`MAX_CACHED_TEXTURES_PER_OUTPUT`]. [`Self::get`] deliberately does *not* touch
+/// recency itself (staying `&self`, not `&mut self`) — every read in `draw` is for an
+/// id `ensure_texture` already touched moments earlier via `contains_key`/`insert` on
+/// the same evaluation tick, so a second touch on read would be redundant, and keeping
+/// `get` non-mutating lets `draw` borrow two entries (`outgoing`/`incoming`) from the
+/// same cache in one expression.
+#[derive(Default)]
+struct TextureCache {
+    entries: HashMap<ImageId, GpuTexture>,
+    /// Access order, oldest (least recently used) first.
+    recency: Vec<ImageId>,
+}
+
+impl TextureCache {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    /// Whether `id` is cached — also marks it most-recently-used (see this type's doc
+    /// comment for why that's the right place for the "touch", not `get`).
+    fn contains_key(&mut self, id: &ImageId) -> bool {
+        let present = self.entries.contains_key(id);
+        if present {
+            self.touch(id);
+        }
+        present
+    }
+
+    fn get(&self, id: &ImageId) -> Option<&GpuTexture> {
+        self.entries.get(id)
+    }
+
+    /// Insert a freshly-decoded texture, evicting the least-recently-used entry first
+    /// if the cache is already at [`MAX_CACHED_TEXTURES_PER_OUTPUT`] and `id` isn't
+    /// already present (a re-insert of an existing id never needs to evict).
+    fn insert(&mut self, id: ImageId, texture: GpuTexture) {
+        if !self.entries.contains_key(&id) && self.entries.len() >= MAX_CACHED_TEXTURES_PER_OUTPUT {
+            self.evict_least_recently_used();
+        }
+        self.touch(&id);
+        self.entries.insert(id, texture);
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.recency.clear();
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    fn touch(&mut self, id: &ImageId) {
+        self.recency.retain(|existing| existing != id);
+        self.recency.push(id.clone());
+    }
+
+    fn evict_least_recently_used(&mut self) {
+        if !self.recency.is_empty() {
+            let lru = self.recency.remove(0);
+            self.entries.remove(&lru);
+        }
+    }
+}
+
 /// Per-output render state: the layer surface, its `wgpu` bridge, and everything
 /// needed to decide what to draw on its next frame.
 struct WallpaperOutput {
@@ -84,8 +163,9 @@ struct WallpaperOutput {
     size: Option<(u32, u32)>,
     loaded_pack: Option<LoadedPack>,
     /// Decoded textures for the current pack, keyed by image id — reused across
-    /// frames rather than re-decoding every tick.
-    textures: HashMap<ImageId, GpuTexture>,
+    /// frames rather than re-decoding every tick. Bounded (FR-036) — see
+    /// [`TextureCache`]'s doc comment.
+    textures: TextureCache,
     active_image: Option<ImageId>,
     transition: Option<CrossfadeTransition>,
     frame_callback_pending: bool,
@@ -230,7 +310,7 @@ impl WallpaperDaemon {
             wgpu_surface: None,
             size: None,
             loaded_pack: None,
-            textures: HashMap::new(),
+            textures: TextureCache::new(),
             active_image: None,
             transition: None,
             frame_callback_pending: false,
@@ -389,7 +469,7 @@ impl WallpaperDaemon {
         }
     }
 
-    fn ensure_texture(gpu: &GpuContext, cache: &mut HashMap<ImageId, GpuTexture>, pack: &LoadedPack, id: &ImageId) {
+    fn ensure_texture(gpu: &GpuContext, cache: &mut TextureCache, pack: &LoadedPack, id: &ImageId) {
         if cache.contains_key(id) {
             return;
         }
@@ -792,6 +872,81 @@ mod tests {
         assert!(surface_error_needs_reconfigure(&wgpu::SurfaceError::Outdated));
         assert!(!surface_error_needs_reconfigure(&wgpu::SurfaceError::Timeout));
         assert!(!surface_error_needs_reconfigure(&wgpu::SurfaceError::OutOfMemory));
+    }
+
+    fn tiny_texture(device: &wgpu::Device) -> GpuTexture {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        GpuTexture { texture, view, width: 1, height: 1 }
+    }
+
+    /// Spec 011 US7 FR-036 (research.md R31) — the audit's own reproduction: a large
+    /// pack with many distinct images previously grew this cache without bound, each
+    /// entry holding GPU memory forever. Real (tiny, 1x1) GPU textures — same "skip if
+    /// no GPU adapter" posture `tests/gpu_render.rs` already uses for GPU-dependent
+    /// tests, since `TextureCache` isn't `pub` and so can't be exercised from there.
+    #[test]
+    fn texture_cache_evicts_the_least_recently_used_entry_once_full() {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor { backends: wgpu::Backends::VULKAN | wgpu::Backends::GL, ..Default::default() });
+        let Some(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) else {
+            eprintln!("skipping: no GPU adapter available in this environment");
+            return;
+        };
+        let Ok((device, _queue)) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default(), None)) else {
+            eprintln!("skipping: GPU device request failed in this environment");
+            return;
+        };
+
+        let mut cache = TextureCache::new();
+        for i in 0..MAX_CACHED_TEXTURES_PER_OUTPUT {
+            cache.insert(ImageId::new(format!("image-{i}")), tiny_texture(&device));
+        }
+        assert_eq!(cache.len(), MAX_CACHED_TEXTURES_PER_OUTPUT);
+
+        // Touch "image-0" so it's no longer the least-recently-used entry.
+        assert!(cache.contains_key(&ImageId::new("image-0")));
+
+        // One more insert must evict exactly one entry to stay at the bound —
+        // "image-1" (the next-oldest, since "image-0" was just touched) is evicted,
+        // not "image-0".
+        cache.insert(ImageId::new("new-image"), tiny_texture(&device));
+        assert_eq!(cache.len(), MAX_CACHED_TEXTURES_PER_OUTPUT, "cache must stay bounded at the max");
+        assert!(cache.get(&ImageId::new("image-0")).is_some(), "recently-touched entry must survive eviction");
+        assert!(cache.get(&ImageId::new("image-1")).is_none(), "the actual least-recently-used entry must be evicted");
+        assert!(cache.get(&ImageId::new("new-image")).is_some());
+    }
+
+    /// Inserting an id that's already cached (a re-decode of the same image, which
+    /// `ensure_texture`'s `contains_key` guard normally prevents, but the cache type
+    /// itself shouldn't assume that) never evicts to make room for itself.
+    #[test]
+    fn texture_cache_reinserting_an_existing_id_does_not_evict() {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor { backends: wgpu::Backends::VULKAN | wgpu::Backends::GL, ..Default::default() });
+        let Some(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) else {
+            eprintln!("skipping: no GPU adapter available in this environment");
+            return;
+        };
+        let Ok((device, _queue)) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default(), None)) else {
+            eprintln!("skipping: GPU device request failed in this environment");
+            return;
+        };
+
+        let mut cache = TextureCache::new();
+        for i in 0..MAX_CACHED_TEXTURES_PER_OUTPUT {
+            cache.insert(ImageId::new(format!("image-{i}")), tiny_texture(&device));
+        }
+        cache.insert(ImageId::new("image-0"), tiny_texture(&device));
+        assert_eq!(cache.len(), MAX_CACHED_TEXTURES_PER_OUTPUT);
+        assert!(cache.get(&ImageId::new("image-1")).is_some(), "no unrelated entry should have been evicted");
     }
 }
 

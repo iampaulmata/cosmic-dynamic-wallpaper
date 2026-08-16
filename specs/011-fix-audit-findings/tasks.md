@@ -384,7 +384,7 @@ pole-latitude query returns near-instantly (quickstart.md automated table rows 1
       `crates/renderer/src/surface.rs` documenting that the borrowed Wayland `wl_surface`/
       `wl_display` handles are owned by structures that outlive every `wgpu::Surface` built from
       them (FR-035, research.md R30)
-- [ ] T039 [US7] In `crates/renderer/src/surface.rs`, replace the per-output
+- [X] T039 [US7] In `crates/renderer/src/surface.rs`, replace the per-output
       `HashMap<ImageId, GpuTexture>` texture cache with a bounded `TextureCache` (LRU eviction,
       `const MAX_CACHED_TEXTURES_PER_OUTPUT: usize = 16;`), keeping `ensure_texture`'s existing
       signature unchanged (FR-036, research.md R31)
