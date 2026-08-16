@@ -83,6 +83,15 @@ use crate::texture::GpuTexture;
 /// the schema's own default).
 pub const CROSSFADE_DURATION: Duration = Duration::from_secs(45);
 
+/// How soon to retry an output whose surface is still `Lost`/`Outdated` after
+/// [`WallpaperDaemon::draw_inner`]'s one bounded recovery attempt (spec 011
+/// adversarial re-review finding 2) — short enough that a transient GPU/compositor
+/// hiccup self-heals quickly, long enough not to hammer a genuinely-broken surface in
+/// a tight loop. Deliberately much shorter than the schedule engine's own
+/// next-transition wake (which could be hours away) or the 60s no-schedule ceiling
+/// [`WallpaperDaemon::next_wake_instant`] otherwise falls back to.
+pub const SURFACE_RECOVERY_RETRY_INTERVAL: Duration = Duration::from_secs(5);
+
 /// The most distinct decoded textures [`TextureCache`] keeps resident per output at
 /// once (spec 011 US7 FR-036, research.md R31) — an unbounded cache previously grew
 /// without limit for a large pack (many distinct images across countless solar/
@@ -194,6 +203,17 @@ struct WallpaperOutput {
     active_image: Option<ImageId>,
     transition: Option<CrossfadeTransition>,
     frame_callback_pending: bool,
+    /// Set when [`WallpaperDaemon::draw_inner`] gives up on a `Lost`/`Outdated`
+    /// surface after its one bounded recovery attempt (spec 011 adversarial re-review
+    /// finding 2) — without this, the *only* remaining triggers for a retry are the
+    /// schedule engine's own next-transition wake, a hotplug/resize event, or an
+    /// explicit `reevaluate` call, any of which could be hours away, leaving the
+    /// output stuck dark far longer than the transient GPU/compositor hiccup this is
+    /// actually meant to recover from. [`WallpaperDaemon::next_wake_instant`] folds
+    /// this into the idle-wait timer's deadline so a genuinely-stuck output gets a
+    /// bounded, dedicated retry instead of depending entirely on unrelated events.
+    /// Cleared as soon as a draw succeeds again.
+    surface_recovery_retry_at: Option<Instant>,
 }
 
 /// The `wallpaperd` application state — one instance drives every managed output plus
@@ -339,6 +359,7 @@ impl WallpaperDaemon {
             active_image: None,
             transition: None,
             frame_callback_pending: false,
+            surface_recovery_retry_at: None,
         });
     }
 
@@ -575,6 +596,7 @@ impl WallpaperDaemon {
                 // recursing again.
                 let Some(conn) = self.conn.clone() else {
                     tracing::warn!(output = %self.outputs[index].id, error = %e, "get_current_texture failed (surface lost/outdated) but no Connection is available to recover");
+                    self.arm_surface_recovery_retry(index);
                     return;
                 };
                 tracing::warn!(output = %self.outputs[index].id, error = %e, "surface lost/outdated — reconfiguring to recover");
@@ -583,6 +605,17 @@ impl WallpaperDaemon {
             }
             Err(e) => {
                 tracing::warn!(output = %self.outputs[index].id, error = %e, "get_current_texture failed, skipping frame");
+                // Spec 011 adversarial re-review finding 2: if this is a `Lost`/
+                // `Outdated` surface that either wasn't allowed to recover this call
+                // (`allow_recovery: false`, i.e. the one round-trip from
+                // `reconfigure_output` already failed) or wasn't attempted at all
+                // (`Timeout`/`OutOfMemory` don't route through the arm above), keep
+                // retrying on a short bounded interval — see
+                // `surface_recovery_retry_at`'s doc comment for why this can't be left
+                // to the schedule engine's own next-transition wake alone.
+                if surface_error_needs_reconfigure(&e) {
+                    self.arm_surface_recovery_retry(index);
+                }
                 return;
             }
         };
@@ -590,6 +623,9 @@ impl WallpaperDaemon {
         let incoming_scaling = self.image_scaling_for(index, &incoming_id);
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
         pipeline.render(&gpu.device, &gpu.queue, &view, outgoing, outgoing_scaling, incoming, incoming_scaling, progress, size);
+        // A frame was just successfully presented below — this output has recovered
+        // (or never needed to), so any pending recovery retry is stale.
+        self.outputs[index].surface_recovery_retry_at = None;
 
         let wl_surface = self.outputs[index].layer.wl_surface().clone();
         wl_surface.damage_buffer(0, 0, size.0 as i32, size.1 as i32);
@@ -606,6 +642,19 @@ impl WallpaperDaemon {
 
         wl_surface.commit();
         frame.present();
+    }
+
+    /// Arms (or refreshes) output `index`'s bounded surface-recovery retry deadline
+    /// (spec 011 adversarial re-review finding 2) — see
+    /// [`WallpaperOutput::surface_recovery_retry_at`]'s doc comment. Does not itself
+    /// reschedule the idle-wait timer; callers already inside a `draw`/`reconfigure`
+    /// chain triggered by a timer firing will pick up the new deadline the next time
+    /// `reschedule_idle_timer` runs (every `on_idle_timer_fire`), and a chain triggered
+    /// by some other event (a D-Bus `reevaluate`, a hotplug) still wants the *next*
+    /// idle-timer recompute — not this call — to fold it in, to avoid rescheduling a
+    /// `calloop` timer source from deep inside recovery logic.
+    fn arm_surface_recovery_retry(&mut self, index: usize) {
+        self.outputs[index].surface_recovery_retry_at = Some(Instant::now() + SURFACE_RECOVERY_RETRY_INTERVAL);
     }
 
     /// Re-evaluate and draw every currently-managed output right now — the entry
@@ -740,12 +789,13 @@ impl WallpaperDaemon {
         self.conn = Some(conn);
     }
 
-    /// `min(schedule-driven next_wake, earliest pending coalesced deadline)`,
-    /// converted from `DateTime<Local>`/`Instant` (calendar) domain into `Instant`
-    /// (monotonic) domain relative to *now* — `Instant` has no calendar epoch, so a
-    /// `DateTime` can't be compared to it directly. Falls back to a 60s ceiling if
-    /// nothing is pending at all, so the daemon still wakes periodically rather than
-    /// sleeping forever (e.g. to notice a system clock jump).
+    /// `min(schedule-driven next_wake, earliest pending coalesced deadline, earliest
+    /// pending surface-recovery retry)`, converted from `DateTime<Local>`/`Instant`
+    /// (calendar) domain into `Instant` (monotonic) domain relative to *now* —
+    /// `Instant` has no calendar epoch, so a `DateTime` can't be compared to it
+    /// directly. Falls back to a 60s ceiling if nothing is pending at all, so the
+    /// daemon still wakes periodically rather than sleeping forever (e.g. to notice a
+    /// system clock jump).
     fn next_wake_instant(&self) -> Instant {
         let now_local = chrono::Local::now();
         let from_schedule = self.next_wake().map(|target| {
@@ -753,13 +803,15 @@ impl WallpaperDaemon {
             Instant::now() + delta
         });
         let from_coalescer = self.coalescer.earliest_pending();
+        // Spec 011 adversarial re-review finding 2: without this, a `Lost`/`Outdated`
+        // output that failed its one bounded recovery attempt would only get retried
+        // whenever `from_schedule`/`from_coalescer` next happened to fire — the
+        // schedule engine's own next-transition wake can easily be hours away, leaving
+        // the output stuck dark far longer than the transient hiccup this exists to
+        // recover from. See `surface_recovery_retry_at`'s doc comment.
+        let from_surface_recovery = self.outputs.iter().filter_map(|o| o.surface_recovery_retry_at).min();
 
-        match (from_schedule, from_coalescer) {
-            (Some(a), Some(b)) => a.min(b),
-            (Some(a), None) => a,
-            (None, Some(b)) => b,
-            (None, None) => Instant::now() + Duration::from_secs(60),
-        }
+        earliest_wake([from_schedule, from_coalescer, from_surface_recovery], Duration::from_secs(60))
     }
 
     /// Replace the idle-wait timer with a fresh single-shot deadline computed from
@@ -866,6 +918,19 @@ fn surface_error_needs_reconfigure(e: &wgpu::SurfaceError) -> bool {
     matches!(e, wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated)
 }
 
+/// The earliest of whichever `candidates` are `Some`, or `Instant::now() + fallback`
+/// if all three are `None` — [`WallpaperDaemon::next_wake_instant`]'s actual selection
+/// logic (spec 011 adversarial re-review finding 2: folding
+/// `surface_recovery_retry_at` into this decision is what gives a stuck output a
+/// bounded retry instead of depending entirely on the schedule engine's own,
+/// potentially-hours-away next-transition wake). Extracted as a pure function, same
+/// reasoning as `clamp_reconfigure_size`/`sanitize_transition_progress`/
+/// `surface_error_needs_reconfigure` above, so this selection is unit-testable without
+/// a full `WallpaperDaemon`/GPU/Wayland setup.
+fn earliest_wake(candidates: [Option<Instant>; 3], fallback: Duration) -> Instant {
+    candidates.into_iter().flatten().min().unwrap_or_else(|| Instant::now() + fallback)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -908,6 +973,30 @@ mod tests {
         assert!(surface_error_needs_reconfigure(&wgpu::SurfaceError::Outdated));
         assert!(!surface_error_needs_reconfigure(&wgpu::SurfaceError::Timeout));
         assert!(!surface_error_needs_reconfigure(&wgpu::SurfaceError::OutOfMemory));
+    }
+
+    /// Spec 011 adversarial re-review finding 2 — a pending surface-recovery retry
+    /// deadline must actually win when it's the soonest candidate, not just be present
+    /// alongside the others without affecting the result.
+    #[test]
+    fn earliest_wake_picks_the_soonest_present_candidate() {
+        let now = Instant::now();
+        let schedule = now + Duration::from_secs(3600); // e.g. next sunrise, hours away
+        let coalescer = now + Duration::from_secs(30);
+        let surface_recovery = now + Duration::from_secs(5); // soonest — must win
+
+        let result = earliest_wake([Some(schedule), Some(coalescer), Some(surface_recovery)], Duration::from_secs(60));
+        assert_eq!(result, surface_recovery, "the nearer-term surface-recovery retry must not be shadowed by a far-future schedule wake");
+    }
+
+    /// With no schedule, coalescer, or surface-recovery deadline pending at all, the
+    /// fallback ceiling still applies (unrelated to this fix, but confirms
+    /// `earliest_wake` didn't lose that existing behavior when factored out).
+    #[test]
+    fn earliest_wake_falls_back_when_nothing_is_pending() {
+        let before = Instant::now();
+        let result = earliest_wake([None, None, None], Duration::from_secs(60));
+        assert!(result >= before + Duration::from_secs(60));
     }
 
     fn tiny_texture(device: &wgpu::Device) -> GpuTexture {
