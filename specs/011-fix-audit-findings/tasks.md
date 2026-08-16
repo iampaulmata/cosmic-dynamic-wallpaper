@@ -347,10 +347,10 @@ pole-latitude query returns near-instantly (quickstart.md automated table rows 1
 
 ### Implementation for User Story 7
 
-- [ ] T031 [P] [US7] Change `CliError::DaemonUnreachable`'s `exit_code()` mapping from `2` to `4`
+- [X] T031 [P] [US7] Change `CliError::DaemonUnreachable`'s `exit_code()` mapping from `2` to `4`
       in `crates/wallpaperctl/src/error.rs`; add regression test
       `daemon_unreachable_exit_code_is_four` (FR-028, research.md R23)
-- [ ] T032 [US7] Add `CliError::UsageError { message: String }` (exit code `2`) in
+- [X] T032 [US7] Add `CliError::UsageError { message: String }` (exit code `2`) in
       `crates/wallpaperctl/src/error.rs`; change the `--output`/`--same-everywhere` conflict check
       in `crates/wallpaperctl/src/main.rs` to `return Err(CliError::UsageError { .. })` instead of
       `eprintln!` + `std::process::exit(1)` (or express the constraint via a `clap` `ArgGroup` if
