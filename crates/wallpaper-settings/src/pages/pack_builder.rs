@@ -578,13 +578,31 @@ fn copy_dir_recursive(from: &Path, to: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-fn register_and_close(state: &mut State, registry: &mut Registry, path: &Path) {
-    if let Ok(source) = PackSource::resolve(path) {
-        let _ = registry.register(source);
+/// Spec 011 US6 FR-024 (research.md R19): both `PackSource::resolve` and
+/// `registry.register` failures were previously discarded (`if let Ok`/`let _ =`),
+/// with `pending_placement`/`pending_collision` unconditionally cleared right after —
+/// so the wizard closed and reported success even when the pack was generated (and,
+/// for a Move, physically relocated on disk) but never actually appeared in
+/// "Registered packs." Now routes the specific failure into `state.move_error` (the
+/// field this module already renders for a failed move, per its own doc comment),
+/// re-arms `pending_placement` so the placement dialog reopens showing that error and
+/// a fresh Move/Keep choice (regardless of which dialog the caller reached this from —
+/// the collision prompt's `pending_collision` is always `None`/consumed by the time
+/// this runs), and only clears everything on the success path. Returns `true` only on
+/// success, so every caller can return the right "should the wizard actually close"
+/// value instead of assuming success unconditionally.
+fn register_and_close(state: &mut State, registry: &mut Registry, path: &Path) -> bool {
+    let register_result = PackSource::resolve(path).map_err(|e| e.to_string()).and_then(|source| registry.register(source).map_err(|e| e.to_string()));
+    if let Err(e) = register_result {
+        state.move_error = Some(format!("pack was generated at {}, but couldn't be registered: {e}", path.display()));
+        state.pending_placement = Some(GeneratedPlacement { generated_path: path.to_path_buf() });
+        state.pending_collision = None;
+        return false;
     }
     state.pending_placement = None;
     state.pending_collision = None;
     state.move_error = None;
+    true
 }
 
 fn finish_move(state: &mut State, registry: &mut Registry, generated_path: &Path, root: &Path, name: &str) -> bool {
@@ -594,10 +612,7 @@ fn finish_move(state: &mut State, registry: &mut Registry, generated_path: &Path
     // itself.
     state.move_error = None;
     match move_pack(generated_path, root, name) {
-        Ok(destination) => {
-            register_and_close(state, registry, &destination);
-            true
-        }
+        Ok(destination) => register_and_close(state, registry, &destination),
         Err(MoveError::Collision) => {
             state.pending_placement = None;
             state.pending_collision =
@@ -637,11 +652,12 @@ pub fn confirm_move(state: &mut State, registry: &mut Registry) -> bool {
     finish_move(state, registry, &placement.generated_path, &root, &suggested_name)
 }
 
-/// The placement dialog's "Keep it here" action (FR-015). Always closes the wizard.
+/// The placement dialog's "Keep it here" action (FR-015). Closes the wizard on
+/// success; on a registration failure, re-shows the placement dialog with the error
+/// (FR-024) instead of unconditionally closing.
 pub fn confirm_keep(state: &mut State, registry: &mut Registry) -> bool {
     let Some(placement) = state.pending_placement.clone() else { return false };
-    register_and_close(state, registry, &placement.generated_path);
-    true
+    register_and_close(state, registry, &placement.generated_path)
 }
 
 pub fn set_collision_name(state: &mut State, name: String) {
@@ -663,11 +679,12 @@ pub fn confirm_collision_move(state: &mut State, registry: &mut Registry) -> boo
 
 /// The collision prompt's "Cancel" action — falls back to keeping the pack in place
 /// (contracts/pack-builder-gui-flow.md: the folder already has a valid manifest either
-/// way, so this is never a destructive cancel).
+/// way, so this is never a destructive cancel). Closes the wizard on success; on a
+/// registration failure, re-shows the placement dialog with the error (FR-024)
+/// instead of unconditionally closing.
 pub fn cancel_collision_to_keep(state: &mut State, registry: &mut Registry) -> bool {
     let Some(pending) = state.pending_collision.take() else { return false };
-    register_and_close(state, registry, &pending.generated_path);
-    true
+    register_and_close(state, registry, &pending.generated_path)
 }
 
 // --- View ---
@@ -1309,6 +1326,37 @@ mod tests {
         // The pre-existing destination must be untouched (still an empty dir, not
         // overwritten with the moved pack's contents).
         assert!(!fake_root.path().join(&colliding_name).join("manifest.toml").exists());
+    }
+
+    /// Spec 011 US6 FR-024 (research.md R19) — the audit's own finding: a registration
+    /// failure was previously discarded (`if let Ok`/`let _ =`), and the wizard closed
+    /// unconditionally, reporting success even though the pack never actually
+    /// appeared in "Registered packs." `register_and_close` now surfaces the failure
+    /// via `move_error`, re-arms `pending_placement` so the dialog reopens showing it,
+    /// and returns `false` (wizard stays open) instead of `true`.
+    #[test]
+    fn registration_failure_surfaces_to_move_error() {
+        let registry_dir = tempfile::tempdir().unwrap();
+        let mut registry = pack_loader::Registry::open_at(registry_dir.path()).unwrap();
+
+        // A `pending_placement` pointing at a path that doesn't exist — the simplest
+        // deterministic way to make `PackSource::resolve` (the first fallible step
+        // inside `register_and_close`) fail, without relying on filesystem permission
+        // tricks that may not behave consistently across sandboxed test environments.
+        let vanished_path = tempfile::tempdir().unwrap().path().join("this-does-not-exist");
+        let source_dir = tempfile::tempdir().unwrap();
+        let mut state = open(source_dir.path().to_path_buf());
+        state.pending_placement = Some(GeneratedPlacement { generated_path: vanished_path });
+
+        let closed = confirm_keep(&mut state, &mut registry);
+
+        assert!(!closed, "a registration failure must not report the wizard as closed/successful");
+        assert!(state.move_error.is_some(), "the specific failure must be surfaced, not discarded");
+        assert!(
+            state.pending_placement.is_some(),
+            "the placement dialog must re-arm so the user sees the error and can retry, not silently vanish"
+        );
+        assert!(registry.known_packs().is_empty(), "nothing should have been registered");
     }
 
     // --- T030: Cancel leaves the source folder byte-for-byte unchanged ---

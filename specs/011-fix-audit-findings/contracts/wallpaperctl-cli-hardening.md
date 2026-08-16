@@ -61,7 +61,9 @@ degrades to defaults, it does not become fatal).
 - Any change to `register`/`remove`/`query`/`location set`'s argument shape.
 - The D-Bus wire-level changes those commands depend on —
   see `contracts/wallpaperd-dbus-hardening.md`.
-- `location set`'s multi-field write becoming atomic (US6/FR-025) — an internal implementation
-  change (research.md R20) with no observable CLI-contract difference for a successful call; only
-  observable if the process is killed mid-write, which this contract's success/failure shape
-  doesn't otherwise describe.
+- `location set`'s multi-field write atomicity (US6/FR-025) — **no code change**: verified during
+  implementation that `location set` already writes every field through one
+  `cosmic_config::Config::transaction()` (via the derive-generated `write_entry`), the strongest
+  atomicity this project's `cosmic-config` dependency offers; the residual gap the audit's finding
+  describes lives inside that dependency's own `ConfigTransaction::commit()`, not in this project's
+  code (research.md R20's corrected entry has the full trace).
