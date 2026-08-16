@@ -447,7 +447,7 @@ test beyond "existing tests still pass."
 - [X] T050 [P] [US8] Rename or doc-comment `crates/schedule-engine/src/query.rs`'s `active_before`
       field to clarify it holds the outgoing image during a transition, not the currently-active
       one (FR-047)
-- [ ] T051 [P] [US8] Document or enforce a length bound on `ImageId`'s wrapped string in
+- [X] T051 [P] [US8] Document or enforce a length bound on `ImageId`'s wrapped string in
       `crates/schedule-engine/src/pack.rs` (FR-048)
 - [ ] T052 [P] [US8] Document the already-implemented `location ip` subcommand in
       `crates/wallpaperctl/README.md` (FR-049)
