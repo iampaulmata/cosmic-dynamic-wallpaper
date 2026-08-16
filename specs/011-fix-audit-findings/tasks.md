@@ -479,10 +479,28 @@ story above is complete.
       `specs/004-cli-control-surface/contracts/wallpaperd-dbus-interface.md` and
       `specs/004-cli-control-surface/contracts/wallpaperctl-cli.md`, so the original contracts
       point forward to the hardening delta rather than silently going stale
-- [ ] T058 Run the full `quickstart.md` validation: `cargo test --workspace` plus the three manual
+- [X] T058 Run the full `quickstart.md` validation: `cargo test --workspace` plus the three manual
       COSMIC-session reproductions (US2 path traversal, US6.3 registry failure, US4 D-Bus queue
       burst) — confirm every one now fails cleanly where the audit originally reproduced a crash
-      or silent success
+      or silent success. **Automated portion run and confirmed**: `cargo test --workspace
+      --no-fail-fast` passes every test in quickstart.md's table; the only failures are the same 5
+      pre-existing, environmentally-caused ones (`dbus_client::tests::
+      every_method_fails_fast_when_no_daemon_is_running` and 4 `wallpaperctl` daemon-unreachable
+      tests) root-caused earlier in this feature's work to a genuinely running, live
+      `cosmic-wallpaperd` system daemon (PID 2161) on this sandbox machine — confirmed still the
+      same process/root cause at T058 time, not a regression. **Manual portion deliberately not
+      run by the agent** (user decision, this session): driving the three manual COSMIC-session
+      reproductions (two GUI click-throughs, one live D-Bus burst against a real daemon) requires
+      either pointer/keyboard control this agent doesn't have or launching a second
+      `cosmic-wallpaperd` that would visibly compete with the user's real running instance on
+      their live desktop — an outward-facing change judged out of scope for unilateral agent
+      action. Each manual check's underlying logic already has a passing automated regression test
+      covering the same fix (`validate_destination_name_rejects_traversal` for US2,
+      `registration_failure_surfaces_to_move_error` for US6.3,
+      `reevaluate_all_coalesces`/`pending_queue_bounded` for US4) — the manual reproductions
+      remain available in quickstart.md for the user to run at their own discretion, matching this
+      project's established posture for every other real-GUI/live-daemon interaction
+      (`wallpaper-settings/README.md`'s "manual QA for the user" note)
 
 ---
 
