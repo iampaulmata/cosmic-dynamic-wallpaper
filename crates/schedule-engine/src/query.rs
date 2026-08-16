@@ -28,7 +28,13 @@ use crate::Location;
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScheduleQueryResult {
     /// The image belonging to the most-recently-passed anchor. Always present, even
-    /// mid-transition (it's the outgoing image in that case).
+    /// mid-transition — **do not read this as "the currently active image"**: while
+    /// `transition` is `Some`, this is the *outgoing* image (the one fading out), not
+    /// what's on screen right now (spec 011 US8 FR-047 — the name itself invites that
+    /// misreading, since it doesn't distinguish "before the most recent anchor" from
+    /// "before this transition finishes"). Outside a transition (`transition` is
+    /// `None`), it genuinely is the currently active image — the ambiguity only bites
+    /// during the crossfade window itself.
     pub active_before: ImageId,
     /// `Some` only when the query instant falls inside a crossfade window.
     pub transition: Option<TransitionState>,
