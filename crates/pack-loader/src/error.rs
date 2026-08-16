@@ -16,6 +16,14 @@ pub enum ManifestError {
         /// The manifest path that was expected but not found.
         path: PathBuf,
     },
+    /// The manifest file exceeded [`crate::load::MAX_MANIFEST_BYTES`] (spec 011 US3
+    /// FR-011) — rejected before being read into memory at all.
+    ManifestTooLarge {
+        /// The oversized manifest's path.
+        path: PathBuf,
+        /// Its actual size in bytes.
+        size: u64,
+    },
     /// The manifest failed to parse as TOML, or didn't match the expected schema shape.
     ParseFailure {
         /// The manifest file that failed to parse.
@@ -86,6 +94,9 @@ impl fmt::Display for ManifestError {
         match self {
             ManifestError::ManifestNotFound { path } => {
                 write!(f, "no manifest file found at {}", path.display())
+            }
+            ManifestError::ManifestTooLarge { path, size } => {
+                write!(f, "manifest {} is {size} bytes, larger than the {}-byte limit", path.display(), crate::load::MAX_MANIFEST_BYTES)
             }
             ManifestError::ParseFailure { path, message } => {
                 write!(f, "failed to parse manifest {}: {message}", path.display())

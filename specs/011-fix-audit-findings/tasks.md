@@ -150,18 +150,18 @@ currently precedes rejection (quickstart.md automated table, rows 2, 3, 11).
 
 ### Implementation for User Story 3
 
-- [ ] T012 [P] [US3] In `crates/pack-loader/src/load.rs`'s `load_directory_pack`, add
+- [X] T012 [P] [US3] In `crates/pack-loader/src/load.rs`'s `load_directory_pack`, add
       `if parsed.images.len() > schedule_engine::MAX_ANCHORS { return Err(...) }` immediately
       after `manifest::parse` succeeds, before the per-image resolve/containment/readability loop;
       add regression test `anchor_cap_rejected_before_per_image_io` confirming rejection happens
       without any per-image filesystem call (FR-010, research.md R7)
-- [ ] T013 [P] [US3] In `crates/pack-loader/src/load.rs`, add `pub const MAX_MANIFEST_BYTES: u64 =
+- [X] T013 [P] [US3] In `crates/pack-loader/src/load.rs`, add `pub const MAX_MANIFEST_BYTES: u64 =
       512 * 1024;` and, before `std::fs::read_to_string(&manifest_path)`, a
       `std::fs::metadata(&manifest_path)` size check rejecting anything larger with a new
       `ManifestError::ManifestTooLarge { path: PathBuf, size: u64 }` variant (add it in
       `crates/pack-loader/src/error.rs`); add regression test `oversized_manifest_rejected`
       (FR-011, research.md R8)
-- [ ] T014 [US3] In `crates/renderer/src/texture.rs`, add `pub const MAX_DECODED_IMAGE_BYTES: u64 =
+- [X] T014 [US3] In `crates/renderer/src/texture.rs`, add `pub const MAX_DECODED_IMAGE_BYTES: u64 =
       256 * 1024 * 1024;` and, in `GpuTexture::load` before `.to_rgba8()`, a header-only dimension
       check via `image::ImageReader::open(path)?.with_guessed_format()?.into_dimensions()`
       rejecting if either dimension exceeds `device.limits().max_texture_dimension_2d` or
@@ -169,7 +169,7 @@ currently precedes rejection (quickstart.md automated table, rows 2, 3, 11).
       `RendererError::TextureTooLarge { path: PathBuf, width: u32, height: u32 }` in
       `crates/renderer/src/error.rs`; add regression test `oversized_image_rejected_before_decode`
       (FR-012, research.md R9)
-- [ ] T015 [US3] Add an end-to-end test (in `crates/renderer/src/texture.rs`'s test module,
+- [X] T015 [US3] Add an end-to-end test (in `crates/renderer/src/texture.rs`'s test module,
       constructing a pack via `pack_loader::load_pack` against a fixture pack containing one
       oversized image) confirming the pack-loader → renderer boundary that `image_check.rs:14-24`
       documents is actually enforced downstream by T014 (FR-013)
