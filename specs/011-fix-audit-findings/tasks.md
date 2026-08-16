@@ -437,7 +437,7 @@ test beyond "existing tests still pass."
       output on `None` instead of panicking (FR-042, research.md R36)
 - [X] T046 [P] [US8] Add a module-level index comment in `crates/renderer/src/surface.rs` listing
       every trait impl that can originate a resize/hotplug event (FR-043)
-- [ ] T047 [P] [US8] In `crates/wallpaper-ipc/src/dbus_client.rs`, preserve the real `InvalidArgs`
+- [X] T047 [P] [US8] In `crates/wallpaper-ipc/src/dbus_client.rs`, preserve the real `InvalidArgs`
       error message instead of collapsing every case to "output not found" (FR-044)
 - [ ] T048 [P] [US8] Extract the backoff constants duplicated in
       `crates/renderer/src/portal_location.rs` and `crates/renderer/src/ip_geolocation.rs` into

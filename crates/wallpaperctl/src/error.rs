@@ -17,8 +17,11 @@ pub enum CliError {
     PackNotFound { source: PathBuf },
     /// `query`/`reevaluate` named an output `wallpaperd` doesn't currently manage
     /// (spec 3 FR-016). **Not** used by `assign` — see FR-007's "configure ahead of
-    /// time" case, which only warns, never fails.
-    OutputNotFound { id: String },
+    /// time" case, which only warns, never fails. `detail` carries the daemon's own
+    /// `InvalidArgs` message forward (spec 011 US8 FR-044) rather than discarding it —
+    /// the daemon distinguishes "not managed" from "output_id itself is malformed",
+    /// and collapsing both to one fixed message hid that distinction from the user.
+    OutputNotFound { id: String, detail: Option<String> },
     /// `location set` was given an out-of-range/malformed latitude or longitude —
     /// wraps spec 1's `LocationError` verbatim (FR-008, FR-013).
     InvalidLocation { reason: String },
@@ -75,7 +78,10 @@ impl fmt::Display for CliError {
             CliError::PackNotFound { source } => {
                 write!(f, "no registered pack at {} — register it first", source.display())
             }
-            CliError::OutputNotFound { id } => {
+            CliError::OutputNotFound { id, detail: Some(detail) } => {
+                write!(f, "wallpaperd rejected output {id:?}: {detail}")
+            }
+            CliError::OutputNotFound { id, detail: None } => {
                 write!(f, "wallpaperd does not currently manage an output named {id:?}")
             }
             CliError::InvalidLocation { reason } => write!(f, "invalid location: {reason}"),
@@ -113,7 +119,7 @@ impl From<wallpaper_ipc::DbusError> for CliError {
     fn from(e: wallpaper_ipc::DbusError) -> Self {
         match e {
             wallpaper_ipc::DbusError::DaemonUnreachable => CliError::DaemonUnreachable,
-            wallpaper_ipc::DbusError::OutputNotFound { id } => CliError::OutputNotFound { id },
+            wallpaper_ipc::DbusError::OutputNotFound { id, detail } => CliError::OutputNotFound { id, detail },
         }
     }
 }
@@ -126,7 +132,7 @@ mod tests {
     fn exit_codes_match_the_contract() {
         assert_eq!(CliError::InvalidLocation { reason: "x".into() }.exit_code(), 1);
         assert_eq!(CliError::PackNotFound { source: "/x".into() }.exit_code(), 1);
-        assert_eq!(CliError::OutputNotFound { id: "DP-3".into() }.exit_code(), 1);
+        assert_eq!(CliError::OutputNotFound { id: "DP-3".into(), detail: None }.exit_code(), 1);
         assert_eq!(CliError::PackLoadFailed { source: "/x".into(), reason: "y".into() }.exit_code(), 3);
         assert_eq!(CliError::ConfigError { reason: "z".into() }.exit_code(), 3);
         assert_eq!(CliError::InvalidOutputId { reason: "z".into() }.exit_code(), 1);
@@ -149,6 +155,27 @@ mod tests {
         assert!(
             CliError::PackNotFound { source: "/foo".into() }.to_string().contains("/foo")
         );
-        assert!(CliError::OutputNotFound { id: "DP-3".into() }.to_string().contains("DP-3"));
+        assert!(CliError::OutputNotFound { id: "DP-3".into(), detail: None }.to_string().contains("DP-3"));
+    }
+
+    /// Spec 011 US8 FR-044: the daemon's real `InvalidArgs` message (e.g. a
+    /// validation-failure reason distinct from "not managed") must reach the user
+    /// instead of being collapsed to the fixed "does not currently manage" text.
+    #[test]
+    fn output_not_found_surfaces_the_daemons_real_message_when_present() {
+        let with_detail =
+            CliError::OutputNotFound { id: "DP-3;rm -rf /".into(), detail: Some("output id contains disallowed characters".into()) };
+        let message = with_detail.to_string();
+        assert!(message.contains("disallowed characters"), "expected the daemon's real reason in: {message}");
+
+        let without_detail = CliError::OutputNotFound { id: "DP-9".into(), detail: None };
+        assert!(without_detail.to_string().contains("does not currently manage"));
+    }
+
+    #[test]
+    fn dbus_error_output_not_found_converts_preserving_detail() {
+        let dbus_err = wallpaper_ipc::DbusError::OutputNotFound { id: "DP-3".into(), detail: Some("unmanaged output: DP-3".into()) };
+        let cli_err: CliError = dbus_err.into();
+        assert!(cli_err.to_string().contains("unmanaged output: DP-3"));
     }
 }
