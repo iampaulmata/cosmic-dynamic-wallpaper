@@ -324,21 +324,35 @@ story; each maps to one or more FR numbers from spec.md.
   exclusion across a completely separate `wallpaperctl` invocation and the daemon's long-lived
   handle — insufficient for this specific race.
 
-### R18: Corrupted config visibility (FR-023)
+### R18: Corrupted config visibility (FR-023) — **refined during implementation**
 
-- **Decision**: In `RendererConfig::load`/`LocationConfigEntry::load`, replace
-  `Self::get_entry(config).unwrap_or_else(|(_errors, default)| default)` with a version that logs
-  the discarded `_errors` via `tracing::warn!` before falling back to the default, and change
-  `load`'s signature to also return whether a corruption fallback occurred (a `(Self, bool)` or a
-  small `LoadOutcome` struct) so callers — specifically `wallpaperctl location get` — can print a
-  distinguishing message ("location config could not be read, treating as unset" vs. "no location
-  set") while still exiting 0 in both cases (neither is a fatal error per constitution Principle
-  VIII).
+- **Decision**: `load`'s signature stays exactly `fn load(config: &Config) -> Self` — changing it
+  to return `(Self, bool)` would have touched ~45 call sites across four crates (mostly test code),
+  for no benefit to the ~40 of those that don't care about the distinction at all. Instead: `load`
+  is now a thin wrapper around a new `load_reporting_corruption(config: &Config) -> (Self, bool)`,
+  which every existing caller of `load` is unaffected by (`load` just discards the `bool` half
+  internally), while the one caller that *does* need the distinction (`wallpaperctl location get`,
+  T026) calls `load_reporting_corruption` directly. `load_reporting_corruption` also logs via
+  `tracing::warn!` whenever it reports `true`, so every existing caller gets visibility into
+  genuine corruption for free (in the daemon's/CLI's log output) even without touching their call
+  site at all.
+- **Correction found while implementing**: the original plan (both here and data-model.md) said
+  "logs the discarded `_errors`" as if any non-empty `errors` from `get_entry`'s `Err` variant
+  meant genuine corruption. Reading `cosmic_config`'s derive macro output directly showed this is
+  wrong: `errors` also fills up for the completely ordinary "this key was simply never written"
+  case (`cosmic_config::Error::NotFound`), which ordinarily happens on every single first run.
+  Treating *any* non-empty `errors` as "corrupted" would have falsely flagged that ordinary case.
+  `cosmic_config::Error` itself already ships the right predicate for this —
+  `Error::is_err(&self) -> bool`, whose own doc comment is literally "whether the reason for the
+  missing config is caused by an error... useful for determining if it is appropriate to log as an
+  error," excluding exactly `NotFound`/`NoConfigDirectory`. `corrupted = errors.iter().any(Error::
+  is_err)` is the correct check, verified against the library's own source rather than assumed.
 - **Rationale**: Confirmed `get_entry` already *produces* the errors in its `Err` variant — this
   fix only stops discarding information the API already provides, the smallest possible change
-  that closes the "corrupted file is indistinguishable from never-set" gap the audit reproduced.
-  Keeping exit code 0 (not introducing a new failure exit code) matches this project's existing
-  posture that a missing/corrupt optional config is not itself an operational failure.
+  that closes the "corrupted file is indistinguishable from never-set" gap the audit reproduced,
+  now with zero call-site ripple and the correct never-configured/genuinely-corrupted distinction.
+  `wallpaperctl location get` keeps exit code 0 in both cases (neither is a fatal error per
+  constitution Principle VIII).
 - **Alternatives considered**: Fail loudly (non-zero exit / hard error) on a corrupted config file
   — rejected as inconsistent with constitution Principle VIII ("a corrupt config entry MUST
   degrade only that one... set and MUST NOT crash or hang") and with this crate's own existing

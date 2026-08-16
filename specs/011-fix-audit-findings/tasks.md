@@ -275,13 +275,19 @@ silently discarded (quickstart.md automated table rows 5, 18–19, and manual US
       to the registry's `cosmic-config`-managed storage; add new `RegistryError::LockFailed {
       message: String }`; add regression test `concurrent_persist_serializes` using two `Registry`
       handles opened against the same custom path (FR-022, research.md R17, depends on T001)
-- [ ] T025 [P] [US6] In `crates/wallpaper-ipc/src/renderer_config.rs`'s `RendererConfig::load` and
-      `crates/wallpaper-ipc/src/location_config.rs`'s `LocationConfigEntry::load`, log the
-      currently-discarded `_errors` via `tracing::warn!` before falling back to the default, and
-      change each `load`'s return type to also report whether a corruption fallback occurred (a
-      `(Self, bool)` tuple or small `LoadOutcome` struct); update every call site; add regression
-      test `corrupted_file_surfaces_warning_not_silent_default` for each (FR-023, research.md R18)
-- [ ] T026 [US6] Update `crates/wallpaperctl/src/commands/location.rs`'s `location get` to print a
+- [X] T025 [P] [US6] **Revised during implementation** (research.md R18's corrected entry — a
+      `load`-signature change would have touched ~45 call sites for no benefit to most of them).
+      Added `load_reporting_corruption(config: &Config) -> (Self, bool)` to both
+      `crates/wallpaper-ipc/src/renderer_config.rs`'s `RendererConfig` and
+      `crates/wallpaper-ipc/src/location_config.rs`'s `LocationConfigEntry`; `load` is now a thin
+      wrapper (signature unchanged, zero call-site ripple). Logs via `tracing::warn!` only when
+      `cosmic_config::Error::is_err()` — the library's own never-configured-vs-genuinely-corrupted
+      predicate — confirms real corruption, not the ordinary "key never written" case. Added
+      regression tests `corrupted_file_surfaces_warning_not_silent_default` and
+      `never_configured_is_not_reported_as_corruption` for each, writing genuinely invalid RON
+      directly into the on-disk key file (`cosmic-config`'s real per-field layout, confirmed by
+      direct inspection, not guessed) (FR-023, research.md R18)
+- [X] T026 [US6] Update `crates/wallpaperctl/src/commands/location.rs`'s `location get` to print a
       distinguishing message when T025's corruption flag is set, while keeping exit code `0` in
       both the corrupted and never-set cases (FR-023, depends on T025)
 - [ ] T027 [US6] In `crates/wallpaper-settings/src/pages/pack_builder.rs`'s `register_and_close`,
