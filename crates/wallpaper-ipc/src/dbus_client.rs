@@ -11,6 +11,22 @@ use std::fmt;
 use serde::Serialize;
 
 /// Session-bus well-known name (contracts/wallpaperd-dbus-interface.md).
+///
+/// **Trust assumption (spec 011 US8 FR-050)**: [`DbusClient::connect`] resolves this
+/// well-known name to whatever process currently owns it on the session bus and
+/// trusts it unconditionally to be the real `wallpaperd` — there is no additional
+/// authentication of the owning process's identity beyond "it won the well-known-name
+/// race on my session bus." This is the client-side mirror of the daemon-side
+/// authorization gap `dbus_service.rs`'s `query_all` doc comment and
+/// `packaging/dbus-1/com.system76.CosmicDynamicWallpaper1.conf` describe (spec 011 US4
+/// FR-015/FR-016): the session bus already scopes every activity to one user's own
+/// session, so a same-uid impostor process claiming this name before the real
+/// `wallpaperd` starts is the only threat this assumption glosses over — not a
+/// cross-user/privilege-boundary one. Accepted for the same reason as the daemon side:
+/// nothing this interface exposes or accepts crosses a privilege boundary (no root
+/// action, no other user's data), so a stronger scheme (e.g. verifying the owning
+/// process's credentials via `org.freedesktop.DBus.GetConnectionUnixUser`/pid) was
+/// judged disproportionate rather than silently unconsidered.
 pub const BUS_NAME: &str = "com.system76.CosmicDynamicWallpaper1";
 /// Object path the interface is served at.
 pub const OBJECT_PATH: &str = "/com/system76/CosmicDynamicWallpaper1";
