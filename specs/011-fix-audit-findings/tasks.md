@@ -372,7 +372,7 @@ pole-latitude query returns near-instantly (quickstart.md automated table rows 1
 - [X] T035 [US7] In `crates/renderer/src/bin/cosmic-wallpaperd.rs`, wrap the `PortalEvent::Reading`
       handler insertion in the same 2s debounce primitive already used elsewhere in this file,
       replacing today's synchronous-per-event write (FR-032, research.md R27)
-- [ ] T036 [P] [US7] In `crates/renderer/src/gpu.rs`, add `const GPU_REQUEST_TIMEOUT: Duration =
+- [X] T036 [P] [US7] In `crates/renderer/src/gpu.rs`, add `const GPU_REQUEST_TIMEOUT: Duration =
       Duration::from_secs(20);` and wrap `request_adapter`/`request_device` with
       `futures_lite::future::or(actual_request, timeout_after(GPU_REQUEST_TIMEOUT))`; add new
       `RendererError::GpuRequestTimedOut` in `crates/renderer/src/error.rs` (FR-033, research.md

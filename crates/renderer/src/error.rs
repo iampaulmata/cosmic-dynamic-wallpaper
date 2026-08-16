@@ -88,6 +88,12 @@ pub enum RendererError {
         /// The output whose assigned pack needs a location that isn't set.
         output: OutputId,
     },
+    /// A GPU adapter or device request took longer than
+    /// [`crate::gpu::GPU_REQUEST_TIMEOUT`] (spec 011 US7 FR-033, research.md R28) — a
+    /// hung/misbehaving driver previously could stall `wallpaperd`'s entire startup
+    /// indefinitely (constitution Principle VIII: no unbounded wait on an external
+    /// resource).
+    GpuRequestTimedOut,
 }
 
 impl fmt::Display for RendererError {
@@ -115,6 +121,9 @@ impl fmt::Display for RendererError {
             RendererError::LocationRequired { output } => {
                 write!(f, "output {output} has a solar-anchored pack assigned but no location is set")
             }
+            RendererError::GpuRequestTimedOut => {
+                write!(f, "GPU adapter/device request timed out after {:?}", crate::gpu::GPU_REQUEST_TIMEOUT)
+            }
         }
     }
 }
@@ -137,5 +146,6 @@ mod tests {
         assert!(RendererError::OutputNotManaged { id: id.clone() }.to_string().contains("DP-3"));
         assert!(RendererError::LocationRequired { output: id }.to_string().contains("DP-3"));
         assert!(RendererError::ConfigError { reason: "disk full".into() }.to_string().contains("disk full"));
+        assert!(RendererError::GpuRequestTimedOut.to_string().contains("timed out"));
     }
 }
