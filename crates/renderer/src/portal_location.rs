@@ -30,6 +30,7 @@ use futures_util::{Stream, StreamExt};
 
 use schedule_engine::Location;
 
+use crate::backoff::{next_backoff, INITIAL_BACKOFF};
 use crate::config::{ResolutionStatus, LocationConfigEntry, REEVALUATION_DEADLINE};
 
 /// The resolution-attempt timeout (research.md R6) — distinct from spec 3 FR-007's
@@ -37,19 +38,6 @@ use crate::config::{ResolutionStatus, LocationConfigEntry, REEVALUATION_DEADLINE
 /// for a real GeoClue lookup without leaving a solar-anchored pack in limbo
 /// indefinitely.
 pub const RESOLUTION_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// Exponential backoff bounds for retrying after a failed resolution (research.md R6):
-/// never a tight loop, and self-recovers without the user needing to manually toggle
-/// automatic mode off and on.
-pub const INITIAL_BACKOFF: Duration = Duration::from_secs(30);
-/// The backoff ceiling — never waited longer than this between retries.
-pub const MAX_BACKOFF: Duration = Duration::from_secs(300);
-
-/// The next backoff delay after a failed attempt — doubles, capped at [`MAX_BACKOFF`].
-/// The call site resets to [`INITIAL_BACKOFF`] after every successful resolution.
-pub fn next_backoff(current: Duration) -> Duration {
-    current.saturating_mul(2).min(MAX_BACKOFF)
-}
 
 /// The shape [`run`] receives from `ashpd` before it's validated into spec 1's
 /// [`Location`] — a plain, `ashpd`-free struct (data-model.md `PortalLocationReading`)
@@ -291,29 +279,9 @@ mod tests {
         assert_eq!(entry.automatic_location, None);
     }
 
-    /// T015: repeated resolution failures back off exponentially (30s start, 5-minute
-    /// cap), never a tight loop.
-    #[test]
-    fn next_backoff_doubles_and_caps_at_five_minutes() {
-        let mut backoff = INITIAL_BACKOFF;
-        assert_eq!(backoff, Duration::from_secs(30));
-
-        backoff = next_backoff(backoff);
-        assert_eq!(backoff, Duration::from_secs(60));
-
-        backoff = next_backoff(backoff);
-        assert_eq!(backoff, Duration::from_secs(120));
-
-        backoff = next_backoff(backoff);
-        assert_eq!(backoff, Duration::from_secs(240));
-
-        backoff = next_backoff(backoff);
-        assert_eq!(backoff, MAX_BACKOFF); // 480s would exceed the cap.
-
-        // Stays capped, never grows unbounded or wraps.
-        backoff = next_backoff(backoff);
-        assert_eq!(backoff, MAX_BACKOFF);
-    }
+    // T015's `next_backoff` doubling/capping coverage now lives in `backoff.rs`
+    // (spec 011 US8 FR-045) — `next_backoff` itself moved there, deduplicated from
+    // this module and `ip_geolocation.rs`.
 
     /// Spec 011 US7 FR-032 (research.md R27) — the audit's own reproduction: a rapid
     /// burst of readings collapses to a single pending entry, never queued or
