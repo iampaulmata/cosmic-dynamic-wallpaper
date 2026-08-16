@@ -38,6 +38,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let qh = event_queue.handle();
 
     let mut event_loop: EventLoop<'static, WallpaperDaemon> = EventLoop::try_new()?;
+    // Cloned before `conn` is moved into `WaylandSource::new` below — `WallpaperDaemon`
+    // keeps its own clone (FR-034, research.md R29) so `draw` can recover from a lost/
+    // outdated surface without needing a `Connection` threaded through every one of
+    // its call sites (see `WallpaperDaemon::conn`'s doc comment).
+    let daemon_conn = conn.clone();
     WaylandSource::new(conn, event_queue).insert(event_loop.handle()).map_err(|e| e.error)?;
 
     let mut pack_registry = Registry::open().map_err(|e| format!("pack registry: {e}"))?;
@@ -80,6 +85,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut daemon = WallpaperDaemon::new(&globals, &qh, pack_registry, renderer_config, location)?;
     daemon.set_loop_handle(event_loop.handle());
+    daemon.set_connection(daemon_conn);
 
     // Live config-watch (T028/T033/T050): a `RendererConfig`/`LocationConfigEntry` change
     // written by `wallpaperctl` is picked up without restarting this daemon — each
