@@ -19,9 +19,10 @@ approaches this bound — 8 comfortably exceeds any realistic simultaneous multi
 reevaluation burst.
 
 **New (US4/FR-017)**: `output_id` is now validated via `wallpaper_ipc::OutputId::validated`
-(non-empty, ≤256 bytes) before the existing known-outputs lookup. An invalid `output_id` now
+(non-empty, ≤256 bytes, ASCII alphanumeric/`-`/`_` only — the shape every real Wayland
+connector name has) before the existing known-outputs lookup. An invalid `output_id` now
 returns `org.freedesktop.DBus.Error.InvalidArgs` with a message describing the specific
-validation failure (empty / too long), rather than only "unmanaged output."
+validation failure (empty / too long / invalid characters), rather than only "unmanaged output."
 
 ## `ReevaluateAll() -> ()`
 

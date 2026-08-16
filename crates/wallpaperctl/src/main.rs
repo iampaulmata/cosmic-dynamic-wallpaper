@@ -129,7 +129,16 @@ fn run(cli: Cli) -> Result<String, CliError> {
         }
         Command::Assign { output, same_everywhere, pack_source } => {
             let target = match (output, same_everywhere) {
-                (Some(id), false) => AssignTarget::Output(id),
+                (Some(id), false) => {
+                    // Spec 011 US5 FR-019 (research.md R13/R15): validated via the
+                    // same `OutputId::validated` the D-Bus boundary uses — rejects an
+                    // empty or overlong value before it's ever stored, instead of
+                    // silently writing an override key that can never match a real
+                    // output (reproduced by the audit with both `--output ""` and
+                    // `--output "DP-3;rm -rf /"`).
+                    wallpaper_ipc::OutputId::validated(&id).map_err(|e| CliError::InvalidOutputId { reason: e.to_string() })?;
+                    AssignTarget::Output(id)
+                }
                 (None, true) => AssignTarget::SameEverywhere,
                 _ => {
                     // Clap can't easily express "exactly one of" across an Option and
@@ -258,6 +267,24 @@ mod tests {
             let get_after_manual = run(cli(false, Command::Location { action: LocationAction::Get }));
             assert!(get_after_manual.unwrap().contains("mode: manual"));
         });
+    }
+
+    /// Spec 011 US5 FR-019 (research.md R13/R15) — the audit's own reproduction:
+    /// `assign --output ""` and `assign --output "DP-3;rm -rf /"` both previously
+    /// succeeded silently, writing an override key that could never match a real
+    /// output. Both are rejected before `Registry::open()` is ever reached, so no
+    /// scratch config directory is needed for this test.
+    #[test]
+    fn assign_rejects_invalid_output_values() {
+        let dummy_pack = PathBuf::from("/nonexistent-for-this-test.png");
+        assert!(matches!(
+            run(cli(false, Command::Assign { output: Some(String::new()), same_everywhere: false, pack_source: dummy_pack.clone() })),
+            Err(CliError::InvalidOutputId { .. })
+        ));
+        assert!(matches!(
+            run(cli(false, Command::Assign { output: Some("DP-3;rm -rf /".to_string()), same_everywhere: false, pack_source: dummy_pack })),
+            Err(CliError::InvalidOutputId { .. })
+        ));
     }
 
     /// `query`/`reevaluate` dispatch straight to the D-Bus client, which needs no

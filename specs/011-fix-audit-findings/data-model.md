@@ -111,10 +111,16 @@ a research.md decision and a spec.md FR.
 
 - **`OutputId`** (`renderer_config.rs`) gains a new fallible constructor:
   `OutputId::validated(id: impl Into<String>) -> Result<Self, OutputIdError>` — rejects an
-  empty string or a string longer than `MAX_OUTPUT_ID_BYTES` (256). The existing
-  `OutputId::new` remains, for trusted internal construction from real Wayland connector names
-  (research.md R13). New small error type `OutputIdError { reason: String }`, `Display`-only
-  (mirrors this crate's existing error-type conventions).
+  empty string, a string longer than `MAX_OUTPUT_ID_BYTES` (256), or (**strengthened during
+  implementation**, T021 — see tasks.md's note) a string containing any byte outside ASCII
+  alphanumeric/`-`/`_`, the shape every real Wayland connector name already has. The
+  character-class check is what actually rejects the audit's own reproduction,
+  `"DP-3;rm -rf /"` — non-empty and well within the length limit, so the original
+  empty/length-only design didn't catch it. The existing `OutputId::new` remains, for trusted
+  internal construction from real Wayland connector names (research.md R13). New error type
+  `OutputIdError { Empty, TooLong { len }, InvalidCharacters }` (an enum, not the single-field
+  struct originally sketched here — mirrors this crate's existing multi-variant error-type
+  convention instead).
 - **`LocationConfigEntry::load`** and **`RendererConfig::load`** (`location_config.rs`,
   `renderer_config.rs`): return type changes from `Self` to a small
   `LoadOutcome<T> { value: T, corrupted: bool }` (or equivalent — a tuple `(Self, bool)` is an

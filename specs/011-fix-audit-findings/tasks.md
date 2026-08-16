@@ -226,22 +226,28 @@ entry is explicitly rejected (quickstart.md automated table rows 14, 4).
 
 ### Implementation for User Story 5
 
-- [ ] T020 [P] [US5] Add `pub fn sanitize_for_tsv(s: &str) -> std::borrow::Cow<'_, str>` in
+- [X] T020 [P] [US5] Add `pub fn sanitize_for_tsv(s: &str) -> std::borrow::Cow<'_, str>` in
       `crates/wallpaperctl/src/output.rs` (replacing `\t`/`\n`/`\r` with a space, collapsing
       repeats), applied only in `crates/wallpaperctl/src/commands/list.rs`'s human-readable
       rendering closure — never the `--json` `Serialize` path; add regression test
       `tab_newline_escaped_in_human_output` confirming the `--json` output is byte-for-byte
       unaffected (FR-018, research.md R14)
-- [ ] T021 [US5] Add `CliError::InvalidOutputId { reason: String }` (exit code `1`) in
+- [X] T021 [US5] Add `CliError::InvalidOutputId { reason: String }` (exit code `1`) in
       `crates/wallpaperctl/src/error.rs`; validate `assign --output <id>`'s value via
       `wallpaper_ipc::OutputId::validated` (T004) in `crates/wallpaperctl/src/main.rs` before
       storing it, returning the new error on failure; add regression test covering an empty value
-      and a value containing `;` (FR-019, research.md R13/R15, depends on T004)
-- [ ] T022 [P] [US5] In `crates/pack-loader/src/path_safety.rs`'s `resolve_and_check`, add
+      and a value containing `;` (FR-019, research.md R13/R15, depends on T004). **Strengthened
+      during implementation**: `OutputId::validated` (T004) originally only checked non-empty/
+      length, which does not actually reject `"DP-3;rm -rf /"` (non-empty, well within the length
+      limit) — spec.md's own Independent Test for US5 requires rejecting exactly that string.
+      Added a character-class check (ASCII alphanumeric, `-`, `_` only — the shape every real
+      Wayland connector name already has) to `OutputId::validated` itself, so both this call site
+      and T019's D-Bus boundary now correctly reject it.
+- [X] T022 [P] [US5] In `crates/pack-loader/src/path_safety.rs`'s `resolve_and_check`, add
       `if Path::new(file).is_absolute() { return Err(ManifestError::PathEscapesPackDirectory {
       file: file.to_string() }); }` as the first check, before `pack_dir.join(file)` (FR-020,
       research.md R16)
-- [ ] T023 [P] [US5] Add a new fixture directory (mirroring the existing
+- [X] T023 [P] [US5] Add a new fixture directory (mirroring the existing
       `fixtures/invalid/path_traversal` layout) exercising an absolute-path manifest entry, and a
       unit test `rejects_absolute_path` in `crates/pack-loader/src/path_safety.rs`'s test module
       (FR-021)

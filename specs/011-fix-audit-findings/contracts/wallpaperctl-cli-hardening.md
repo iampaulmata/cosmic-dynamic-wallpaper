@@ -29,7 +29,8 @@ changed").
 
 ## `assign --output <id> | --same-everywhere`
 
-**New (US5/FR-019)**: `--output <id>`'s value is now validated (non-empty, ≤256 bytes, via the
+**New (US5/FR-019)**: `--output <id>`'s value is now validated (non-empty, ≤256 bytes, ASCII
+alphanumeric/`-`/`_` only, via the
 same `OutputId::validated` the D-Bus boundary uses — see
 `contracts/wallpaperd-dbus-hardening.md`) before being stored. An invalid value now exits `1`
 with a specific message instead of silently writing an override key that can never match a real

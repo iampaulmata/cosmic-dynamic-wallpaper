@@ -89,6 +89,20 @@ fn path_traversal_is_rejected() {
     }
 }
 
+/// Spec 011 US5 FR-020/FR-021 (research.md R16) — the audit's own reproduction: an
+/// absolute-path manifest entry (`/etc/passwd`, which genuinely exists on any Unix
+/// host running this test) is rejected explicitly, mirroring `path_traversal_is_rejected`
+/// above rather than relying on `pack_dir.join(file)`'s incidental discard-on-absolute
+/// behavior plus the later containment check to catch it.
+#[test]
+fn absolute_path_is_rejected() {
+    let result = load_pack(&fixture("invalid/absolute_path"));
+    match result {
+        Err(ManifestError::PathEscapesPackDirectory { file }) => assert_eq!(file, "/etc/passwd"),
+        other => panic!("expected PathEscapesPackDirectory, got {other:?}"),
+    }
+}
+
 /// spec.md Edge Cases: an image file that exists but is corrupt/unreadable fails with a
 /// clear error naming the file, same contained-failure posture as a missing file.
 #[test]
