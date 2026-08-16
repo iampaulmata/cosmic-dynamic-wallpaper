@@ -131,9 +131,15 @@ impl LocationConfigEntry {
         }
     }
 
-    /// Persist this entry.
+    /// Persist this entry. Best-effort tightens the written directory's on-disk
+    /// permissions to `0700` on Unix afterward (spec 011 US7 FR-030, research.md
+    /// R25) — location data is locally sensitive, and `cosmic-config`'s own directory
+    /// creation does not restrict group/other read access by default.
     pub fn save(&self, config: &Config) -> Result<(), cosmic_config::Error> {
-        self.write_entry(config)
+        self.write_entry(config)?;
+        #[cfg(unix)]
+        crate::tighten_config_dir_permissions(LOCATION_CONFIG_ID, Self::VERSION);
+        Ok(())
     }
 
     /// Load `new_config`, migrating forward from the pre-rename application id
@@ -232,6 +238,28 @@ mod tests {
         let (loaded, corrupted) = LocationConfigEntry::load_reporting_corruption(&config);
         assert!(corrupted, "a genuinely corrupted key file must be reported as such");
         assert_eq!(loaded.mode, LocationMode::default(), "still degrades to the default value, per constitution Principle VIII");
+    }
+
+    /// Spec 011 US7 FR-030 (research.md R25) — the audit's own reproduction: a
+    /// freshly-written location config directory was world-readable
+    /// (`cosmic-config`'s own `create_dir_all` applies no extra restriction beyond the
+    /// process umask). Uses `Config::open` (not `open_at`) via a scratch
+    /// `XDG_CONFIG_HOME`, since `tighten_config_dir_permissions` deliberately mirrors
+    /// `cosmic-config`'s own real `dirs::config_dir()` resolution rather than
+    /// `open_at`'s test-only custom-path hook.
+    #[cfg(unix)]
+    #[test]
+    fn save_tightens_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        crate::test_support::with_scratch_xdg_config_home(|| {
+            let config = LocationConfigEntry::open().unwrap();
+            LocationConfigEntry::default().save(&config).unwrap();
+
+            let dir = dirs::config_dir().unwrap().join("cosmic").join(LOCATION_CONFIG_ID).join(format!("v{}", LocationConfigEntry::VERSION));
+            let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o700, "expected the config directory to be tightened to 0700, got {mode:o}");
+        });
     }
 
     /// The ordinary case — nothing has ever been written — must NOT be reported as

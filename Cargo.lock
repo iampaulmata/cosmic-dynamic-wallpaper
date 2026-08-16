@@ -5899,6 +5899,7 @@ name = "wallpaper-ipc"
 version = "0.2.0"
 dependencies = [
  "cosmic-config",
+ "dirs",
  "pack-loader",
  "schedule-engine",
  "serde",
