@@ -155,9 +155,13 @@ a research.md decision and a spec.md FR.
 
 ### Changed types
 
-- **`pack_builder::State`**: no new fields — `move_error`, `generate_error`, and
-  `pending_collision`/`pending_placement` (all already present) are reused, now populated by
-  code paths that previously discarded the same errors (research.md R19, R21).
+- **`pack_builder::State`**: `move_error`, `generate_error`, and `pending_collision`/
+  `pending_placement` (all already present) are reused, now populated by code paths that
+  previously discarded the same errors (research.md R19, R21). One genuinely new field:
+  `pending_manifest_text: Option<String>` — the self-validated manifest text `generate()`
+  produced, held here instead of written to `source_dir` until the user's Move/Keep choice
+  (research.md R22, corrected from the original "no new state field" plan once implementation
+  showed the write genuinely needed to move, not just its timing).
 - **New pure function** `validate_destination_name(name: &str) -> Result<(), String>`
   (`pack_builder.rs`) — rejects an empty string, any non-`Normal` `Path::Component` (rejects
   `..`, `.`, root/prefix components), and an absolute path (research.md R5). Called from the
@@ -165,10 +169,16 @@ a research.md decision and a spec.md FR.
 - **`Message::GenerateRequested` handling**: gains a re-check of the existing `all_assigned`
   pure function before calling `build_draft`, populating `state.generate_error` on failure
   instead of proceeding (research.md R21).
-- **Manifest-write ordering**: the point at which `manifest.toml` is written moves from
-  `GenerateRequested` handling to a new shared `finalize(state, choice)` step invoked by both
-  `MoveRequested` and `KeepRequested` (research.md R22) — no new state field, just a
-  reordering of when the existing write call happens.
+- **Manifest-write ordering** (research.md R22, corrected during implementation): `generate()`
+  no longer writes `manifest.toml` into `source_dir` — it self-validates against a scratch
+  directory (real file copies, not symlinks — see research.md R22's correction note for why
+  symlinks don't work against `pack_loader`'s own containment check) and stores the result in
+  `pending_manifest_text`. A new `write_manifest_and_register(state, registry, path)` helper
+  (shared by `confirm_keep`/`cancel_collision_to_keep`) writes it into the source folder at the
+  moment "Keep" is actually chosen; `move_pack` gained a `manifest_text: &str` parameter and
+  writes it into the *destination* right after copying, for the "Move" path. `MoveError` gained
+  no new variant for this — write/validation failures at commit time reuse the existing `Io`
+  variant (`move_pack`) or `state.move_error` directly (`write_manifest_and_register`).
 
 ## `packaging/`
 

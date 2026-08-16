@@ -127,6 +127,12 @@ pub struct State {
     pub pending_placement: Option<GeneratedPlacement>,
     /// FR-018: zero usable images, or more than `schedule_engine::MAX_ANCHORS`.
     pub scan_error: Option<String>,
+    /// Spec 011 US6 FR-027 (research.md R22): the self-validated manifest text
+    /// `generate()` produced, held here rather than written to `source_dir` yet.
+    /// Written into its real destination (the source folder for Keep, the moved
+    /// folder for Move) only at the moment the user actually makes that choice — see
+    /// `finalize`. `Some` exactly when `pending_placement` is `Some`.
+    pub pending_manifest_text: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -182,6 +188,7 @@ pub fn open(source_dir: PathBuf) -> State {
         pending_collision: None,
         pending_placement: None,
         scan_error,
+        pending_manifest_text: None,
     }
 }
 
@@ -443,34 +450,95 @@ pub fn set_author(state: &mut State, author: String) {
 
 // --- Generate (FR-011, FR-012, FR-017; contracts/pack-loader-manifest-writer.md) ---
 
-/// Builds the draft, renders it, writes `manifest.toml`, then self-validates by loading
-/// it back through `pack_loader::load_pack` — the exact validation path a real pack
-/// registration takes. On any failure the just-written file (if any) is removed and
-/// `state.generate_error` is set; `state.rows`/`author` are never touched either way
-/// (FR-017). On success, `state.pending_placement` is set and the caller shows the
-/// placement dialog.
+/// Builds the draft, renders it, and self-validates it — the exact validation path a
+/// real pack registration takes — **without writing `manifest.toml` into
+/// `state.source_dir` yet** (spec 011 US6 FR-027, research.md R22). Self-validation
+/// runs against a scratch directory populated with symlinks to the real images
+/// (cheap — no copying), discarded immediately after; `state.source_dir` itself is
+/// never touched by this function. On success, the rendered text is held in
+/// `state.pending_manifest_text` and `state.pending_placement` is set so the caller
+/// shows the placement dialog; the manifest is only actually written once the user
+/// makes that choice (`finalize`). On any failure, neither field is set and
+/// `state.generate_error` reports why; `state.rows`/`author` are never touched either
+/// way (FR-017).
+///
+/// **Why this matters**: previously, `manifest.toml` was written directly into
+/// `state.source_dir` here, before the placement dialog was even shown — a crash or
+/// force-quit between that write and the user's Move/Keep choice left the source
+/// folder permanently mutated with an unregistered `manifest.toml`. On next launch,
+/// `should_open_for`'s `ManifestNotFound`-only check would then see the existing
+/// manifest and skip the wizard entirely — an implicit "Keep it here" the user never
+/// actually chose. Deferring the write removes that window: nothing is written to
+/// `state.source_dir` until Move or Keep actually runs.
 pub fn generate(state: &mut State) {
     state.generate_error = None;
     let Some(mode) = state.mode else { return };
+
+    // Spec 011 US6 FR-026 (research.md R21): re-checks the same `all_assigned` pure
+    // function the UI button's `enabled` state already gates on
+    // (`generate_button.on_press` is only wired when it's `true`) — this is the
+    // handler-side half of that gate, so a future call site that fires
+    // `GenerateRequested` without going through the gated button (a bug, a
+    // programmatic trigger, a test) can't silently produce an incomplete pack.
+    // `build_draft`'s own `filter_map` still degrades safely even if this check is
+    // ever bypassed (its own doc comment: "stays total either way"), but this is the
+    // check that's actually supposed to prevent that from being reachable at all.
+    if !all_assigned(&state.rows, mode) {
+        state.generate_error = Some("every image needs an assignment before a pack can be generated.".to_string());
+        return;
+    }
 
     let folder_name =
         state.source_dir.file_name().and_then(|n| n.to_str()).unwrap_or("Custom Pack").to_string();
     let draft = build_draft(&state.rows, mode, &folder_name, &state.author);
     let text = pack_loader::render(&draft);
-    let manifest_path = state.source_dir.join(pack_loader::MANIFEST_FILE_NAME);
 
-    if let Err(e) = std::fs::write(&manifest_path, &text) {
-        state.generate_error = Some(format!("couldn't write manifest.toml: {e}"));
-        return;
-    }
-
-    if let Err(e) = pack_loader::load_pack(&state.source_dir) {
-        let _ = std::fs::remove_file(&manifest_path);
+    if let Err(e) = self_validate_in_scratch_dir(&state.source_dir, &draft, &text) {
         state.generate_error = Some(format!("the generated pack didn't validate: {e}"));
         return;
     }
 
+    state.pending_manifest_text = Some(text);
     state.pending_placement = Some(GeneratedPlacement { generated_path: state.source_dir.clone() });
+}
+
+/// Validates `text` (the rendered manifest for `draft`) without writing anything into
+/// `source_dir`: builds a throwaway scratch directory, symlinks every image `draft`
+/// references (from `source_dir`, where the real files live) into it under the same
+/// filename, writes `text` there, and runs it through the real `pack_loader::load_pack`
+/// path. The scratch directory is removed before returning either way.
+fn self_validate_in_scratch_dir(source_dir: &Path, draft: &ManifestDraft, text: &str) -> Result<(), pack_loader::ManifestError> {
+    let scratch = std::env::temp_dir().join(format!("cosmic-pack-builder-validate-{}-{}", std::process::id(), fastrand_like_id()));
+    let result = (|| {
+        std::fs::create_dir_all(&scratch).map_err(|e| pack_loader::ManifestError::Io { path: scratch.clone(), message: e.to_string() })?;
+        // Real copies, deliberately not symlinks: `pack_loader::path_safety` itself
+        // canonicalizes every entry and rejects anything that resolves outside the
+        // pack directory *precisely* to catch a symlink pointing elsewhere — a
+        // symlink into `source_dir` from this scratch dir would trip that exact
+        // check (confirmed the hard way: an earlier symlink-based version of this
+        // function failed every real test with `PathEscapesPackDirectory`). Images
+        // are already capped at `schedule_engine::MAX_ANCHORS` (64) by this point, so
+        // the copy cost here is bounded, one-time, per Generate click — not a hot path.
+        for image in &draft.images {
+            let target = source_dir.join(&image.file);
+            let copy_to = scratch.join(&image.file);
+            std::fs::copy(&target, &copy_to).map_err(|e| pack_loader::ManifestError::Io { path: copy_to.clone(), message: e.to_string() })?;
+        }
+        std::fs::write(scratch.join(pack_loader::MANIFEST_FILE_NAME), text)
+            .map_err(|e| pack_loader::ManifestError::Io { path: scratch.clone(), message: e.to_string() })?;
+        pack_loader::load_pack(&scratch)
+    })();
+    let _ = std::fs::remove_dir_all(&scratch);
+    result.map(|_| ())
+}
+
+/// A short, process-and-call-unique suffix for the scratch validation directory's
+/// name — collision-avoidance only (two overlapping `generate()` calls in the same
+/// process, e.g. from rapid double-invocation), not a security boundary; the scratch
+/// dir's contents never persist past `self_validate_in_scratch_dir`'s own return.
+fn fastrand_like_id() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0)
 }
 
 // --- Placement (FR-013–FR-017, FR-014a; research.md R8) ---
@@ -524,7 +592,14 @@ fn validate_destination_name(name: &str) -> Result<(), String> {
 /// `pack_loader::load_pack`, then removes `generated_path` only after that succeeds.
 /// Any failure removes a partial destination copy and leaves `generated_path`
 /// completely untouched.
-fn move_pack(generated_path: &Path, destination_root: &Path, name: &str) -> Result<PathBuf, MoveError> {
+///
+/// Spec 011 US6 FR-027 (research.md R22): `generated_path` (the source folder) no
+/// longer contains a `manifest.toml` at this point — `generate()` only holds its text
+/// in memory. `manifest_text` is written into `destination` *after* the image copy
+/// and *before* self-validation, so the existing `pack_loader::load_pack(&destination)`
+/// call below validates the just-written manifest exactly as it always has, and
+/// `generated_path` (the source) is never mutated with a manifest at all when moving.
+fn move_pack(generated_path: &Path, destination_root: &Path, name: &str, manifest_text: &str) -> Result<PathBuf, MoveError> {
     validate_destination_name(name).map_err(MoveError::InvalidName)?;
     let destination = destination_root.join(name);
 
@@ -546,6 +621,10 @@ fn move_pack(generated_path: &Path, destination_root: &Path, name: &str) -> Resu
     if let Err(e) = copy_dir_recursive(generated_path, &destination) {
         let _ = std::fs::remove_dir_all(&destination);
         return Err(MoveError::Io(e.to_string()));
+    }
+    if let Err(e) = std::fs::write(destination.join(pack_loader::MANIFEST_FILE_NAME), manifest_text) {
+        let _ = std::fs::remove_dir_all(&destination);
+        return Err(MoveError::Io(format!("couldn't write manifest.toml at the destination: {e}")));
     }
     if let Err(e) = pack_loader::load_pack(&destination) {
         let _ = std::fs::remove_dir_all(&destination);
@@ -601,8 +680,39 @@ fn register_and_close(state: &mut State, registry: &mut Registry, path: &Path) -
     }
     state.pending_placement = None;
     state.pending_collision = None;
+    state.pending_manifest_text = None;
     state.move_error = None;
     true
+}
+
+/// The "Keep it here" outcome — shared by `confirm_keep` and
+/// `cancel_collision_to_keep` (spec 011 US6 FR-027, research.md R22): writes the
+/// held `pending_manifest_text` into `path/manifest.toml` — deferred from
+/// `generate()` until this exact moment, the point the user actually chose to keep
+/// the pack in place — self-validates it there, then registers. A write/validation
+/// failure re-arms the placement dialog with the error (mirroring
+/// `register_and_close`'s own failure handling) rather than leaving `path` with a
+/// half-written manifest and no visible explanation.
+fn write_manifest_and_register(state: &mut State, registry: &mut Registry, path: &Path) -> bool {
+    let Some(text) = state.pending_manifest_text.clone() else {
+        state.move_error = Some("internal error: no pending manifest to write — try Generate again.".to_string());
+        return false;
+    };
+    let manifest_path = path.join(pack_loader::MANIFEST_FILE_NAME);
+    if let Err(e) = std::fs::write(&manifest_path, &text) {
+        state.move_error = Some(format!("couldn't write manifest.toml: {e}"));
+        state.pending_placement = Some(GeneratedPlacement { generated_path: path.to_path_buf() });
+        state.pending_collision = None;
+        return false;
+    }
+    if let Err(e) = pack_loader::load_pack(path) {
+        let _ = std::fs::remove_file(&manifest_path);
+        state.move_error = Some(format!("the generated pack didn't validate: {e}"));
+        state.pending_placement = Some(GeneratedPlacement { generated_path: path.to_path_buf() });
+        state.pending_collision = None;
+        return false;
+    }
+    register_and_close(state, registry, path)
 }
 
 fn finish_move(state: &mut State, registry: &mut Registry, generated_path: &Path, root: &Path, name: &str) -> bool {
@@ -611,7 +721,11 @@ fn finish_move(state: &mut State, registry: &mut Registry, generated_path: &Path
     // if this attempt instead hits a plain Collision, which doesn't set `move_error`
     // itself.
     state.move_error = None;
-    match move_pack(generated_path, root, name) {
+    let Some(text) = state.pending_manifest_text.clone() else {
+        state.move_error = Some("internal error: no pending manifest to move — try Generate again.".to_string());
+        return false;
+    };
+    match move_pack(generated_path, root, name, &text) {
         Ok(destination) => register_and_close(state, registry, &destination),
         Err(MoveError::Collision) => {
             state.pending_placement = None;
@@ -652,12 +766,13 @@ pub fn confirm_move(state: &mut State, registry: &mut Registry) -> bool {
     finish_move(state, registry, &placement.generated_path, &root, &suggested_name)
 }
 
-/// The placement dialog's "Keep it here" action (FR-015). Closes the wizard on
-/// success; on a registration failure, re-shows the placement dialog with the error
-/// (FR-024) instead of unconditionally closing.
+/// The placement dialog's "Keep it here" action (FR-015). Writes the deferred
+/// manifest into `source_dir` (FR-027) and closes the wizard on success; on a
+/// write/validation/registration failure, re-shows the placement dialog with the
+/// error (FR-024) instead of unconditionally closing.
 pub fn confirm_keep(state: &mut State, registry: &mut Registry) -> bool {
     let Some(placement) = state.pending_placement.clone() else { return false };
-    register_and_close(state, registry, &placement.generated_path)
+    write_manifest_and_register(state, registry, &placement.generated_path)
 }
 
 pub fn set_collision_name(state: &mut State, name: String) {
@@ -678,13 +793,14 @@ pub fn confirm_collision_move(state: &mut State, registry: &mut Registry) -> boo
 }
 
 /// The collision prompt's "Cancel" action — falls back to keeping the pack in place
-/// (contracts/pack-builder-gui-flow.md: the folder already has a valid manifest either
-/// way, so this is never a destructive cancel). Closes the wizard on success; on a
-/// registration failure, re-shows the placement dialog with the error (FR-024)
-/// instead of unconditionally closing.
+/// (contracts/pack-builder-gui-flow.md: the folder didn't move, and now gets its
+/// deferred manifest written in place — FR-027 — so this is never a destructive
+/// cancel). Closes the wizard on success; on a write/validation/registration
+/// failure, re-shows the placement dialog with the error (FR-024) instead of
+/// unconditionally closing.
 pub fn cancel_collision_to_keep(state: &mut State, registry: &mut Registry) -> bool {
     let Some(pending) = state.pending_collision.take() else { return false };
-    register_and_close(state, registry, &pending.generated_path)
+    write_manifest_and_register(state, registry, &pending.generated_path)
 }
 
 // --- View ---
@@ -1144,6 +1260,15 @@ mod tests {
         generate(&mut state);
         assert_eq!(state.generate_error, None, "{:?}", state.generate_error);
         assert!(state.pending_placement.is_some());
+        // Spec 011 US6 FR-027 (research.md R22): the manifest isn't written to
+        // `dir.path()` at all yet — held in `pending_manifest_text` until the user's
+        // actual Move/Keep choice.
+        assert!(state.pending_manifest_text.is_some());
+        assert!(!dir.path().join(pack_loader::MANIFEST_FILE_NAME).exists(), "must not write until Move/Keep is chosen");
+
+        let registry_dir = tempfile::tempdir().unwrap();
+        let mut registry = pack_loader::Registry::open_at(registry_dir.path()).unwrap();
+        assert!(confirm_keep(&mut state, &mut registry), "{:?}", state.move_error);
 
         let loaded = pack_loader::load_pack(dir.path()).unwrap();
         assert_eq!(loaded.author.as_deref(), Some("Artist Unknown"));
@@ -1166,6 +1291,11 @@ mod tests {
 
         generate(&mut state);
         assert_eq!(state.generate_error, None, "{:?}", state.generate_error);
+        assert!(!dir.path().join(pack_loader::MANIFEST_FILE_NAME).exists(), "must not write until Move/Keep is chosen");
+
+        let registry_dir = tempfile::tempdir().unwrap();
+        let mut registry = pack_loader::Registry::open_at(registry_dir.path()).unwrap();
+        assert!(confirm_keep(&mut state, &mut registry), "{:?}", state.move_error);
 
         let loaded = pack_loader::load_pack(dir.path()).unwrap();
         assert_eq!(loaded.pack.images().len(), 2);
@@ -1185,24 +1315,47 @@ mod tests {
         assert!(!dir.path().join(pack_loader::MANIFEST_FILE_NAME).exists());
     }
 
+    /// Spec 011 US6 FR-026 (research.md R21) — `generate()` re-checks `all_assigned`
+    /// itself, so calling it directly (bypassing the UI button's `enabled` gate
+    /// entirely, simulating a future call site that forgets to check first) still
+    /// can't produce an incomplete pack.
+    #[test]
+    fn generate_handler_rechecks_all_assigned() {
+        let dir = tempfile::tempdir().unwrap();
+        write_test_image(&dir.path().join("a.jpg"));
+        write_test_image(&dir.path().join("b.jpg"));
+
+        let mut state = open(dir.path().to_path_buf());
+        set_mode(&mut state, AssignmentMode::SolarPeriod);
+        // Only the first row gets an assignment — the second is left unassigned, and
+        // `generate` is called directly rather than through any UI gate.
+        set_solar_event_by_index(&mut state, 0, 0, None);
+
+        generate(&mut state);
+
+        assert!(state.generate_error.is_some(), "generate() must refuse to run with an unassigned row");
+        assert!(state.pending_placement.is_none(), "must not proceed to placement");
+        assert!(!dir.path().join(pack_loader::MANIFEST_FILE_NAME).exists(), "must not write a manifest at all");
+    }
+
     // --- T026: move failure leaves the source untouched ---
 
+    /// Spec 011 US6 FR-027 (research.md R22): `move_pack` now writes the manifest into
+    /// the destination itself (deferred from `generate()`), rather than expecting one
+    /// already sitting in `source` — the manifest text below (referencing a missing
+    /// image) is passed directly, not pre-written to `source` at all.
     #[test]
     fn move_pack_leaves_the_source_untouched_when_the_load_check_fails() {
         let source = tempfile::tempdir().unwrap();
-        // A manifest.toml that will fail to load (references a missing image) so the
-        // move's own self-validation step fails deterministically.
-        std::fs::write(
-            source.path().join("manifest.toml"),
-            "schema_version = 1\nname = \"x\"\ndefault_scaling = \"Fill\"\nfallback_color = \"#000000\"\n\n[[images]]\nfile = \"missing.png\"\nanchor = \"sunrise\"\n",
-        )
-        .unwrap();
+        // References a missing image, so the move's own self-validation step at the
+        // destination fails deterministically.
+        let bad_manifest = "schema_version = 1\nname = \"x\"\ndefault_scaling = \"Fill\"\nfallback_color = \"#000000\"\n\n[[images]]\nfile = \"missing.png\"\nanchor = \"sunrise\"\n";
 
         let destination_root = tempfile::tempdir().unwrap();
-        let result = move_pack(source.path(), destination_root.path(), "moved-pack");
+        let result = move_pack(source.path(), destination_root.path(), "moved-pack", bad_manifest);
 
         assert!(matches!(result, Err(MoveError::Io(_))));
-        assert!(source.path().join("manifest.toml").exists(), "source must survive a failed move");
+        assert!(source.path().exists(), "source must survive a failed move");
         assert!(!destination_root.path().join("moved-pack").exists(), "a failed move must not leave a partial copy");
     }
 
@@ -1210,18 +1363,15 @@ mod tests {
     fn move_pack_succeeds_and_removes_the_source_on_a_valid_pack() {
         let source = tempfile::tempdir().unwrap();
         write_test_image(&source.path().join("a.png"));
-        std::fs::write(
-            source.path().join("manifest.toml"),
-            "schema_version = 1\nname = \"x\"\ndefault_scaling = \"Fill\"\nfallback_color = \"#000000\"\n\n[[images]]\nfile = \"a.png\"\nanchor = \"sunrise\"\n",
-        )
-        .unwrap();
+        let manifest = "schema_version = 1\nname = \"x\"\ndefault_scaling = \"Fill\"\nfallback_color = \"#000000\"\n\n[[images]]\nfile = \"a.png\"\nanchor = \"sunrise\"\n";
 
         let destination_root = tempfile::tempdir().unwrap();
-        let result = move_pack(source.path(), destination_root.path(), "moved-pack");
+        let result = move_pack(source.path(), destination_root.path(), "moved-pack", manifest);
 
         assert!(result.is_ok());
         assert!(!source.path().exists(), "source folder must be removed after a successful move");
         assert!(destination_root.path().join("moved-pack").join("manifest.toml").exists());
+        assert_eq!(std::fs::read_to_string(destination_root.path().join("moved-pack").join("manifest.toml")).unwrap(), manifest);
     }
 
     // --- Spec 011 US2 FR-006/FR-007 (research.md R5): the collision-rename field
@@ -1246,31 +1396,30 @@ mod tests {
     fn move_pack_rejects_path_traversal_in_the_destination_name() {
         let source = tempfile::tempdir().unwrap();
         write_test_image(&source.path().join("a.png"));
-        std::fs::write(
-            source.path().join("manifest.toml"),
-            "schema_version = 1\nname = \"x\"\ndefault_scaling = \"Fill\"\nfallback_color = \"#000000\"\n\n[[images]]\nfile = \"a.png\"\nanchor = \"sunrise\"\n",
-        )
-        .unwrap();
         let destination_root = tempfile::tempdir().unwrap();
         let escape_target = destination_root.path().parent().unwrap().join("escaped-pack-test");
         let _ = std::fs::remove_dir_all(&escape_target);
 
         let traversal_name = format!("../{}", escape_target.file_name().unwrap().to_str().unwrap());
-        let result = move_pack(source.path(), destination_root.path(), &traversal_name);
+        let result = move_pack(source.path(), destination_root.path(), &traversal_name, "schema_version = 1\nname = \"x\"\ndefault_scaling = \"Fill\"\nfallback_color = \"#000000\"\n\n[[images]]\nfile = \"a.png\"\nanchor = \"sunrise\"\n");
 
         assert!(matches!(result, Err(MoveError::InvalidName(_))), "expected InvalidName, got {result:?}");
         assert!(!escape_target.exists(), "nothing must be written outside destination_root");
-        assert!(source.path().join("manifest.toml").exists(), "source must survive a rejected move");
+        assert!(source.path().exists(), "source must survive a rejected move");
     }
 
     #[test]
     fn move_pack_rejects_an_absolute_destination_name() {
         let source = tempfile::tempdir().unwrap();
         write_test_image(&source.path().join("a.png"));
-        std::fs::write(source.path().join("manifest.toml"), "schema_version = 1\nname = \"x\"\ndefault_scaling = \"Fill\"\nfallback_color = \"#000000\"\n\n[[images]]\nfile = \"a.png\"\nanchor = \"sunrise\"\n").unwrap();
         let destination_root = tempfile::tempdir().unwrap();
 
-        let result = move_pack(source.path(), destination_root.path(), "/tmp/should-not-be-created-by-this-test");
+        let result = move_pack(
+            source.path(),
+            destination_root.path(),
+            "/tmp/should-not-be-created-by-this-test",
+            "schema_version = 1\nname = \"x\"\ndefault_scaling = \"Fill\"\nfallback_color = \"#000000\"\n\n[[images]]\nfile = \"a.png\"\nanchor = \"sunrise\"\n",
+        );
         assert!(matches!(result, Err(MoveError::InvalidName(_))));
         assert!(!std::path::Path::new("/tmp/should-not-be-created-by-this-test").exists());
     }
@@ -1283,15 +1432,19 @@ mod tests {
     fn move_pack_rejects_an_empty_destination_name() {
         let source = tempfile::tempdir().unwrap();
         write_test_image(&source.path().join("a.png"));
-        std::fs::write(source.path().join("manifest.toml"), "schema_version = 1\nname = \"x\"\ndefault_scaling = \"Fill\"\nfallback_color = \"#000000\"\n\n[[images]]\nfile = \"a.png\"\nanchor = \"sunrise\"\n").unwrap();
         let destination_root = tempfile::tempdir().unwrap();
         std::fs::write(destination_root.path().join("sentinel.txt"), b"pre-existing").unwrap();
 
-        let result = move_pack(source.path(), destination_root.path(), "");
+        let result = move_pack(
+            source.path(),
+            destination_root.path(),
+            "",
+            "schema_version = 1\nname = \"x\"\ndefault_scaling = \"Fill\"\nfallback_color = \"#000000\"\n\n[[images]]\nfile = \"a.png\"\nanchor = \"sunrise\"\n",
+        );
 
         assert!(matches!(result, Err(MoveError::InvalidName(_))));
         assert!(destination_root.path().join("sentinel.txt").exists(), "destination_root's existing contents must be untouched");
-        assert!(source.path().join("manifest.toml").exists(), "source must survive a rejected move");
+        assert!(source.path().exists(), "source must survive a rejected move");
     }
 
     // --- T028: destination-name collision opens the prompt instead of overwriting ---
@@ -1377,6 +1530,40 @@ mod tests {
         let entries: Vec<_> = std::fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().file_name()).collect();
         assert_eq!(entries.len(), 1, "only the original a.jpg should exist: {entries:?}");
         assert!(!dir.path().join(pack_loader::MANIFEST_FILE_NAME).exists());
+    }
+
+    /// Spec 011 US6 FR-027 (research.md R22) — the audit's own finding: previously,
+    /// `generate()` wrote `manifest.toml` into the source folder immediately, before
+    /// the placement dialog was even shown, so a crash/force-quit in that window left
+    /// an unregistered manifest behind that `should_open_for`'s `ManifestNotFound`-only
+    /// check would then silently treat as "already has a manifest" on next launch —
+    /// an implicit "Keep it here" the user never actually chose. This test is the
+    /// direct check that the window no longer exists at all: after `generate()`
+    /// succeeds, nothing has been written to `source_dir` (simulating exactly that
+    /// crash point), and `should_open_for` still correctly re-opens the wizard for it.
+    #[test]
+    fn manifest_is_not_written_between_generate_and_the_placement_choice() {
+        let dir = tempfile::tempdir().unwrap();
+        write_test_image(&dir.path().join("a.jpg"));
+        let mut state = open(dir.path().to_path_buf());
+        set_mode(&mut state, AssignmentMode::SolarPeriod);
+        set_solar_event_by_index(&mut state, 0, 0, None);
+
+        generate(&mut state);
+
+        assert_eq!(state.generate_error, None, "{:?}", state.generate_error);
+        assert!(state.pending_placement.is_some());
+        assert!(state.pending_manifest_text.is_some());
+        let entries: Vec<_> = std::fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(entries.len(), 1, "only the original a.jpg should exist on disk at this point: {entries:?}");
+        assert!(!dir.path().join(pack_loader::MANIFEST_FILE_NAME).exists());
+
+        // Simulating a crash right here (dropping `state` without ever calling
+        // confirm_move/confirm_keep): the folder is exactly as it was before Generate
+        // was ever clicked, so re-opening it re-launches the wizard rather than
+        // silently treating an unfinished session as "kept."
+        drop(state);
+        assert!(should_open_for(dir.path()), "an interrupted session must not look like an already-placed pack");
     }
 
     // --- T032: FR-018 scan failures already covered above
