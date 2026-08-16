@@ -262,6 +262,17 @@ impl WallpaperDaemon {
                 .ok_or_else(|| RendererError::GpuDeviceUnavailable { reason: "null Wayland surface pointer".into() })?,
         ));
 
+        // SAFETY (spec 011 US7 FR-035, research.md R30): `create_surface_unsafe`'s
+        // contract requires both raw handles to remain valid for as long as the
+        // returned `wgpu::Surface` is alive. `raw_display` borrows `conn`'s
+        // `wl_display` — `conn` is `WallpaperDaemon`'s own `Connection` (or a clone of
+        // it, see `Self::conn`'s doc comment), kept alive for this daemon's entire
+        // process lifetime, strictly outliving any `wgpu::Surface` built from it.
+        // `raw_window` borrows `self.outputs[index].layer`'s `wl_surface` — the
+        // resulting `wgpu_surface` is stored in that *same* `WallpaperOutput` struct
+        // (`self.outputs[index].wgpu_surface`, set just below) as the `layer` it was
+        // derived from, so the two are dropped together in `remove_output`: the
+        // `wl_surface` handle can never outlive the `wgpu::Surface` built from it.
         let wgpu_surface = unsafe {
             self.instance
                 .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle { raw_display_handle: raw_display, raw_window_handle: raw_window })
