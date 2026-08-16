@@ -250,15 +250,7 @@ impl Registry {
     /// full rationale (spec 011 US6 FR-022, research.md R17; extended to this second
     /// store by adversarial re-review finding 3).
     fn with_locked_removed_state<T>(&mut self, mutate: impl FnOnce(&mut Vec<PackSource>) -> T) -> Result<T, RegistryError> {
-        if let Some(parent) = self.lock_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| RegistryError::LockFailed { message: e.to_string() })?;
-        }
-        let lock_file = std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(&self.lock_path)
-            .map_err(|e| RegistryError::LockFailed { message: e.to_string() })?;
+        let lock_file = self.open_lock_file()?;
         let mut file_lock = fd_lock::RwLock::new(lock_file);
         let _guard = file_lock.write().map_err(|e| RegistryError::LockFailed { message: e.to_string() })?;
 
@@ -267,6 +259,29 @@ impl Registry {
         fresh.write_entry(&self.removed_config).map_err(|e| RegistryError::Storage { message: e.to_string() })?;
         self.removed_state = fresh;
         Ok(result)
+    }
+
+    /// Open (creating if necessary) [`Self::lock_path`] — the shared cross-process
+    /// advisory-lock file guarding a read-modify-write cycle against either of this
+    /// crate's two `cosmic-config` stores. Split out of
+    /// [`Self::with_locked_state`]/[`Self::with_locked_removed_state`] purely to avoid
+    /// duplicating this open-the-file boilerplate between them (adversarial re-review
+    /// finding 3). Returns the plain `File`, not an already-locked guard — `fd_lock`'s
+    /// `RwLock`/`RwLockWriteGuard` are tied together by a borrow, so the `RwLock`
+    /// itself has to be constructed in each caller's own stack frame for the guard to
+    /// have somewhere to live; each caller still does that (two lines: `let mut
+    /// file_lock = fd_lock::RwLock::new(...); let _guard = file_lock.write()?;`)
+    /// immediately after calling this.
+    fn open_lock_file(&self) -> Result<std::fs::File, RegistryError> {
+        if let Some(parent) = self.lock_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| RegistryError::LockFailed { message: e.to_string() })?;
+        }
+        std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&self.lock_path)
+            .map_err(|e| RegistryError::LockFailed { message: e.to_string() })
     }
 
     /// Acquire the cross-process lock, then run `mutate` against a *freshly re-read*
@@ -293,15 +308,7 @@ impl Registry {
     /// the very next reload, so a lost update there is much lower stakes than losing a
     /// `register`/`remove` outright.
     fn with_locked_state<T>(&mut self, mutate: impl FnOnce(&mut Vec<PackRegistryEntry>) -> T) -> Result<T, RegistryError> {
-        if let Some(parent) = self.lock_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| RegistryError::LockFailed { message: e.to_string() })?;
-        }
-        let lock_file = std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(&self.lock_path)
-            .map_err(|e| RegistryError::LockFailed { message: e.to_string() })?;
+        let lock_file = self.open_lock_file()?;
         let mut file_lock = fd_lock::RwLock::new(lock_file);
         let _guard = file_lock.write().map_err(|e| RegistryError::LockFailed { message: e.to_string() })?;
 
