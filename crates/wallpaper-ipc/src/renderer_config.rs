@@ -191,9 +191,15 @@ impl RendererConfig {
         }
     }
 
-    /// Persist this entry.
+    /// Persist this entry. Best-effort tightens the written directory's on-disk
+    /// permissions to `0700` on Unix afterward (spec 011 US7 FR-030, research.md
+    /// R25) — same fix as `LocationConfigEntry::save`, applied here since per-output
+    /// assignments can also reveal locally-sensitive filesystem paths.
     pub fn save(&self, config: &Config) -> Result<(), cosmic_config::Error> {
-        self.write_entry(config)
+        self.write_entry(config)?;
+        #[cfg(unix)]
+        crate::tighten_config_dir_permissions(RENDERER_CONFIG_ID, Self::VERSION);
+        Ok(())
     }
 
     /// Load `new_config`, migrating forward from the pre-rename application id
@@ -402,6 +408,23 @@ mod tests {
         let (loaded, corrupted) = RendererConfig::load_reporting_corruption(&config);
         assert!(!corrupted);
         assert_eq!(loaded, RendererConfig::default());
+    }
+
+    /// Spec 011 US7 FR-030 (research.md R25) — same fix and same rationale as
+    /// `location_config::tests::save_tightens_permissions`, applied to `RendererConfig`.
+    #[cfg(unix)]
+    #[test]
+    fn save_tightens_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        crate::test_support::with_scratch_xdg_config_home(|| {
+            let config = RendererConfig::open().unwrap();
+            RendererConfig::default().save(&config).unwrap();
+
+            let dir = dirs::config_dir().unwrap().join("cosmic").join(RENDERER_CONFIG_ID).join(format!("v{}", RendererConfig::VERSION));
+            let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o700, "expected the config directory to be tightened to 0700, got {mode:o}");
+        });
     }
 
     /// T018: closes research.md R2's own real-bug precedent (see this module's doc

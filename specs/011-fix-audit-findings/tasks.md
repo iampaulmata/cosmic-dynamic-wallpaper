@@ -357,7 +357,7 @@ pole-latitude query returns near-instantly (quickstart.md automated table rows 1
       it fits the existing `Cli` derive layout without disruption — implementer's judgment call
       per research.md R24); add regression test `output_flag_conflict_returns_usage_error`
       (FR-029, research.md R24, depends on T031)
-- [ ] T033 [P] [US7] Add Unix-only (`#[cfg(unix)]`) permission-tightening in
+- [X] T033 [P] [US7] Add Unix-only (`#[cfg(unix)]`) permission-tightening in
       `crates/wallpaper-ipc/src/location_config.rs` and
       `crates/wallpaper-ipc/src/renderer_config.rs`: after a successful `save()`, resolve
       `dirs::config_dir().join("cosmic").join(app_id).join(format!("v{version}"))` (documented in
