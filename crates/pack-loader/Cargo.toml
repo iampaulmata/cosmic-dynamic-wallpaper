@@ -22,6 +22,12 @@ cosmic-config = { git = "https://github.com/pop-os/libcosmic", default-features 
 # own unsafe FFI boundary for this (constitution: unsafe only in vetted, documented
 # shims).
 fd-lock = "4"
+# Resolves the standard `cosmic-config` directory (spec 011 US6 FR-022, research.md
+# R17/R25's shared convention) so the registry lock file lives next to the config it
+# guards. Already resolved in `Cargo.lock` as a transitive dependency of
+# `cosmic-config` (same precedent as `wallpaper-settings`' own direct `dirs` use) — no
+# new crate enters the build.
+dirs = "6.0"
 
 [dev-dependencies]
 tempfile = "3.27"
