@@ -119,17 +119,17 @@ US2 section).
 
 ### Implementation for User Story 2
 
-- [ ] T009 [US2] Add pure function `fn validate_destination_name(name: &str) -> Result<(), String>`
+- [X] T009 [US2] Add pure function `fn validate_destination_name(name: &str) -> Result<(), String>`
       in `crates/wallpaper-settings/src/pages/pack_builder.rs` — rejects an empty string, any
       `std::path::Component` other than `Normal` (via `Path::new(name).components()`), and
       `Path::new(name).is_absolute()`; call it from the `CollisionNameChanged`/`CollisionConfirmed`
       handling before `move_pack` is ever invoked; add unit tests
       `validate_destination_name_rejects_traversal` covering `../../../.config/autostart`, an
       absolute path (`/home/user/.ssh`), and `""` (FR-006, FR-007, research.md R5)
-- [ ] T010 [US2] Add a test in `crates/wallpaper-settings/src/pages/pack_builder.rs` asserting
+- [X] T010 [US2] Add a test in `crates/wallpaper-settings/src/pages/pack_builder.rs` asserting
       that a rejected rename value (from T009) leaves `generated_path` and the destination root's
       existing contents byte-for-byte unchanged (FR-008)
-- [ ] T011 [US2] In `crates/wallpaper-settings/src/pages/pack_builder.rs`'s `move_pack`, replace
+- [X] T011 [US2] In `crates/wallpaper-settings/src/pages/pack_builder.rs`'s `move_pack`, replace
       the `destination.exists()` check + `create_dir_all` with `std::fs::create_dir` on the final
       destination-name segment as an atomic exists-or-create check immediately before
       `copy_dir_recursive`, minimizing the window between check and write (FR-009, research.md R6)
