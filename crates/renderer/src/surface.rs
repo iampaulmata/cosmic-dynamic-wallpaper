@@ -278,6 +278,24 @@ impl WallpaperDaemon {
 
         match pack_loader::load_pack(source.path()) {
             Ok(loaded) => {
+                // Spec 011 US7 FR-040 (research.md R34, corrected during
+                // implementation — see that file's note): `WallpaperPack::validate`
+                // cannot itself perform this check, since solar-anchored duplicate
+                // instants are date-dependent and `validate` takes no date/location at
+                // all (schedule-engine/src/pack.rs's own doc comment on
+                // `check_solar_duplicate_instant`). The only real runtime caller of
+                // this daemon's pack-loading path (`load_pack_for`, here) never called
+                // it at all before this fix — only the settings GUI's custom pack
+                // builder did, and only at build time. Best-effort, log-only: a
+                // collision degrades to a logged warning (a zero-width transition on
+                // today's date), never blocks the load (constitution Principle VIII) —
+                // and is naturally re-checked every time this method re-runs (pack
+                // (re)assignment, daemon restart, or a new day's first evaluation).
+                if let Some(location) = self.location.as_ref() {
+                    if let Err(e) = loaded.pack.check_solar_duplicate_instant(location, chrono::Local::now().date_naive()) {
+                        tracing::warn!(output = %id, error = %e, "pack has two solar anchors resolving to the same instant today — one will be skipped");
+                    }
+                }
                 self.outputs[index].textures.clear();
                 self.outputs[index].loaded_pack = Some(loaded);
                 self.outputs[index].active_image = None;
@@ -308,14 +326,25 @@ impl WallpaperDaemon {
         match result {
             Ok(Some(result)) => {
                 let output = &mut self.outputs[index];
-                if let Some(t) = &result.transition {
+                // Spec 011 US1 FR-003 (research.md R3): `t.progress` isn't visibly
+                // clamped upstream, and both `Duration::from_secs_f64` (NaN/negative/
+                // infinite) and the `Instant - Duration` subtraction below (an
+                // out-of-range Duration) panic on bad input — any future schedule-math
+                // bug returning an out-of-range value must not take down the whole
+                // daemon. A non-finite progress routes into the same "no visible
+                // transition" fallback the `else` branch below already handles
+                // (holding `result.active_before` steady); a finite-but-out-of-range
+                // progress (e.g. a rounding-driven `1.00001`) is clamped to `0.0..=1.0`
+                // instead of dropped, since the transition itself is still meaningful.
+                let sanitized = result.transition.as_ref().and_then(|t| sanitize_transition_progress(t.progress).map(|p| (t, p)));
+                if let Some((t, progress)) = sanitized {
                     let now = Instant::now();
                     let already_this_pair =
                         output.transition.as_ref().is_some_and(|existing| existing.outgoing == t.outgoing && existing.incoming == t.incoming);
                     if !already_this_pair {
                         // A fresh transition (FR-011: supersedes cleanly — a new value
                         // simply replaces the old one, see crossfade.rs's own doc).
-                        let started_at = now - Duration::from_secs_f64(t.progress * crossfade_duration.as_secs_f64());
+                        let started_at = now - Duration::from_secs_f64(progress * crossfade_duration.as_secs_f64());
                         output.transition =
                             Some(CrossfadeTransition { outgoing: t.outgoing.clone(), incoming: t.incoming.clone(), started_at, duration: crossfade_duration });
                     }
@@ -635,6 +664,66 @@ impl WallpaperDaemon {
     }
 }
 
+/// Spec 011 US1 FR-002 (research.md R2): the layer-shell protocol legitimately reports
+/// 0 on an axis when both opposing anchors are set on that axis (exactly what
+/// `add_output` does) — spec-compliant compositor behavior, not bad input.
+/// `wgpu::Surface::configure` panics on a zero dimension, so treat 0 as "pick a size"
+/// (clamp to 1) rather than passing it straight through; a 1x1 surface is a
+/// degenerate-but-valid render target that stays alive until the next real configure
+/// event corrects it. Extracted as a pure function so this specific clamp is
+/// unit-testable without a real (or even mock) GPU surface.
+fn clamp_reconfigure_size(size: (u32, u32)) -> (u32, u32) {
+    (size.0.max(1), size.1.max(1))
+}
+
+/// Spec 011 US1 FR-003 (research.md R3): sanitizes a crossfade transition's raw
+/// `progress` value before it reaches `Duration::from_secs_f64`/`Instant` arithmetic,
+/// both of which panic on bad input. Returns `None` for a non-finite value (NaN or
+/// +/-infinity) — the caller treats that the same as "no visible transition" rather
+/// than trying to derive a meaningless `started_at` from it. Returns
+/// `Some(progress.clamp(0.0, 1.0))` for any finite value, so a merely out-of-range
+/// (but finite) progress still drives a transition, just clamped to a sane bound.
+fn sanitize_transition_progress(progress: f64) -> Option<f64> {
+    if !progress.is_finite() {
+        return None;
+    }
+    Some(progress.clamp(0.0, 1.0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clamp_reconfigure_size_rejects_zero_on_either_axis() {
+        assert_eq!(clamp_reconfigure_size((0, 600)), (1, 600));
+        assert_eq!(clamp_reconfigure_size((800, 0)), (800, 1));
+        assert_eq!(clamp_reconfigure_size((0, 0)), (1, 1));
+    }
+
+    #[test]
+    fn clamp_reconfigure_size_leaves_nonzero_size_unchanged() {
+        assert_eq!(clamp_reconfigure_size((1920, 1080)), (1920, 1080));
+    }
+
+    /// Spec 011 US1 FR-003 (research.md R3): NaN and +/-infinity — the exact shapes
+    /// the audit reproduced feeding `Duration::from_secs_f64` and `Instant` arithmetic
+    /// — must not panic, and must not be silently treated as valid progress either.
+    #[test]
+    fn crossfade_progress_rejects_non_finite() {
+        assert_eq!(sanitize_transition_progress(f64::NAN), None);
+        assert_eq!(sanitize_transition_progress(f64::INFINITY), None);
+        assert_eq!(sanitize_transition_progress(f64::NEG_INFINITY), None);
+    }
+
+    #[test]
+    fn crossfade_progress_clamps_finite_out_of_range_values() {
+        assert_eq!(sanitize_transition_progress(-0.5), Some(0.0));
+        assert_eq!(sanitize_transition_progress(1.5), Some(1.0));
+        assert_eq!(sanitize_transition_progress(0.42), Some(0.42));
+    }
+}
+
 impl WallpaperDaemon {
     /// Reconfigure output `index`'s render state for a new logical size — the shared
     /// core of both `LayerShellHandler::configure` (layer-surface-geometry-driven)
@@ -644,6 +733,7 @@ impl WallpaperDaemon {
     /// idempotency); a failure here is contained to this one output (FR-013), never
     /// propagated to affect others.
     fn reconfigure_output(&mut self, conn: &Connection, index: usize, new_size: (u32, u32)) {
+        let new_size = clamp_reconfigure_size(new_size);
         self.outputs[index].size = Some(new_size);
 
         if let Err(e) = self.ensure_gpu_surface(conn, index) {

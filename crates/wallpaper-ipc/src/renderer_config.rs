@@ -28,10 +28,59 @@ const OLD_RENDERER_CONFIG_ID: &str = "com.system76.CosmicWallpaper.Renderer";
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct OutputId(String);
 
+/// The longest identifier [`OutputId::validated`] accepts (spec 011 US4/US5, FR-017/
+/// FR-019) — generous headroom over any real connector name (`"eDP-1"`, `"DP-3"`, ...
+/// are a handful of bytes), while still bounding the two untrusted boundaries that
+/// construct an `OutputId` from external input: the D-Bus `output_id` argument and
+/// `wallpaperctl assign --output`.
+pub const MAX_OUTPUT_ID_BYTES: usize = 256;
+
+/// Why [`OutputId::validated`] rejected a candidate identifier.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OutputIdError {
+    /// The identifier was empty.
+    Empty,
+    /// The identifier exceeded [`MAX_OUTPUT_ID_BYTES`].
+    TooLong {
+        /// The rejected identifier's actual length, in bytes.
+        len: usize,
+    },
+}
+
+impl fmt::Display for OutputIdError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            OutputIdError::Empty => write!(f, "output id must not be empty"),
+            OutputIdError::TooLong { len } => {
+                write!(f, "output id is {len} bytes, longer than the {MAX_OUTPUT_ID_BYTES}-byte limit")
+            }
+        }
+    }
+}
+
+impl std::error::Error for OutputIdError {}
+
 impl OutputId {
-    /// Wrap a connector-name string as an opaque [`OutputId`].
+    /// Wrap a connector-name string as an opaque [`OutputId`] with no validation —
+    /// for trusted internal construction from a real Wayland connector name (spec 3's
+    /// own compositor-reported strings), never from CLI/D-Bus input directly.
     pub fn new(id: impl Into<String>) -> Self {
         Self(id.into())
+    }
+
+    /// Construct an [`OutputId`] from untrusted input (a D-Bus method argument, or
+    /// `wallpaperctl assign --output`'s value — spec 011 US4/US5, FR-017/FR-019,
+    /// research.md R13), rejecting an empty or overlong identifier rather than
+    /// silently accepting a value that can never match a real output.
+    pub fn validated(id: impl Into<String>) -> Result<Self, OutputIdError> {
+        let id = id.into();
+        if id.is_empty() {
+            return Err(OutputIdError::Empty);
+        }
+        if id.len() > MAX_OUTPUT_ID_BYTES {
+            return Err(OutputIdError::TooLong { len: id.len() });
+        }
+        Ok(Self(id))
     }
 
     /// Borrow the identifier as a string slice.
@@ -179,6 +228,26 @@ mod tests {
 
     fn source(path: &str) -> PackSource {
         PackSource::StaticFile(path.into())
+    }
+
+    #[test]
+    fn output_id_validated_rejects_empty() {
+        assert_eq!(OutputId::validated(""), Err(OutputIdError::Empty));
+    }
+
+    #[test]
+    fn output_id_validated_rejects_oversized() {
+        let too_long = "x".repeat(MAX_OUTPUT_ID_BYTES + 1);
+        assert_eq!(OutputId::validated(too_long.clone()), Err(OutputIdError::TooLong { len: too_long.len() }));
+    }
+
+    #[test]
+    fn output_id_validated_accepts_real_connector_names() {
+        assert_eq!(OutputId::validated("DP-3").unwrap(), OutputId::new("DP-3"));
+        assert_eq!(OutputId::validated("eDP-1").unwrap(), OutputId::new("eDP-1"));
+        // Exactly at the limit is still accepted (only *over* the limit is rejected).
+        let at_limit = "x".repeat(MAX_OUTPUT_ID_BYTES);
+        assert!(OutputId::validated(at_limit).is_ok());
     }
 
     #[test]
