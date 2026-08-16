@@ -388,7 +388,7 @@ pole-latitude query returns near-instantly (quickstart.md automated table rows 1
       `HashMap<ImageId, GpuTexture>` texture cache with a bounded `TextureCache` (LRU eviction,
       `const MAX_CACHED_TEXTURES_PER_OUTPUT: usize = 16;`), keeping `ensure_texture`'s existing
       signature unchanged (FR-036, research.md R31)
-- [ ] T040 [P] [US7] In `crates/renderer/src/dbus_service.rs`, add a `debug_assert!` capturing the
+- [X] T040 [P] [US7] In `crates/renderer/src/dbus_service.rs`, add a `debug_assert!` capturing the
       main thread's `ThreadId` at daemon startup and checking every subsequent `DaemonInterface`
       call runs on it, plus a doc-comment cross-reference to the existing "never contended" module
       comment (FR-037, research.md R32)
