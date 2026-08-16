@@ -449,7 +449,7 @@ test beyond "existing tests still pass."
       one (FR-047)
 - [X] T051 [P] [US8] Document or enforce a length bound on `ImageId`'s wrapped string in
       `crates/schedule-engine/src/pack.rs` (FR-048)
-- [ ] T052 [P] [US8] Document the already-implemented `location ip` subcommand in
+- [X] T052 [P] [US8] Document the already-implemented `location ip` subcommand in
       `crates/wallpaperctl/README.md` (FR-049)
 - [ ] T053 [P] [US8] Document the well-known-bus-name trust assumption in
       `crates/wallpaper-ipc/src/dbus_client.rs`, alongside the daemon-side authorization gap from
