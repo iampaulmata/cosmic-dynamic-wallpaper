@@ -127,6 +127,16 @@ pub struct WallpaperDaemon {
     /// from within a source callback, so storing it on the very `Data` it drives is
     /// sound.
     loop_handle: Option<calloop::LoopHandle<'static, WallpaperDaemon>>,
+    /// Set once at startup ([`WallpaperDaemon::set_connection`]) — lets [`Self::draw`]
+    /// actively recover from `wgpu::SurfaceError::Lost`/`Outdated` (FR-034, research.md
+    /// R29) by re-running [`Self::reconfigure_output`], which needs a `&Connection` to
+    /// (re)bind the GPU surface but otherwise has no `Connection` available from
+    /// `draw`'s own call sites (`evaluate_and_draw_all`/`evaluate_and_draw`, called
+    /// from the idle-wait timer and D-Bus `reevaluate`, neither of which is itself a
+    /// Wayland event callback that receives one). Same `Option<_>`-set-once-at-startup
+    /// posture as `loop_handle` above; `Connection` is cheaply `Clone` (an `Rc`-backed
+    /// handle), so storing a clone here is sound.
+    conn: Option<Connection>,
     /// The currently-registered idle-wait timer's token, if any — removed before a
     /// fresh one is inserted at a recomputed deadline.
     idle_timer_token: Option<calloop::RegistrationToken>,
@@ -183,6 +193,7 @@ impl WallpaperDaemon {
             coalescer: Coalescer::new(),
             exit: false,
             loop_handle: None,
+            conn: None,
             idle_timer_token: None,
             dbus_state: std::sync::Arc::new(std::sync::Mutex::new(crate::dbus_service::DbusState::default())),
         })
@@ -421,6 +432,28 @@ impl WallpaperDaemon {
 
         let frame = match wgpu_surface.get_current_texture() {
             Ok(f) => f,
+            Err(e) if surface_error_needs_reconfigure(&e) => {
+                // FR-034 (research.md R29) — the audit's own reproduction: `Lost`/
+                // `Outdated` specifically mean the surface itself needs reconfiguring
+                // (e.g. after a compositor resize/output-disable/re-enable cycle),
+                // not a transient one-frame hiccup — previously only logged, leaving
+                // the output stuck presenting nothing until some *other* event
+                // happened to trigger a fresh `reconfigure_output` call. Actively
+                // recover using the output's own last-known `size` instead. Bounded,
+                // not unconditional recursion: `reconfigure_output` only calls `draw`
+                // again after a *successful* `wgpu_surface.configure(...)`, at which
+                // point a freshly-configured surface's very next
+                // `get_current_texture()` call essentially always succeeds — an early
+                // return inside `reconfigure_output` (e.g. `ensure_gpu_surface`
+                // failing) does not call back into `draw` at all.
+                let Some(conn) = self.conn.clone() else {
+                    tracing::warn!(output = %self.outputs[index].id, error = %e, "get_current_texture failed (surface lost/outdated) but no Connection is available to recover");
+                    return;
+                };
+                tracing::warn!(output = %self.outputs[index].id, error = %e, "surface lost/outdated — reconfiguring to recover");
+                self.reconfigure_output(&conn, index, size);
+                return;
+            }
             Err(e) => {
                 tracing::warn!(output = %self.outputs[index].id, error = %e, "get_current_texture failed, skipping frame");
                 return;
@@ -574,6 +607,12 @@ impl WallpaperDaemon {
         self.loop_handle = Some(handle);
     }
 
+    /// Store a clone of the daemon's `Connection` (FR-034, research.md R29) — see the
+    /// `conn` field's doc comment for why [`Self::draw`] needs this.
+    pub fn set_connection(&mut self, conn: Connection) {
+        self.conn = Some(conn);
+    }
+
     /// `min(schedule-driven next_wake, earliest pending coalesced deadline)`,
     /// converted from `DateTime<Local>`/`Instant` (calendar) domain into `Instant`
     /// (monotonic) domain relative to *now* — `Instant` has no calendar epoch, so a
@@ -690,6 +729,16 @@ fn sanitize_transition_progress(progress: f64) -> Option<f64> {
     Some(progress.clamp(0.0, 1.0))
 }
 
+/// Whether a `wgpu::SurfaceError` from `get_current_texture()` means the surface
+/// itself needs reconfiguring (spec 011 US7 FR-034, research.md R29) — `Lost`/
+/// `Outdated` do; `Timeout` (a transient one-frame hiccup) and `OutOfMemory` (a
+/// condition no reconfiguration fixes) don't. Extracted as a pure predicate, same
+/// reasoning as `clamp_reconfigure_size`/`sanitize_transition_progress` above, so
+/// `draw`'s recovery decision is unit-testable without a real GPU/Wayland surface.
+fn surface_error_needs_reconfigure(e: &wgpu::SurfaceError) -> bool {
+    matches!(e, wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -721,6 +770,17 @@ mod tests {
         assert_eq!(sanitize_transition_progress(-0.5), Some(0.0));
         assert_eq!(sanitize_transition_progress(1.5), Some(1.0));
         assert_eq!(sanitize_transition_progress(0.42), Some(0.42));
+    }
+
+    /// Spec 011 US7 FR-034 (research.md R29): `Lost`/`Outdated` specifically mean the
+    /// surface needs reconfiguring; `Timeout`/`OutOfMemory` don't (recovering can't fix
+    /// either — `Timeout` is a one-frame hiccup, `OutOfMemory` no config change helps).
+    #[test]
+    fn surface_error_needs_reconfigure_is_true_only_for_lost_and_outdated() {
+        assert!(surface_error_needs_reconfigure(&wgpu::SurfaceError::Lost));
+        assert!(surface_error_needs_reconfigure(&wgpu::SurfaceError::Outdated));
+        assert!(!surface_error_needs_reconfigure(&wgpu::SurfaceError::Timeout));
+        assert!(!surface_error_needs_reconfigure(&wgpu::SurfaceError::OutOfMemory));
     }
 }
 
