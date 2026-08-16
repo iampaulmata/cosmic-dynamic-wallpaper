@@ -144,10 +144,51 @@ pub fn lookup_location(mmdb_path: &Path, ip: IpAddr) -> Result<Location, String>
     Location::new(latitude, longitude).map_err(|e| format!("IP-geolocation database returned an invalid location: {e}"))
 }
 
+/// Sanity bound on a single IP-geolocation jump between consecutive successful
+/// resolutions (spec 011 US7 FR-031, research.md R26) — the audit's own suggested
+/// mitigation for a forged STUN reply: a lone implausible jump (say, two continents
+/// apart within one resolution interval) is rejected rather than applied, even though
+/// it would otherwise validate cleanly through [`Location::new`]. ~2000 km is generous
+/// relative to any real short-notice relocation (a flight, a move) while still catching
+/// the threat model described — a forged UDP reply pointing at an arbitrary location.
+pub const MAX_PLAUSIBLE_LOCATION_JUMP_KM: f64 = 2000.0;
+
+/// Great-circle distance between two locations, in kilometers (haversine formula) —
+/// only used by [`MAX_PLAUSIBLE_LOCATION_JUMP_KM`]'s plausibility check; not exposed
+/// more broadly since no other part of this project currently needs a distance
+/// calculation.
+fn haversine_km(a: Location, b: Location) -> f64 {
+    const EARTH_RADIUS_KM: f64 = 6371.0;
+    let (lat1, lat2) = (a.latitude().to_radians(), b.latitude().to_radians());
+    let d_lat = (b.latitude() - a.latitude()).to_radians();
+    let d_lon = (b.longitude() - a.longitude()).to_radians();
+    let h = (d_lat / 2.0).sin().powi(2) + lat1.cos() * lat2.cos() * (d_lon / 2.0).sin().powi(2);
+    2.0 * EARTH_RADIUS_KM * h.sqrt().asin()
+}
+
 /// Validate `location` and record a successful resolution — mirrors
 /// `portal_location::apply_reading`'s exact posture for the `ip_*` fields instead of
-/// `automatic_*`.
+/// `automatic_*`, plus [`MAX_PLAUSIBLE_LOCATION_JUMP_KM`]'s plausibility bound (FR-031,
+/// research.md R26): a new reading that implies an implausible jump from the most
+/// recent previously-trusted `ip_location` is logged and skipped — `entry` is left
+/// unchanged — rather than applied outright. The very first resolution (`ip_location`
+/// still `None`) has nothing to compare against, so it always applies.
 pub fn apply_reading(entry: &mut LocationConfigEntry, location: Location) {
+    if let Some(previous) = entry.ip_location {
+        let jump_km = haversine_km(previous, location);
+        if jump_km > MAX_PLAUSIBLE_LOCATION_JUMP_KM {
+            tracing::warn!(
+                jump_km,
+                max_plausible_km = MAX_PLAUSIBLE_LOCATION_JUMP_KM,
+                previous_latitude = previous.latitude(),
+                previous_longitude = previous.longitude(),
+                new_latitude = location.latitude(),
+                new_longitude = location.longitude(),
+                "rejected an implausible IP-geolocation jump — keeping the previous trusted location"
+            );
+            return;
+        }
+    }
     entry.ip_location = Some(location);
     entry.ip_status = ResolutionStatus::Resolved;
 }
@@ -297,6 +338,51 @@ mod tests {
 
         assert_eq!(entry.ip_status, ResolutionStatus::Resolved);
         assert_eq!(entry.ip_location, Some(location));
+    }
+
+    /// Spec 011 US7 FR-031 (research.md R26) — the audit's own threat model: a single
+    /// forged STUN reply causing one implausible jump is rejected, keeping the
+    /// previous trusted location, rather than applied outright.
+    #[test]
+    fn apply_reading_rejects_an_implausible_jump_from_a_forged_reply() {
+        let mut entry = LocationConfigEntry::default();
+        let real = Location::new(45.5019, -73.5674).unwrap(); // Montreal
+        apply_reading(&mut entry, real);
+        assert_eq!(entry.ip_location, Some(real));
+
+        // A forged reply claiming Sydney, Australia — ~16,700 km away, clearly
+        // implausible as a follow-up resolution moments later.
+        let forged = Location::new(-33.8688, 151.2093).unwrap();
+        apply_reading(&mut entry, forged);
+
+        assert_eq!(entry.ip_location, Some(real), "an implausible jump must be rejected, not applied");
+        assert_eq!(entry.ip_status, ResolutionStatus::Resolved);
+    }
+
+    /// A genuinely plausible jump (a real short-notice relocation, or simply two
+    /// nearby ISP exit points) is accepted, not caught by the bound meant for the
+    /// forged-reply threat model above.
+    #[test]
+    fn apply_reading_accepts_a_plausible_nearby_jump() {
+        let mut entry = LocationConfigEntry::default();
+        let first = Location::new(45.5019, -73.5674).unwrap(); // Montreal
+        apply_reading(&mut entry, first);
+
+        let nearby = Location::new(40.7128, -74.006).unwrap(); // New York, ~500 km away
+        apply_reading(&mut entry, nearby);
+
+        assert_eq!(entry.ip_location, Some(nearby));
+        assert_eq!(entry.ip_status, ResolutionStatus::Resolved);
+    }
+
+    /// The very first resolution has no previous `ip_location` to compare against, so
+    /// it always applies, no matter how far from e.g. the manual location it is.
+    #[test]
+    fn apply_reading_always_accepts_the_first_resolution() {
+        let mut entry = LocationConfigEntry::default();
+        let far = Location::new(-33.8688, 151.2093).unwrap(); // Sydney
+        apply_reading(&mut entry, far);
+        assert_eq!(entry.ip_location, Some(far));
     }
 
     /// T048: the public-IP cache respects its 24-hour TTL — fresh just under the

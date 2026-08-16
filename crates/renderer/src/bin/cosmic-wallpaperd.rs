@@ -5,15 +5,20 @@
 //! `list outputs` (FR-016). See `crates/renderer/README.md` for what this binary does
 //! and doesn't cover yet.
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use cosmic_config::calloop::ConfigWatchSource;
+use smithay_client_toolkit::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay_client_toolkit::reexports::calloop::EventLoop;
 use smithay_client_toolkit::reexports::calloop_wayland_source::WaylandSource;
 use wayland_client::{globals::registry_queue_init, Connection};
 
 use pack_loader::Registry;
+use renderer::config::REEVALUATION_DEADLINE;
 use renderer::dbus_service::{self, DaemonInterface};
 use renderer::ip_geolocation::{self, IpGeoEvent};
-use renderer::portal_location::{self, PortalEvent};
+use renderer::portal_location::{self, PortalDebouncer, PortalEvent};
 use renderer::starter_pack;
 use renderer::surface::WallpaperDaemon;
 use renderer::{effective_location, LocationConfigEntry, LocationMode, RendererConfig};
@@ -118,26 +123,66 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     };
     spawn_portal_task_if_needed(initial_location_entry.mode, &mut portal_task_spawned);
 
+    // FR-032 (spec 011 US7, research.md R27): a rapid burst of `PortalEvent`s (the
+    // portal service settling through several intermediate readings) now coalesces to
+    // a single applied/persisted write via `PortalDebouncer`, the same "record
+    // replaces the pending deadline" primitive `Coalescer` already uses for FR-014's
+    // per-output re-evaluations — replacing the prior synchronous-per-event write.
+    // `debouncer`/`debounce_token` are shared (`Rc<RefCell<_>>`) between the channel
+    // handler below (which records into it) and the dynamically (re)inserted timer
+    // (which drains it once the debounce window elapses) — the identical
+    // remove-then-reinsert single-shot `Timer` technique
+    // `WallpaperDaemon::reschedule_idle_timer` already uses, just at this free
+    // function's scope instead of as a struct method, since only `main`'s local
+    // `location_store` handle (not `WallpaperDaemon`) owns the config write path here.
+    let portal_debouncer: Rc<RefCell<PortalDebouncer>> = Rc::new(RefCell::new(PortalDebouncer::new()));
+    let portal_debounce_token: Rc<RefCell<Option<calloop::RegistrationToken>>> = Rc::new(RefCell::new(None));
+
     event_loop
         .handle()
         .insert_source(portal_events_rx, {
             let location_store = location_store.clone();
-            move |event, _, daemon: &mut WallpaperDaemon| {
+            let portal_debouncer = portal_debouncer.clone();
+            let portal_debounce_token = portal_debounce_token.clone();
+            let loop_handle = event_loop.handle();
+            move |event, _, _: &mut WallpaperDaemon| {
                 let calloop::channel::Event::Msg(portal_event) = event else { return };
-                let mut entry = LocationConfigEntry::load(&location_store);
-                match portal_event {
-                    PortalEvent::Reading(reading) => portal_location::apply_reading(&mut entry, reading),
-                    PortalEvent::Failure(reason) => portal_location::apply_failure(&mut entry, reason),
+                portal_debouncer.borrow_mut().record(portal_event, std::time::Instant::now());
+
+                if let Some(token) = portal_debounce_token.borrow_mut().take() {
+                    loop_handle.remove(token);
                 }
-                if let Err(e) = entry.save(&location_store) {
-                    tracing::error!(error = %e, "failed to persist an automatic-location resolution");
+
+                let location_store = location_store.clone();
+                let portal_debouncer = portal_debouncer.clone();
+                let portal_debounce_token_for_timer = portal_debounce_token.clone();
+                let timer = Timer::from_duration(REEVALUATION_DEADLINE);
+                let result = loop_handle.insert_source(timer, move |_deadline, _, daemon: &mut WallpaperDaemon| {
+                    portal_debounce_token_for_timer.borrow_mut().take();
+                    if let Some(portal_event) = portal_debouncer.borrow_mut().due(std::time::Instant::now()) {
+                        let mut entry = LocationConfigEntry::load(&location_store);
+                        match portal_event {
+                            PortalEvent::Reading(reading) => portal_location::apply_reading(&mut entry, reading),
+                            PortalEvent::Failure(reason) => portal_location::apply_failure(&mut entry, reason),
+                        }
+                        if let Err(e) = entry.save(&location_store) {
+                            tracing::error!(error = %e, "failed to persist a debounced automatic-location resolution");
+                        }
+                        // Applied directly (not waited on via `location_watch` below)
+                        // so scheduling reacts as soon as the debounce window elapses
+                        // rather than waiting on a filesystem watch round trip;
+                        // `location_watch` will also observe this same write shortly
+                        // after — redundant but harmless (module doc's write-back
+                        // contract: this daemon is the entry's own watcher as well as
+                        // writer).
+                        daemon.on_location_changed(effective_location(&entry));
+                    }
+                    TimeoutAction::Drop
+                });
+                match result {
+                    Ok(token) => *portal_debounce_token.borrow_mut() = Some(token),
+                    Err(e) => tracing::error!(error = %e, "failed to schedule debounced portal-location write"),
                 }
-                // Applied directly (not waited on via `location_watch` below) so
-                // scheduling reacts immediately rather than waiting on a filesystem
-                // watch round trip; `location_watch` will also observe this same write
-                // shortly after — redundant but harmless (module doc's write-back
-                // contract: this daemon is the entry's own watcher as well as writer).
-                daemon.on_location_changed(effective_location(&entry));
             }
         })
         .map_err(|e| format!("failed to insert the portal event channel: {e}"))?;
