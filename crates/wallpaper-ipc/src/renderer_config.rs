@@ -170,7 +170,25 @@ impl RendererConfig {
     /// Read the current entry, falling back to the default (empty overrides, toggle
     /// off, 45s crossfade) if nothing has been written yet.
     pub fn load(config: &Config) -> Self {
-        Self::get_entry(config).unwrap_or_else(|(_errors, default)| default)
+        Self::load_reporting_corruption(config).0
+    }
+
+    /// [`Self::load`], but also reports whether the fallback-to-default path was
+    /// taken because of a genuine read/parse error, not just "never configured"
+    /// (spec 011 US6 FR-023, research.md R18) — see
+    /// [`crate::LocationConfigEntry::load_reporting_corruption`]'s doc comment for the
+    /// full rationale; this is the identical fix applied to the renderer config.
+    pub fn load_reporting_corruption(config: &Config) -> (Self, bool) {
+        match Self::get_entry(config) {
+            Ok(entry) => (entry, false),
+            Err((errors, default)) => {
+                let corrupted = errors.iter().any(cosmic_config::Error::is_err);
+                if corrupted {
+                    tracing::warn!(?errors, "renderer config could not be fully read — falling back to defaults for the affected field(s)");
+                }
+                (default, corrupted)
+            }
+        }
     }
 
     /// Persist this entry.
@@ -355,6 +373,35 @@ mod tests {
         let reloaded = RendererConfig::load(&config);
         assert_eq!(reloaded.overrides.len(), 1);
         assert_eq!(reloaded.crossfade_duration_secs, 30);
+    }
+
+    /// Spec 011 US6 FR-023 (research.md R18) — same fix as
+    /// `location_config::tests::corrupted_file_surfaces_warning_not_silent_default`,
+    /// applied to `RendererConfig`.
+    #[test]
+    fn corrupted_file_surfaces_warning_not_silent_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = RendererConfig::open_at(dir.path()).unwrap();
+        RendererConfig::default().save(&config).unwrap();
+
+        let key_path =
+            dir.path().join("cosmic").join(RENDERER_CONFIG_ID).join(format!("v{}", RendererConfig::VERSION)).join("crossfade_duration_secs");
+        assert!(key_path.exists(), "expected cosmic-config's own on-disk layout at {}", key_path.display());
+        std::fs::write(&key_path, b"not valid RON {{{").unwrap();
+
+        let (loaded, corrupted) = RendererConfig::load_reporting_corruption(&config);
+        assert!(corrupted);
+        assert_eq!(loaded.crossfade_duration_secs, RendererConfig::default().crossfade_duration_secs);
+    }
+
+    #[test]
+    fn never_configured_is_not_reported_as_corruption() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = RendererConfig::open_at(dir.path()).unwrap();
+
+        let (loaded, corrupted) = RendererConfig::load_reporting_corruption(&config);
+        assert!(!corrupted);
+        assert_eq!(loaded, RendererConfig::default());
     }
 
     /// T018: closes research.md R2's own real-bug precedent (see this module's doc

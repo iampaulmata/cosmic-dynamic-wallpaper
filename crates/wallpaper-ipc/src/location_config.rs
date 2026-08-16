@@ -106,7 +106,29 @@ impl LocationConfigEntry {
     /// Read the current entry, falling back to the all-default entry if nothing has
     /// been written yet.
     pub fn load(config: &Config) -> Self {
-        Self::get_entry(config).unwrap_or_else(|(_errors, default)| default)
+        Self::load_reporting_corruption(config).0
+    }
+
+    /// [`Self::load`], but also reports whether the fallback-to-default path was
+    /// taken because of a genuine read/parse error (spec 011 US6 FR-023, research.md
+    /// R18) — not just "this key was never written," which `cosmic_config::Error::
+    /// NotFound`/`NoConfigDirectory` already represent as a normal, expected case
+    /// (`Error::is_err()` is this crate's own distinguishing predicate for exactly
+    /// this). Logs the discarded error detail via `tracing::warn!` when it *is*
+    /// genuine corruption, closing the gap where a corrupted file was previously
+    /// indistinguishable from "never configured" (the audit's own reproduction:
+    /// `location get` reported "no location available" identically for both).
+    pub fn load_reporting_corruption(config: &Config) -> (Self, bool) {
+        match Self::get_entry(config) {
+            Ok(entry) => (entry, false),
+            Err((errors, default)) => {
+                let corrupted = errors.iter().any(cosmic_config::Error::is_err);
+                if corrupted {
+                    tracing::warn!(?errors, "location config could not be fully read — falling back to defaults for the affected field(s)");
+                }
+                (default, corrupted)
+            }
+        }
     }
 
     /// Persist this entry.
@@ -185,6 +207,44 @@ mod tests {
         LocationConfigEntry { location: Some(loc), ..LocationConfigEntry::default() }.save(&config).unwrap();
 
         assert_eq!(LocationConfigEntry::load(&config).location, Some(loc));
+    }
+
+    /// Spec 011 US6 FR-023 (research.md R18) — the audit's own reproduction: a
+    /// corrupted config file was previously indistinguishable from "never
+    /// configured" (`location get` reported the identical "no location available"
+    /// message for both). Writes genuinely invalid RON directly into the on-disk key
+    /// file `cosmic-config` stores `mode` under (confirmed by directly inspecting the
+    /// directory layout `Config::with_custom_path` produces — not guessed), then
+    /// confirms `load_reporting_corruption` reports `corrupted = true`, unlike the
+    /// ordinary "key was never written at all" case just below.
+    #[test]
+    fn corrupted_file_surfaces_warning_not_silent_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = LocationConfigEntry::open_at(dir.path()).unwrap();
+
+        // Establish the store (creates the directory structure), then corrupt one
+        // field's key file directly on disk.
+        LocationConfigEntry::default().save(&config).unwrap();
+        let mode_key_path = dir.path().join("cosmic").join(LOCATION_CONFIG_ID).join(format!("v{}", LocationConfigEntry::VERSION)).join("mode");
+        assert!(mode_key_path.exists(), "expected cosmic-config's own on-disk layout at {}", mode_key_path.display());
+        std::fs::write(&mode_key_path, b"this is not valid RON at all {{{").unwrap();
+
+        let (loaded, corrupted) = LocationConfigEntry::load_reporting_corruption(&config);
+        assert!(corrupted, "a genuinely corrupted key file must be reported as such");
+        assert_eq!(loaded.mode, LocationMode::default(), "still degrades to the default value, per constitution Principle VIII");
+    }
+
+    /// The ordinary case — nothing has ever been written — must NOT be reported as
+    /// corruption; this is what distinguishes the fix from "treat every fallback as
+    /// an error."
+    #[test]
+    fn never_configured_is_not_reported_as_corruption() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = LocationConfigEntry::open_at(dir.path()).unwrap();
+
+        let (loaded, corrupted) = LocationConfigEntry::load_reporting_corruption(&config);
+        assert!(!corrupted, "a key that was simply never written must not be reported as corrupted");
+        assert_eq!(loaded, LocationConfigEntry::default());
     }
 
     /// ⚠️ Real finding, discovered while writing this test (spec 6 research.md R7's

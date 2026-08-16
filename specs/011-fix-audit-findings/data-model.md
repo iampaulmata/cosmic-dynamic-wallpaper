@@ -122,12 +122,16 @@ a research.md decision and a spec.md FR.
   struct originally sketched here — mirrors this crate's existing multi-variant error-type
   convention instead).
 - **`LocationConfigEntry::load`** and **`RendererConfig::load`** (`location_config.rs`,
-  `renderer_config.rs`): return type changes from `Self` to a small
-  `LoadOutcome<T> { value: T, corrupted: bool }` (or equivalent — a tuple `(Self, bool)` is an
-  acceptable simpler alternative at implementation time) so callers can distinguish "read
-  successfully" from "fell back to defaults after a read/parse error," which is now also
-  logged via `tracing::warn!` with the discarded error detail (research.md R18). Every existing
-  caller that only needs `.value`/`.0` is updated to destructure accordingly.
+  `renderer_config.rs`): signature **unchanged** (`fn load(config: &Config) -> Self`) — **revised
+  during implementation** from the original plan of changing `load`'s own return type (which
+  would have touched ~45 call sites for no benefit to the ~40 that don't need the distinction).
+  Instead, both gain a new sibling method `load_reporting_corruption(config: &Config) -> (Self,
+  bool)`; `load` is now a thin wrapper that discards the `bool` half, so every existing caller is
+  unaffected. Both log via `tracing::warn!` (with the discarded error detail) whenever the `bool`
+  is `true` — genuine corruption, not just "never configured" (distinguished via
+  `cosmic_config::Error::is_err()`, the library's own predicate for this — see research.md R18's
+  corrected entry for why a naive "any error means corrupted" check would have been wrong). Only
+  `wallpaperctl location get` (T026) calls `load_reporting_corruption` directly.
 - **`LocationConfigEntry::save`** and **`RendererConfig::save`**: unchanged signature; now also
   tightens the owning config directory's Unix permissions to `0700` after a successful write
   (research.md R25). Unix-only; no-op on other platforms.

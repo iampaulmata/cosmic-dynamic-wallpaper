@@ -68,6 +68,11 @@ struct LocationGetResponse {
     manual_location: Option<Location>,
     automatic_location: Option<Location>,
     ip_location: Option<Location>,
+    /// Spec 011 US6 FR-023 (research.md R18): `true` only if the on-disk config was
+    /// genuinely unreadable/corrupt (not the ordinary "never configured" case), which
+    /// this response's other fields can't otherwise distinguish from "no location was
+    /// ever set."
+    config_read_error: bool,
 }
 
 /// spec.md US4 Scenario 1, SC-004 (spec 6); extended for spec 7's third mode: reports
@@ -75,7 +80,12 @@ struct LocationGetResponse {
 /// (`wallpaper_ipc::effective_location`) for every `(mode, status)` combination,
 /// daemon-optional.
 pub fn get(config: &Config, json: bool) -> String {
-    let state = LocationConfigEntry::load(config);
+    // Spec 011 US6 FR-023 (research.md R18): distinguishes a genuinely corrupted
+    // config file from "never configured" — both previously reported identically as
+    // "no location available." Exit code stays 0 in both cases regardless (neither is
+    // a fatal error, constitution Principle VIII); this only makes the *message*
+    // accurate.
+    let (state, config_read_error) = LocationConfigEntry::load_reporting_corruption(config);
     let effective = effective_location(&state);
     let status = current_status(&state);
     // The displayed value's provenance, matching `effective_location()`'s own
@@ -90,6 +100,7 @@ pub fn get(config: &Config, json: bool) -> String {
         manual_location: state.location,
         automatic_location: state.automatic_location,
         ip_location: state.ip_location,
+        config_read_error,
     };
 
     output::render(json, &response, || {
@@ -97,6 +108,7 @@ pub fn get(config: &Config, json: bool) -> String {
             Some(loc) if from_automatic => format!("{} {}  (from automatic resolution)", loc.latitude(), loc.longitude()),
             Some(loc) if from_ip => format!("{} {}  (from IP-geolocation)", loc.latitude(), loc.longitude()),
             Some(loc) => format!("{} {}", loc.latitude(), loc.longitude()),
+            None if config_read_error => "unavailable — the location config could not be read (corrupted?); treating as unset".to_string(),
             None => "no location available".to_string(),
         };
         format!("mode: {}\nstatus: {}\nlocation: {location_line}", mode_str(state.mode), status_human(&status))
@@ -167,6 +179,7 @@ pub fn manual(config: &Config, json: bool) -> Result<String, CliError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cosmic_config::CosmicConfigEntry;
 
     fn temp_config() -> (Config, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
@@ -382,5 +395,32 @@ mod tests {
         assert!(human.contains("mode: ip_geolocation"));
         assert!(human.contains("status: unavailable (public IP discovery failed: STUN request timed out)"));
         assert!(human.contains("45.5019"));
+    }
+
+    /// Spec 011 US6 FR-023 (research.md R18) — the audit's own reproduction: a
+    /// corrupted location config previously reported "no location available"
+    /// identically to "never configured." `get`'s message must now distinguish them,
+    /// while exit code/behavior otherwise stays the same (still degrades to defaults,
+    /// never fails the command).
+    #[test]
+    fn get_distinguishes_corrupted_config_from_never_configured() {
+        let (config, dir) = temp_config();
+
+        let never_configured = get(&config, false);
+        assert!(never_configured.contains("no location available"));
+        assert!(!never_configured.contains("could not be read"));
+
+        LocationConfigEntry::default().save(&config).unwrap();
+        let mode_key_path =
+            dir.path().join("cosmic").join(wallpaper_ipc::LOCATION_CONFIG_ID).join(format!("v{}", LocationConfigEntry::VERSION)).join("mode");
+        assert!(mode_key_path.exists());
+        std::fs::write(&mode_key_path, b"not valid RON {{{").unwrap();
+
+        let corrupted = get(&config, false);
+        assert!(corrupted.contains("could not be read"), "expected a distinguishing message, got: {corrupted}");
+        assert!(!corrupted.contains("no location available"), "must not read identically to never-configured, got: {corrupted}");
+
+        let json = get(&config, true);
+        assert!(json.contains(r#""config_read_error":true"#), "expected --json to also carry the flag: {json}");
     }
 }
