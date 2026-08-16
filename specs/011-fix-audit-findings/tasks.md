@@ -454,7 +454,7 @@ test beyond "existing tests still pass."
 - [X] T053 [P] [US8] Document the well-known-bus-name trust assumption in
       `crates/wallpaper-ipc/src/dbus_client.rs`, alongside the daemon-side authorization gap from
       US4 (FR-050)
-- [ ] T054 [P] [US8] Update `crates/wallpaper-settings/README.md` to mention the pack builder
+- [X] T054 [P] [US8] Update `crates/wallpaper-settings/README.md` to mention the pack builder
       wizard and reflect the current test count (FR-051)
 - [ ] T055 [P] [US8] Add an in-flight guard on "Add pack folder…" in
       `crates/wallpaper-settings/src/app.rs`/`crates/wallpaper-settings/src/pages/packs.rs`
