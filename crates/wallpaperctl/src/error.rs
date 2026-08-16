@@ -27,6 +27,11 @@ pub enum CliError {
     /// A `cosmic-config` read/write failed (registry, renderer config, or location
     /// config).
     ConfigError { reason: String },
+    /// `assign --output <id>` was given an empty, overlong, or oddly-shaped value
+    /// (spec 011 US5 FR-019) — same validation class as `PackNotFound`/
+    /// `OutputNotFound`/`InvalidLocation` (a specific, actionable usage error), not a
+    /// daemon/config failure.
+    InvalidOutputId { reason: String },
 }
 
 impl CliError {
@@ -36,7 +41,8 @@ impl CliError {
         match self {
             CliError::InvalidLocation { .. }
             | CliError::PackNotFound { .. }
-            | CliError::OutputNotFound { .. } => 1,
+            | CliError::OutputNotFound { .. }
+            | CliError::InvalidOutputId { .. } => 1,
             CliError::DaemonUnreachable => 2,
             CliError::PackLoadFailed { .. } | CliError::ConfigError { .. } => 3,
         }
@@ -60,6 +66,7 @@ impl fmt::Display for CliError {
                 write!(f, "failed to load pack at {}: {reason}", source.display())
             }
             CliError::ConfigError { reason } => write!(f, "configuration storage error: {reason}"),
+            CliError::InvalidOutputId { reason } => write!(f, "invalid --output value: {reason}"),
         }
     }
 }
@@ -105,6 +112,7 @@ mod tests {
         assert_eq!(CliError::DaemonUnreachable.exit_code(), 2);
         assert_eq!(CliError::PackLoadFailed { source: "/x".into(), reason: "y".into() }.exit_code(), 3);
         assert_eq!(CliError::ConfigError { reason: "z".into() }.exit_code(), 3);
+        assert_eq!(CliError::InvalidOutputId { reason: "z".into() }.exit_code(), 1);
     }
 
     #[test]

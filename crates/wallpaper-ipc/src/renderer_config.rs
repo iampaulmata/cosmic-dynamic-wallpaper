@@ -45,6 +45,11 @@ pub enum OutputIdError {
         /// The rejected identifier's actual length, in bytes.
         len: usize,
     },
+    /// The identifier contained a byte outside the charset every real Wayland
+    /// connector name uses (spec 011 US5 FR-019 — the audit's own reproduction,
+    /// `--output "DP-3;rm -rf /"`, is only caught by this check; it's well within the
+    /// length limit and non-empty).
+    InvalidCharacters,
 }
 
 impl fmt::Display for OutputIdError {
@@ -53,6 +58,9 @@ impl fmt::Display for OutputIdError {
             OutputIdError::Empty => write!(f, "output id must not be empty"),
             OutputIdError::TooLong { len } => {
                 write!(f, "output id is {len} bytes, longer than the {MAX_OUTPUT_ID_BYTES}-byte limit")
+            }
+            OutputIdError::InvalidCharacters => {
+                write!(f, "output id must contain only ASCII letters, digits, '-', and '_' (real connector names, e.g. \"eDP-1\", \"DP-3\", never do otherwise)")
             }
         }
     }
@@ -70,8 +78,11 @@ impl OutputId {
 
     /// Construct an [`OutputId`] from untrusted input (a D-Bus method argument, or
     /// `wallpaperctl assign --output`'s value — spec 011 US4/US5, FR-017/FR-019,
-    /// research.md R13), rejecting an empty or overlong identifier rather than
-    /// silently accepting a value that can never match a real output.
+    /// research.md R13), rejecting an empty, overlong, or oddly-shaped identifier
+    /// rather than silently accepting a value that can never match a real output.
+    /// Every real Wayland connector name (`"eDP-1"`, `"DP-3"`, `"HDMI-A-1"`,
+    /// `"Virtual-1"`) is ASCII letters/digits/`-`/`_` only — the character check below
+    /// is generous within that shape, not a hand-picked allow-list of known prefixes.
     pub fn validated(id: impl Into<String>) -> Result<Self, OutputIdError> {
         let id = id.into();
         if id.is_empty() {
@@ -79,6 +90,9 @@ impl OutputId {
         }
         if id.len() > MAX_OUTPUT_ID_BYTES {
             return Err(OutputIdError::TooLong { len: id.len() });
+        }
+        if !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
+            return Err(OutputIdError::InvalidCharacters);
         }
         Ok(Self(id))
     }
@@ -245,9 +259,21 @@ mod tests {
     fn output_id_validated_accepts_real_connector_names() {
         assert_eq!(OutputId::validated("DP-3").unwrap(), OutputId::new("DP-3"));
         assert_eq!(OutputId::validated("eDP-1").unwrap(), OutputId::new("eDP-1"));
+        assert_eq!(OutputId::validated("HDMI-A-1").unwrap(), OutputId::new("HDMI-A-1"));
+        assert_eq!(OutputId::validated("Virtual-1").unwrap(), OutputId::new("Virtual-1"));
         // Exactly at the limit is still accepted (only *over* the limit is rejected).
         let at_limit = "x".repeat(MAX_OUTPUT_ID_BYTES);
         assert!(OutputId::validated(at_limit).is_ok());
+    }
+
+    /// Spec 011 US5 FR-019 (research.md R13/R15) — the audit's own reproduction:
+    /// `--output "DP-3;rm -rf /"` is non-empty and well within the length limit, so
+    /// only a character-class check catches it.
+    #[test]
+    fn output_id_validated_rejects_shell_metacharacters() {
+        assert_eq!(OutputId::validated("DP-3;rm -rf /"), Err(OutputIdError::InvalidCharacters));
+        assert_eq!(OutputId::validated("DP-3\n"), Err(OutputIdError::InvalidCharacters));
+        assert_eq!(OutputId::validated("../etc/passwd"), Err(OutputIdError::InvalidCharacters));
     }
 
     #[test]
