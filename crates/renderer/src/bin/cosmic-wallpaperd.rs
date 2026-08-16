@@ -252,7 +252,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     // forward as a foreign future via `calloop`'s `block_on`, the same pattern zbus's
     // own `Connection::executor` doc example uses (just driven by `calloop` instead of
     // `tokio::spawn`). See `dbus_service`'s module doc for the full integration story.
-    let iface = DaemonInterface { state: daemon.dbus_state() };
+    let iface = DaemonInterface::new(daemon.dbus_state());
     let connection = pollster::block_on(
         zbus::connection::Builder::session()?.name(dbus_service::BUS_NAME)?.serve_at(dbus_service::OBJECT_PATH, iface)?.internal_executor(false).build(),
     )

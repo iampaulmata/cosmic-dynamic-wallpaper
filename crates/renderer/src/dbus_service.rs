@@ -98,6 +98,39 @@ fn lock(state: &Mutex<DbusState>) -> std::sync::MutexGuard<'_, DbusState> {
 /// [`DbusState`] mirror — never `WallpaperDaemon` itself (see module doc).
 pub struct DaemonInterface {
     pub state: Arc<Mutex<DbusState>>,
+    /// Captured once at construction ([`Self::new`]) — this daemon's single `calloop`
+    /// main thread, per module doc's "never contended" note. Every interface method
+    /// below `debug_assert!`s it's still running there (spec 011 US7 FR-037,
+    /// research.md R32): `zbus`'s `Interface` trait requires `Send + Sync` in general
+    /// (so a served interface *could* be dispatched from another thread), but this
+    /// daemon never actually does that — this makes the assumption a checked,
+    /// debug-build-only invariant rather than only a comment a future refactor could
+    /// silently invalidate.
+    main_thread_id: std::thread::ThreadId,
+}
+
+impl DaemonInterface {
+    /// Construct a new interface object, capturing the calling thread's id as the
+    /// "main thread" every subsequent call's [`Self::assert_main_thread`] checks
+    /// against (FR-037) — must be called from the daemon's one `calloop` main thread
+    /// (see module doc), same as every other daemon setup step.
+    pub fn new(state: Arc<Mutex<DbusState>>) -> Self {
+        Self { state, main_thread_id: std::thread::current().id() }
+    }
+
+    /// FR-037 (research.md R32): checked restatement of this module's "never
+    /// contended" assumption — see [`main_thread_id`](Self::main_thread_id)'s doc
+    /// comment. Debug builds only (constitution Principle VIII: never a release-build
+    /// panic surface); a violation here would mean `zbus` started dispatching served
+    /// calls off the main thread, which would also break `WallpaperDaemon`'s own
+    /// no-`Send`/`Sync`-needed assumption elsewhere in this daemon.
+    fn assert_main_thread(&self) {
+        debug_assert_eq!(
+            std::thread::current().id(),
+            self.main_thread_id,
+            "DaemonInterface method called off the daemon's single main thread — see module doc's \"never contended\" note"
+        );
+    }
 }
 
 #[zbus::interface(interface = "com.system76.CosmicDynamicWallpaper1.Daemon")]
@@ -109,6 +142,7 @@ impl DaemonInterface {
     /// Spec 011 US4 FR-017 (research.md R13): `output_id` validated the same way
     /// [`Self::reevaluate`] does, before the snapshot lookup.
     fn query_output(&self, output_id: String) -> zbus::fdo::Result<(bool, String, String)> {
+        self.assert_main_thread();
         let id = OutputId::validated(output_id).map_err(|e| zbus::fdo::Error::InvalidArgs(e.to_string()))?;
         let state = lock(&self.state);
         let Some(response) = state.snapshot.get(&id) else {
@@ -131,6 +165,7 @@ impl DaemonInterface {
     /// see `contracts/wallpaperd-dbus-hardening.md` for why a full consent/allow-list
     /// mechanism is out of scope for this fix.
     fn query_all(&self) -> Vec<(String, bool, String, String)> {
+        self.assert_main_thread();
         tracing::debug!("QueryAll invoked");
         let state = lock(&self.state);
         state
@@ -156,6 +191,7 @@ impl DaemonInterface {
     /// bounded length) via the same [`OutputId::validated`] the CLI's `--output` flag
     /// uses, before the known-outputs lookup.
     fn reevaluate(&self, output_id: String) -> zbus::fdo::Result<()> {
+        self.assert_main_thread();
         let id = OutputId::validated(output_id).map_err(|e| zbus::fdo::Error::InvalidArgs(e.to_string()))?;
         let mut state = lock(&self.state);
         if !state.known_outputs.contains(&id) {
@@ -187,6 +223,7 @@ impl DaemonInterface {
     /// dropped and logged rather than queued once full, since this method's `()`
     /// return gives the caller no way to observe a rejection anyway.
     fn reevaluate_all(&self) {
+        self.assert_main_thread();
         let mut state = lock(&self.state);
         if state.pending.iter().any(|r| matches!(r, ReevaluateRequest::All)) {
             return;
@@ -258,7 +295,20 @@ mod tests {
     }
 
     fn interface() -> DaemonInterface {
-        DaemonInterface { state: Arc::new(Mutex::new(DbusState::default())) }
+        DaemonInterface::new(Arc::new(Mutex::new(DbusState::default())))
+    }
+
+    /// Spec 011 US7 FR-037 (research.md R32): every interface method's
+    /// `assert_main_thread` call must not fire when called from the same thread that
+    /// constructed the interface — the ordinary, expected case every other test in
+    /// this module already exercises implicitly. This test just makes that assumption
+    /// explicit: if it ever panicked, every other test above would too.
+    #[test]
+    fn interface_methods_do_not_panic_when_called_from_the_constructing_thread() {
+        let iface = interface();
+        iface.reevaluate_all();
+        assert!(iface.query_output("eDP-1".to_string()).is_err()); // unmanaged, but doesn't panic
+        let _ = iface.query_all();
     }
 
     /// Spec 011 US4 FR-014 (research.md R10) — the audit's exact reproduction shape: a
