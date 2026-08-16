@@ -431,23 +431,44 @@ story; each maps to one or more FR numbers from spec.md.
   it starts; `build_draft` erroring instead of filtering stops a *different* future call site from
   producing a silently-incomplete pack even if it forgets the re-check too).
 
-### R22: Defer manifest write until Move/Keep is chosen (FR-027)
+### R22: Defer manifest write until Move/Keep is chosen (FR-027) — **implementation more involved than originally sketched**
 
-- **Decision**: Restructure so both `MoveRequested` and `KeepRequested` handlers call a shared
-  `finalize(state, choice)` function that writes `manifest.toml` as its first step, immediately
-  followed by either the move routine or a no-op (Keep) — rather than writing the manifest before
-  showing the placement dialog (today's order) and having Move/Keep only decide what happens
-  *after* a manifest already exists on disk.
-- **Rationale**: Confirmed via `pack_builder.rs`: the manifest is currently written during
-  `GenerateRequested` handling, before `pending_placement`'s dialog is even shown — so a crash
-  between those two points leaves a written-but-unconfirmed manifest that `should_open_for`'s
-  `ManifestNotFound`-only check treats as "already has a manifest" on next launch, silently
+- **Decision**: `generate()` no longer writes `manifest.toml` into `state.source_dir` at all. It
+  still self-validates (FR-012's requirement, preserved) — but against a throwaway scratch
+  directory instead: every referenced image is copied (see correction below) into a fresh temp
+  directory alongside the rendered manifest text, run through the real `pack_loader::load_pack`,
+  then the scratch directory is deleted regardless of outcome. On success, the rendered text is
+  held in a new `state.pending_manifest_text: Option<String>` field (not written anywhere real
+  yet) alongside the existing `pending_placement`. A new shared `write_manifest_and_register`
+  helper — used by both `confirm_keep` and `cancel_collision_to_keep` (the two "stay in place"
+  paths) — writes `pending_manifest_text` into the source folder, self-validates again in place,
+  then registers; `move_pack` (the "relocate" path) gained a `manifest_text: &str` parameter and
+  now writes it into the *destination* right after copying the source's images there, before its
+  own existing self-validation call. Either way, nothing is ever written to `state.source_dir`
+  until the user's actual Move/Keep choice runs.
+- **Correction found while implementing**: the first version of the scratch-directory
+  self-validation used symlinks (cheap, no copying) pointing back into `state.source_dir`. Every
+  test failed with `PathEscapesPackDirectory` — `pack_loader::path_safety::resolve_and_check`
+  canonicalizes every entry specifically to catch a symlink whose *real* target resolves outside
+  the pack directory (its own doc comment states this is deliberate, to catch exactly this shape).
+  A symlink from the scratch dir back to the real source directory is precisely that shape, so
+  pack-loader's own containment check — working exactly as intended — rejected it every time.
+  Switched to real file copies for the scratch validation; bounded and one-time per Generate click
+  (at most `MAX_ANCHORS` = 64 images), not a hot path.
+- **Rationale**: Confirmed via `pack_builder.rs`: the manifest was previously written during
+  `GenerateRequested` handling, before `pending_placement`'s dialog was even shown — so a crash
+  between those two points left a written-but-unconfirmed manifest that `should_open_for`'s
+  `ManifestNotFound`-only check treated as "already has a manifest" on next launch, silently
   skipping the wizard. Moving the write to the point of actual user choice removes the window
-  entirely rather than trying to make it recoverable.
+  entirely rather than trying to make it recoverable — verified directly with a test that drops
+  `state` after `generate()` (simulating a crash) and confirms `should_open_for` still correctly
+  re-opens the wizard, not silently treating the folder as already placed.
 - **Alternatives considered**: Write the manifest early (as today) but into a temp/staging location
-  and only move it into the source folder once a choice is made — rejected as more complex than
-  simply moving *when* the existing write call happens, since `build_draft`'s output is already
-  fully computed by the time `GenerateRequested` fires (no re-computation needed at Move/Keep time).
+  and only move it into the source folder once a choice is made — rejected in favor of not writing
+  anywhere on disk at all until the choice, which closes the window completely rather than moving
+  it. Skipping the scratch-dir self-validation entirely (defer *all* validation to Move/Keep time)
+  — rejected: would regress FR-012's requirement that Generate itself reports a self-validation
+  failure immediately, not only once the user clicks Move or Keep.
 
 ## User Story 7 — Diagnostics and defensive hardening
 

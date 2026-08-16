@@ -309,16 +309,25 @@ silently discarded (quickstart.md automated table rows 5, 18–19, and manual US
       gap exists, but closing it fully requires an upstream fix this project doesn't control.
       Judged disproportionate to build a hand-rolled journaling workaround for a P3-priority,
       already-batched, dependency-internal gap (FR-025, research.md R20)
-- [ ] T029 [US6] In `crates/wallpaper-settings/src/pages/pack_builder.rs`, add a re-check of the
+- [X] T029 [US6] In `crates/wallpaper-settings/src/pages/pack_builder.rs`, add a re-check of the
       existing `all_assigned(&state)` pure function at the top of the `Message::GenerateRequested`
       handler, populating `state.generate_error` and returning early if it's `false`; also change
       `build_draft` to return `Err` for unassigned rows instead of silently filtering them; add
       regression test `generate_handler_rechecks_all_assigned` (FR-026, research.md R21)
-- [ ] T030 [US6] Restructure `crates/wallpaper-settings/src/pages/pack_builder.rs` so
-      `MoveRequested` and `KeepRequested` both call a shared `finalize(state, choice)` that writes
-      `manifest.toml` as its first step, removing that write from `GenerateRequested` handling;
-      add a test confirming no `manifest.toml` exists in the source folder between Generate and
-      the placement choice (FR-027, research.md R22)
+- [X] T030 [US6] **More involved than originally sketched** (research.md R22's corrected entry).
+      In `crates/wallpaper-settings/src/pages/pack_builder.rs`: `generate()` no longer writes
+      `manifest.toml` into `source_dir` — self-validates against a scratch directory (real file
+      *copies*, not symlinks: an initial symlink-based version tripped `pack_loader::path_safety`'s
+      own containment check, which deliberately rejects a symlink resolving outside the pack
+      directory) and stores the rendered text in a new `state.pending_manifest_text` field. New
+      `write_manifest_and_register` helper (used by `confirm_keep`/`cancel_collision_to_keep`)
+      writes it into the source folder only when "Keep" is actually chosen; `move_pack` gained a
+      `manifest_text: &str` parameter and writes it into the destination after copying, for "Move".
+      Updated 5 existing tests whose assumptions no longer held (manifest pre-written to source);
+      added `manifest_is_not_written_between_generate_and_the_placement_choice`, which drops
+      `state` right after `generate()` (simulating a crash) and confirms `should_open_for` still
+      re-opens the wizard rather than silently treating the folder as already placed (FR-027,
+      research.md R22)
 
 **Checkpoint**: User Stories 1–6 all work independently — `cargo test -p pack-loader -p
 wallpaper-ipc -p wallpaperctl -p wallpaper-settings` passes.
