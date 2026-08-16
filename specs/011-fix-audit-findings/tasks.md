@@ -470,9 +470,11 @@ findings has a corresponding completed task.
 **Purpose**: Whole-workspace verification and documentation cross-references, after every user
 story above is complete.
 
-- [ ] T056 [P] Run `cargo clippy --workspace --all-targets -- -D warnings` and resolve anything
-      the new lint gates (T002, T003) or any fix above surfaces
-- [ ] T057 [P] Cross-reference `contracts/wallpaperd-dbus-hardening.md` and
+- [X] T056 [P] Run `cargo clippy --workspace --all-targets -- -D warnings` and resolve anything
+      the new lint gates (T002, T003) or any fix above surfaces — **no-op, already clean**: every
+      prior task's own per-crate clippy run (T005–T055) already kept the workspace lint-clean
+      throughout; the whole-workspace run here surfaced nothing new
+- [X] T057 [P] Cross-reference `contracts/wallpaperd-dbus-hardening.md` and
       `contracts/wallpaperctl-cli-hardening.md`'s exit-code renumbering (T031) from
       `specs/004-cli-control-surface/contracts/wallpaperd-dbus-interface.md` and
       `specs/004-cli-control-surface/contracts/wallpaperctl-cli.md`, so the original contracts

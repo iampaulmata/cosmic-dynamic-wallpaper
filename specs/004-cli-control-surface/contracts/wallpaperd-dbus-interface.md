@@ -6,6 +6,14 @@ and `wallpaperctl reevaluate` commands (research.md R3, R5), but must be *implem
 see plan.md's Cross-Spec Dependencies section. This file specifies the interface spec 3 needs
 to implement, independent of when that implementation lands.
 
+⚠️ **Superseded in part by spec 011's hardening delta**: since this contract was implemented,
+`specs/011-fix-audit-findings/contracts/wallpaperd-dbus-hardening.md` added a bounded/coalesced
+request queue to `Reevaluate`/`ReevaluateAll`, `output_id` validation to `Reevaluate`/
+`QueryOutput`, `QueryAll` call logging, and a session-bus policy file (US4/FR-014–FR-017) — all
+additive new failure modes/bounds for a previously-unvalidated/unbounded caller, no method name,
+signature, or well-formed-caller behavior change. Read that file alongside this one for the
+current, authoritative behavior.
+
 ## Bus name and object path
 
 ```text
@@ -50,7 +58,9 @@ ReevaluateAll() -> ()
 
 If `wallpaperctl` cannot connect to this bus name at all (no `wallpaperd` running), it MUST
 fail fast with `CliError::DaemonUnreachable` — it does not wait, retry, or hang (spec.md US4/
-US6 Scenario 3).
+US6 Scenario 3). **The D-Bus-level behavior here is unchanged by spec 011's hardening delta —
+only `wallpaperctl`'s mapped exit code for this case moves (2 → 4); see
+`specs/011-fix-audit-findings/contracts/wallpaperctl-cli-hardening.md`.**
 
 ## Explicitly not in this contract
 
