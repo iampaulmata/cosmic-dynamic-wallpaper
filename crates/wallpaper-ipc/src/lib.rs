@@ -30,6 +30,29 @@ pub use renderer_config::{
 /// (spec 008 FR-009) — not a lowercase-leading fragment.
 pub const IP_GEOLOCATION_DISCLOSURE: &str = "IP-geolocation uses a bundled offline database for the location lookup, and briefly asks a STUN server for this machine's public IP address first, since that's not something the bundled database can determine on its own.";
 
+/// Best-effort, Unix-only: ensure the directory a `cosmic-config` entry is about to be
+/// written to already exists at `0700` *before* that write happens (spec 011
+/// adversarial re-review finding 2 — `Self::tighten_config_dir_permissions` alone left
+/// a real window where the entry's data was briefly written at whatever broader
+/// default permissions `cosmic-config`'s own directory creation + the process umask
+/// produce). `DirBuilder::create` with `recursive(true)` is a no-op (not an error) if
+/// the directory already exists, matching `create_dir_all`'s own semantics — so this
+/// is safe to call unconditionally before every save, not just the first one. Same
+/// path-reconstruction and never-fails-the-caller posture as
+/// [`tighten_config_dir_permissions`] below (its doc comment explains both).
+#[cfg(unix)]
+pub(crate) fn ensure_config_dir_permissions_before_write(app_id: &str, version: u64) {
+    use std::os::unix::fs::DirBuilderExt;
+
+    let Some(base) = dirs::config_dir() else {
+        return;
+    };
+    let dir = base.join("cosmic").join(app_id).join(format!("v{version}"));
+    if let Err(error) = std::fs::DirBuilder::new().recursive(true).mode(0o700).create(&dir) {
+        tracing::warn!(?error, path = %dir.display(), "failed to pre-create config directory with tightened permissions before save");
+    }
+}
+
 /// Best-effort, Unix-only: tighten the on-disk directory a `cosmic-config` entry was
 /// just written to, to `0700` (spec 011 US7 FR-030, research.md R25) — location and
 /// renderer config can hold locally-sensitive detail (GPS coordinates, filesystem
@@ -40,6 +63,13 @@ pub const IP_GEOLOCATION_DISCLOSURE: &str = "IP-geolocation uses a bundled offli
 /// `pack_loader::registry`'s lock-file path does. Never fails the caller (constitution
 /// Principle VIII) — the config write itself already succeeded by the time this runs,
 /// so a permission-tightening failure is logged, not propagated.
+///
+/// Kept as a second pass *after* the write, alongside
+/// [`ensure_config_dir_permissions_before_write`] which now runs *before* it (spec 011
+/// adversarial re-review finding 2) — this one still matters for a directory that
+/// already existed at broader permissions from before that pre-write fix landed, which
+/// the pre-write `DirBuilder::create` call leaves untouched (it's a no-op when the
+/// directory already exists, same as `create_dir_all`).
 #[cfg(unix)]
 pub(crate) fn tighten_config_dir_permissions(app_id: &str, version: u64) {
     use std::os::unix::fs::PermissionsExt;

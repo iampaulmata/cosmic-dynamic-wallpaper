@@ -131,11 +131,16 @@ impl LocationConfigEntry {
         }
     }
 
-    /// Persist this entry. Best-effort tightens the written directory's on-disk
-    /// permissions to `0700` on Unix afterward (spec 011 US7 FR-030, research.md
-    /// R25) — location data is locally sensitive, and `cosmic-config`'s own directory
+    /// Persist this entry. On Unix, best-effort pre-creates the target directory at
+    /// `0700` before writing (closing most of the window where the entry would
+    /// otherwise briefly exist at broader default permissions — spec 011 adversarial
+    /// re-review finding 2) and tightens it again afterward, in case it already
+    /// existed at broader permissions (spec 011 US7 FR-030, research.md R25) —
+    /// location data is locally sensitive, and `cosmic-config`'s own directory
     /// creation does not restrict group/other read access by default.
     pub fn save(&self, config: &Config) -> Result<(), cosmic_config::Error> {
+        #[cfg(unix)]
+        crate::ensure_config_dir_permissions_before_write(LOCATION_CONFIG_ID, Self::VERSION);
         self.write_entry(config)?;
         #[cfg(unix)]
         crate::tighten_config_dir_permissions(LOCATION_CONFIG_ID, Self::VERSION);
