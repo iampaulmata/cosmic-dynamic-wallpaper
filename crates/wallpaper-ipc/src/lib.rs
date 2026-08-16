@@ -16,7 +16,9 @@ pub mod renderer_config;
 
 pub use dbus_client::{DbusClient, DbusError, QueryEntry, BUS_NAME, INTERFACE, OBJECT_PATH};
 pub use location_config::{effective_location, LocationConfigEntry, LocationMode, ResolutionStatus, LOCATION_CONFIG_ID};
-pub use renderer_config::{effective_pack, resolve_assignment, OutputAssignment, OutputId, RendererConfig, RENDERER_CONFIG_ID};
+pub use renderer_config::{
+    effective_pack, resolve_assignment, OutputAssignment, OutputId, OutputIdError, RendererConfig, MAX_OUTPUT_ID_BYTES, RENDERER_CONFIG_ID,
+};
 
 /// STUN-disclosure copy FR-014 (spec 7) requires before a user opts into
 /// IP-geolocation — the one external network touchpoint that mode has. **The single

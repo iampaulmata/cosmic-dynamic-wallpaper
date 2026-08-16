@@ -190,21 +190,21 @@ automated table rows 12–13, and the manual "D-Bus queue bound, observed live" 
 
 ### Implementation for User Story 4
 
-- [ ] T016 [US4] In `crates/renderer/src/dbus_service.rs`, add `const
+- [X] T016 [US4] In `crates/renderer/src/dbus_service.rs`, add `const
       MAX_PENDING_DBUS_REQUESTS: usize = 8;`; change `reevaluate_all` to a no-op if
       `ReevaluateRequest::All` is already anywhere in `pending`; make both `reevaluate` and
       `reevaluate_all` reject (`zbus::fdo::Error::LimitsExceeded` for the former; `tracing::warn!`
       + silent drop for the latter, whose signature returns `()`) once
       `pending.len() >= MAX_PENDING_DBUS_REQUESTS`; add regression tests
       `reevaluate_all_coalesces` and `pending_queue_bounded` (FR-014, research.md R10)
-- [ ] T017 [P] [US4] Create `packaging/dbus-1/com.system76.CosmicDynamicWallpaper1.conf` (standard
+- [X] T017 [P] [US4] Create `packaging/dbus-1/com.system76.CosmicDynamicWallpaper1.conf` (standard
       `<busconfig><policy>` XML documenting the same-uid session-bus trust boundary) and reference
       it from `packaging/README.md` and the Debian packaging file list in
       `packaging/debian/postinst` (or wherever install paths are enumerated) (FR-015, research.md
       R11)
-- [ ] T018 [P] [US4] Add a `tracing::debug!` log line in `crates/renderer/src/dbus_service.rs`'s
+- [X] T018 [P] [US4] Add a `tracing::debug!` log line in `crates/renderer/src/dbus_service.rs`'s
       `DaemonInterface::query_all` recording that a query occurred (FR-016, research.md R12)
-- [ ] T019 [US4] In `crates/renderer/src/dbus_service.rs`'s `reevaluate` and `query_output`
+- [X] T019 [US4] In `crates/renderer/src/dbus_service.rs`'s `reevaluate` and `query_output`
       handlers, validate `output_id` via `wallpaper_ipc::OutputId::validated` (T004) before the
       existing known-outputs lookup, returning `zbus::fdo::Error::InvalidArgs` with a specific
       message on failure; add regression test `output_id_validated` (FR-017, depends on T004)
