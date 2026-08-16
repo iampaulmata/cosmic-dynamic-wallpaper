@@ -162,6 +162,13 @@ pub enum RegistryError {
         /// The unregistered source that was referenced.
         source: String,
     },
+    /// The cross-process advisory lock guarding a registry read-modify-write
+    /// (spec 011 US6 FR-022, research.md R17) couldn't be acquired or its directory
+    /// couldn't be resolved.
+    LockFailed {
+        /// Why the lock couldn't be acquired.
+        message: String,
+    },
 }
 
 impl fmt::Display for RegistryError {
@@ -169,6 +176,7 @@ impl fmt::Display for RegistryError {
         match self {
             RegistryError::Storage { message } => write!(f, "pack registry storage error: {message}"),
             RegistryError::NotFound { source } => write!(f, "no registered pack at {source}"),
+            RegistryError::LockFailed { message } => write!(f, "couldn't lock the pack registry for writing: {message}"),
         }
     }
 }

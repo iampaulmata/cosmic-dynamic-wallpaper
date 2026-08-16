@@ -3985,6 +3985,7 @@ version = "0.2.0"
 dependencies = [
  "chrono",
  "cosmic-config",
+ "dirs",
  "fd-lock",
  "humantime",
  "image",

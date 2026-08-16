@@ -270,7 +270,7 @@ silently discarded (quickstart.md automated table rows 5, 18–19, and manual US
 
 ### Implementation for User Story 6
 
-- [ ] T024 [US6] In `crates/pack-loader/src/registry.rs`, wrap `Registry::persist()`'s
+- [X] T024 [US6] In `crates/pack-loader/src/registry.rs`, wrap `Registry::persist()`'s
       read-modify-write with an `fd-lock` (T001) exclusive lock on a dedicated `.lock` file next
       to the registry's `cosmic-config`-managed storage; add new `RegistryError::LockFailed {
       message: String }`; add regression test `concurrent_persist_serializes` using two `Registry`
