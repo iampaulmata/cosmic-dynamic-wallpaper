@@ -23,6 +23,22 @@ use renderer::starter_pack;
 use renderer::surface::WallpaperDaemon;
 use renderer::{effective_location, LocationConfigEntry, LocationMode, RendererConfig};
 
+/// Spec 011 US8 FR-046: "spawn exactly once, the first time the given location mode
+/// becomes active" — before this refactor, this exact guard shape (already spawned or
+/// wrong mode? bail; else spawn and flip the flag) was copy-pasted at each background
+/// task's spawn site below. `spawn` returns `true` on success; `spawned` is only
+/// flipped when it does, so a scheduling failure (e.g. the portal task's event loop
+/// already being gone) can still be retried on the next mode-change watch event
+/// instead of being permanently marked done.
+fn spawn_once_for_mode(spawned: &mut bool, mode: LocationMode, target_mode: LocationMode, spawn: impl FnOnce() -> bool) {
+    if *spawned || mode != target_mode {
+        return;
+    }
+    if spawn() {
+        *spawned = true;
+    }
+}
+
 fn main() {
     tracing_subscriber::fmt::init();
 
@@ -117,14 +133,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let portal_scheduler = portal_scheduler.clone();
         let portal_events_tx = portal_events_tx.clone();
         move |mode: LocationMode, spawned: &mut bool| {
-            if *spawned || mode != LocationMode::Automatic {
-                return;
-            }
-            if portal_scheduler.schedule(portal_location::run(portal_events_tx.clone())).is_err() {
-                tracing::error!("failed to schedule the automatic-location resolution task — event loop already gone");
-                return;
-            }
-            *spawned = true;
+            spawn_once_for_mode(spawned, mode, LocationMode::Automatic, || {
+                if portal_scheduler.schedule(portal_location::run(portal_events_tx.clone())).is_err() {
+                    tracing::error!("failed to schedule the automatic-location resolution task — event loop already gone");
+                    return false;
+                }
+                true
+            });
         }
     };
     spawn_portal_task_if_needed(initial_location_entry.mode, &mut portal_task_spawned);
@@ -202,11 +217,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let spawn_ip_geo_task_if_needed = {
         let ip_geo_events_tx = ip_geo_events_tx.clone();
         move |mode: LocationMode, spawned: &mut bool| {
-            if *spawned || mode != LocationMode::IpGeolocation {
-                return;
-            }
-            ip_geolocation::spawn(std::path::PathBuf::from(ip_geolocation::MMDB_SYSTEM_PATH), ip_geo_events_tx.clone());
-            *spawned = true;
+            spawn_once_for_mode(spawned, mode, LocationMode::IpGeolocation, || {
+                ip_geolocation::spawn(std::path::PathBuf::from(ip_geolocation::MMDB_SYSTEM_PATH), ip_geo_events_tx.clone());
+                true
+            });
         }
     };
     spawn_ip_geo_task_if_needed(initial_location_entry.mode, &mut ip_geo_task_spawned);
@@ -275,4 +289,65 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     })?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Spec 011 US8 FR-046: the shared helper only spawns on the first call for the
+    /// target mode — a second call with the same mode is a no-op.
+    #[test]
+    fn spawn_once_for_mode_spawns_exactly_once() {
+        let mut spawned = false;
+        let mut spawn_count = 0;
+
+        spawn_once_for_mode(&mut spawned, LocationMode::Automatic, LocationMode::Automatic, || {
+            spawn_count += 1;
+            true
+        });
+        assert!(spawned);
+        assert_eq!(spawn_count, 1);
+
+        spawn_once_for_mode(&mut spawned, LocationMode::Automatic, LocationMode::Automatic, || {
+            spawn_count += 1;
+            true
+        });
+        assert_eq!(spawn_count, 1, "already spawned — must not spawn a second time");
+    }
+
+    /// A mode that doesn't match `target_mode` never spawns.
+    #[test]
+    fn spawn_once_for_mode_ignores_a_non_matching_mode() {
+        let mut spawned = false;
+        let mut spawn_count = 0;
+
+        spawn_once_for_mode(&mut spawned, LocationMode::Manual, LocationMode::Automatic, || {
+            spawn_count += 1;
+            true
+        });
+        assert!(!spawned);
+        assert_eq!(spawn_count, 0);
+    }
+
+    /// A failed spawn (e.g. the event loop is already gone) must not permanently mark
+    /// the task as spawned — the next mode-change watch event should retry it.
+    #[test]
+    fn spawn_once_for_mode_does_not_mark_spawned_on_failure() {
+        let mut spawned = false;
+        let mut attempts = 0;
+
+        spawn_once_for_mode(&mut spawned, LocationMode::IpGeolocation, LocationMode::IpGeolocation, || {
+            attempts += 1;
+            false
+        });
+        assert!(!spawned, "a failed spawn must leave the flag unset so a later call can retry");
+
+        spawn_once_for_mode(&mut spawned, LocationMode::IpGeolocation, LocationMode::IpGeolocation, || {
+            attempts += 1;
+            true
+        });
+        assert!(spawned);
+        assert_eq!(attempts, 2, "the retry after a failure must actually call spawn again");
+    }
 }

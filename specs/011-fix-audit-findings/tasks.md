@@ -442,7 +442,7 @@ test beyond "existing tests still pass."
 - [X] T048 [P] [US8] Extract the backoff constants duplicated in
       `crates/renderer/src/portal_location.rs` and `crates/renderer/src/ip_geolocation.rs` into
       one shared module-level source (FR-045)
-- [ ] T049 [P] [US8] Factor the "spawn exactly once" pattern copy-pasted three times in
+- [X] T049 [P] [US8] Factor the "spawn exactly once" pattern copy-pasted three times in
       `crates/renderer/src/bin/cosmic-wallpaperd.rs` into one shared helper (FR-046)
 - [ ] T050 [P] [US8] Rename or doc-comment `crates/schedule-engine/src/query.rs`'s `active_before`
       field to clarify it holds the outgoing image during a transition, not the currently-active
