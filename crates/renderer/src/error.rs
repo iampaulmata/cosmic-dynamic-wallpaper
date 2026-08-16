@@ -43,6 +43,18 @@ pub enum RendererError {
         /// Why it failed.
         reason: String,
     },
+    /// An image's declared (header-only, undecoded) dimensions exceed the GPU's
+    /// `max_texture_dimension_2d` or the crate's own decoded-byte ceiling (spec 011
+    /// US3 FR-012) — rejected before the expensive full decode this crate's own module
+    /// doc distinguishes from spec 2's cheap header-only readability check.
+    TextureTooLarge {
+        /// The oversized image file.
+        path: PathBuf,
+        /// Its declared width in pixels.
+        width: u32,
+        /// Its declared height in pixels.
+        height: u32,
+    },
     /// A `cosmic-config` read/write failed (`RendererConfig` or `LocationConfigEntry`).
     ConfigError {
         /// The underlying storage error's message.
@@ -89,6 +101,9 @@ impl fmt::Display for RendererError {
             }
             RendererError::TextureUploadFailed { path, reason } => {
                 write!(f, "failed to upload texture for {}: {reason}", path.display())
+            }
+            RendererError::TextureTooLarge { path, width, height } => {
+                write!(f, "image {} is {width}x{height}, too large to upload (dimension or decoded-size limit)", path.display())
             }
             RendererError::ConfigError { reason } => write!(f, "configuration storage error: {reason}"),
             RendererError::OutputProtocolError { reason } => {

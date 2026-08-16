@@ -39,7 +39,7 @@ mod path_safety;
 mod registry;
 
 pub use error::{ManifestError, RegistryError};
-pub use load::{load_pack, LoadedPack, MANIFEST_FILE_NAME};
+pub use load::{load_pack, LoadedPack, MANIFEST_FILE_NAME, MAX_MANIFEST_BYTES};
 pub use manifest::{
     format_anchor, render, Color, ManifestDraft, ManifestDraftImage, ManifestImage, PackManifest, ScalingMode,
     MAX_SUPPORTED_SCHEMA_VERSION,
