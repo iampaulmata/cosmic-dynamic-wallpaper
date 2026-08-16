@@ -144,10 +144,14 @@ fn run(cli: Cli) -> Result<String, CliError> {
                     // Clap can't easily express "exactly one of" across an Option and
                     // a bool flag declaratively without a group; validated here
                     // instead — still a specific, actionable message + non-zero exit
-                    // (FR-012), just not routed through CliError's daemon/config
-                    // variants since it's a pure usage error.
-                    eprintln!("error: specify exactly one of --output <id> or --same-everywhere");
-                    std::process::exit(1);
+                    // (FR-012). Spec 011 US6 FR-029 (research.md R24): routed through
+                    // `CliError::UsageError` now, instead of a direct `eprintln!` +
+                    // `process::exit(1)` that bypassed this crate's own error type
+                    // entirely — previously untestable in-process (a real
+                    // `process::exit` would abort the test binary itself), and
+                    // produced exit code 1 for the same class of usage error `clap`
+                    // itself reports as exit code 2.
+                    return Err(CliError::UsageError { message: "specify exactly one of --output <id> or --same-everywhere".to_string() });
                 }
             };
             let registry = Registry::open()?;
@@ -285,6 +289,27 @@ mod tests {
             run(cli(false, Command::Assign { output: Some("DP-3;rm -rf /".to_string()), same_everywhere: false, pack_source: dummy_pack })),
             Err(CliError::InvalidOutputId { .. })
         ));
+    }
+
+    /// Spec 011 US6 FR-029 (research.md R24) — specifying neither or both of
+    /// `--output`/`--same-everywhere` now returns `CliError::UsageError` (exit code
+    /// 2, matching `clap`'s own usage-error class) instead of bypassing this crate's
+    /// error type with a direct `process::exit(1)` — previously untestable in-process
+    /// at all, since a real `process::exit` would have aborted this very test binary.
+    #[test]
+    fn output_flag_conflict_returns_usage_error() {
+        let dummy_pack = PathBuf::from("/nonexistent-for-this-test.png");
+        // Neither flag given.
+        let result = run(cli(false, Command::Assign { output: None, same_everywhere: false, pack_source: dummy_pack.clone() }));
+        assert!(matches!(result, Err(CliError::UsageError { .. })), "{result:?}");
+        assert_eq!(result.unwrap_err().exit_code(), 2);
+
+        // Both flags given.
+        let result = run(cli(
+            false,
+            Command::Assign { output: Some("DP-3".to_string()), same_everywhere: true, pack_source: dummy_pack },
+        ));
+        assert!(matches!(result, Err(CliError::UsageError { .. })), "{result:?}");
     }
 
     /// `query`/`reevaluate` dispatch straight to the D-Bus client, which needs no

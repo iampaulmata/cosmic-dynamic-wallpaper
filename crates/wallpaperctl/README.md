@@ -31,7 +31,10 @@ The daemon-required column has no persisted record to fall back on — "which ou
 exist" and "what's currently active" are live daemon state, not config. Those three
 commands connect to `wallpaperd` over D-Bus (`com.system76.CosmicDynamicWallpaper1`,
 contracts/wallpaperd-dbus-interface.md) and fail immediately with a clear
-"daemon unreachable" error (exit code 2) if it isn't running — never a hang.
+"daemon unreachable" error (exit code 4 — see
+`specs/011-fix-audit-findings/contracts/wallpaperctl-cli-hardening.md` for why this
+moved off exit code 2, which collides with `clap`'s own usage-error exit code) if it
+isn't running — never a hang.
 
 **`assign` is deliberately config-only even for a not-yet-connected output name** — e.g.
 pre-configuring a docking-station monitor before plugging it in. It only checks the
