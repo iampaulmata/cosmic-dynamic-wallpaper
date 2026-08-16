@@ -7,6 +7,8 @@ here (see `specs/005-session-integration-packaging/plan.md`).
 packaging/
 ├── systemd/
 │   └── wallpaperd.service   # systemd user unit (contracts/systemd-unit.md)
+├── dbus-1/
+│   └── com.system76.CosmicDynamicWallpaper1.conf  # session-bus policy (spec 011 US4 FR-015)
 └── debian/
     ├── postinst              # enables the unit on install/upgrade
     ├── prerm                 # disables the unit on real removal
