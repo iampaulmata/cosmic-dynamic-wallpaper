@@ -380,7 +380,7 @@ pole-latitude query returns near-instantly (quickstart.md automated table rows 1
 - [X] T037 [US7] In `crates/renderer/src/surface.rs`'s draw path, on `SurfaceError::Lost`/
       `Outdated`, call `reconfigure_output` again using the output's last-known `size` instead of
       only logging and returning (FR-034, research.md R29, depends on T006)
-- [ ] T038 [P] [US7] Add a `// SAFETY:` comment above the `unsafe` raw-window-handle block in
+- [X] T038 [P] [US7] Add a `// SAFETY:` comment above the `unsafe` raw-window-handle block in
       `crates/renderer/src/surface.rs` documenting that the borrowed Wayland `wl_surface`/
       `wl_display` handles are owned by structures that outlive every `wgpu::Surface` built from
       them (FR-035, research.md R30)
