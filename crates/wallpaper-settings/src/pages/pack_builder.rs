@@ -482,9 +482,41 @@ pub fn standard_pack_location() -> Option<PathBuf> {
     dirs::data_dir().map(|d| d.join("cosmic-dynamic-wallpaper").join("packs"))
 }
 
+#[derive(Debug)]
 enum MoveError {
     Collision,
+    InvalidName(String),
     Io(String),
+}
+
+/// Spec 011 US2 FR-006/FR-007 (research.md R5): the collision-rename text field is
+/// free-form user input that gets joined directly onto `destination_root` in
+/// [`move_pack`] — reject anything that could escape that root or collapse the join
+/// onto the root itself, *before* it's ever joined. Rejects:
+/// - an empty string (`destination_root.join("")` resolves to `destination_root`
+///   itself, silently merging this pack's contents into the shared packs directory —
+///   FR-007);
+/// - any path component other than `Normal` (`..`, `.`, root/prefix components) via
+///   `Path::new(name).components()` — catches `../../../.config/autostart` and every
+///   other traversal shape, not just the literal `..` substring;
+/// - an absolute path (`Path::is_absolute`) — belt-and-suspenders with the component
+///   check above, since an absolute path's first component is a `RootDir`/`Prefix`
+///   component that the check above already rejects, but stated explicitly since this
+///   is the shape the audit's own reproduction used (`/home/user/.ssh`).
+///
+/// Deliberately **not** implemented by reusing `pack_loader::path_safety::
+/// resolve_and_check` (research.md R5's Alternatives) — that function's first check is
+/// `candidate.exists()`, which is backwards for validating a *destination* name that
+/// must specifically not yet exist.
+fn validate_destination_name(name: &str) -> Result<(), String> {
+    if name.is_empty() {
+        return Err("the pack name can't be empty.".to_string());
+    }
+    let only_normal_components = Path::new(name).components().all(|c| matches!(c, std::path::Component::Normal(_)));
+    if !only_normal_components || Path::new(name).is_absolute() {
+        return Err("the pack name can't contain path separators, \"..\", or be an absolute path.".to_string());
+    }
+    Ok(())
 }
 
 /// The copy-then-verify-then-delete move routine (research.md R8): recursively copies
@@ -493,11 +525,23 @@ enum MoveError {
 /// Any failure removes a partial destination copy and leaves `generated_path`
 /// completely untouched.
 fn move_pack(generated_path: &Path, destination_root: &Path, name: &str) -> Result<PathBuf, MoveError> {
+    validate_destination_name(name).map_err(MoveError::InvalidName)?;
     let destination = destination_root.join(name);
-    if destination.exists() {
-        return Err(MoveError::Collision);
-    }
+
     std::fs::create_dir_all(destination_root).map_err(|e| MoveError::Io(e.to_string()))?;
+    // Spec 011 US2 FR-009 (research.md R6): `std::fs::create_dir` (not
+    // `create_dir_all`) on the final destination-name segment is an atomic
+    // exists-or-create check — it fails with `AlreadyExists` if anything (including a
+    // concurrent writer) creates `destination` between this call and the moment it
+    // runs, closing most of the window a separate `destination.exists()` check +
+    // later write would leave open. `move_pack` still isn't fully immune to every
+    // TOCTOU shape (no cross-platform `O_EXCL`-for-a-whole-directory-copy primitive
+    // exists), but this is the tightest check-and-create this API offers.
+    match std::fs::create_dir(&destination) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return Err(MoveError::Collision),
+        Err(e) => return Err(MoveError::Io(e.to_string())),
+    }
 
     if let Err(e) = copy_dir_recursive(generated_path, &destination) {
         let _ = std::fs::remove_dir_all(&destination);
@@ -544,6 +588,11 @@ fn register_and_close(state: &mut State, registry: &mut Registry, path: &Path) {
 }
 
 fn finish_move(state: &mut State, registry: &mut Registry, generated_path: &Path, root: &Path, name: &str) -> bool {
+    // Cleared unconditionally before matching so a stale error from a *previous*
+    // attempt (e.g. an InvalidName rejection) can't bleed into this attempt's dialog
+    // if this attempt instead hits a plain Collision, which doesn't set `move_error`
+    // itself.
+    state.move_error = None;
     match move_pack(generated_path, root, name) {
         Ok(destination) => {
             register_and_close(state, registry, &destination);
@@ -553,6 +602,18 @@ fn finish_move(state: &mut State, registry: &mut Registry, generated_path: &Path
             state.pending_placement = None;
             state.pending_collision =
                 Some(PendingCollision { generated_path: generated_path.to_path_buf(), suggested_name: name.to_string() });
+            false
+        }
+        // Spec 011 US2 FR-006/FR-007 (research.md R5): re-open the rename prompt with
+        // the rejected name still visible (so the user can see and fix what they
+        // typed) rather than just showing an error with no way to retry input; no
+        // filesystem operation happened (`validate_destination_name` runs before
+        // `move_pack` touches disk at all).
+        Err(MoveError::InvalidName(reason)) => {
+            state.pending_placement = None;
+            state.pending_collision =
+                Some(PendingCollision { generated_path: generated_path.to_path_buf(), suggested_name: name.to_string() });
+            state.move_error = Some(reason);
             false
         }
         Err(MoveError::Io(reason)) => {
@@ -762,13 +823,22 @@ fn time_control<'a>(time: Option<NaiveTime>, index: usize) -> Element<'a, Messag
 /// confirmation (research.md R3's pattern) — `None` when neither is pending.
 pub fn placement_dialog(state: &State) -> Option<Element<'_, Message>> {
     if let Some(pending) = &state.pending_collision {
+        // Spec 011 US2 FR-006/FR-007 (research.md R5): an invalid-name rejection
+        // (path traversal, absolute path, or empty) re-opens this same dialog with
+        // `state.move_error` set to the specific reason — shown here in place of the
+        // generic "already exists" body, mirroring how `pending_placement`'s dialog
+        // just below already prefers `move_error` when present.
+        let (title, body) = match &state.move_error {
+            Some(reason) => ("Can't use that pack name", reason.clone()),
+            None => (
+                "A pack with that name already exists",
+                format!("\"{}\" already exists at the standard pack location. Choose a different name.", pending.suggested_name),
+            ),
+        };
         return Some(
             widget::dialog()
-                .title("A pack with that name already exists")
-                .body(format!(
-                    "\"{}\" already exists at the standard pack location. Choose a different name.",
-                    pending.suggested_name
-                ))
+                .title(title)
+                .body(body)
                 .control(widget::text_input::text_input("pack name", &pending.suggested_name).on_input(Message::CollisionNameChanged))
                 .primary_action(widget::button::suggested("Move").on_press(Message::CollisionConfirmed))
                 .secondary_action(widget::button::standard("Cancel").on_press(Message::CollisionCancelled))
@@ -1135,6 +1205,76 @@ mod tests {
         assert!(result.is_ok());
         assert!(!source.path().exists(), "source folder must be removed after a successful move");
         assert!(destination_root.path().join("moved-pack").join("manifest.toml").exists());
+    }
+
+    // --- Spec 011 US2 FR-006/FR-007 (research.md R5): the collision-rename field
+    // can never be used for path traversal or an empty-name collapse. ---
+
+    #[test]
+    fn validate_destination_name_rejects_traversal() {
+        assert!(validate_destination_name("../../../.config/autostart").is_err());
+        assert!(validate_destination_name("/home/user/.ssh").is_err());
+        assert!(validate_destination_name("").is_err());
+        assert!(validate_destination_name("..").is_err());
+        assert!(validate_destination_name("a/../../b").is_err());
+        // A plain name is still fine.
+        assert!(validate_destination_name("my-pack").is_ok());
+        assert!(validate_destination_name("My Pack 2026").is_ok());
+    }
+
+    /// Spec 011 US2 FR-006 (research.md R5) — the audit's own reproduction: typing
+    /// `../../../.config/autostart` into the rename box and confirming Move must not
+    /// copy anything outside `destination_root`, and must leave the source untouched.
+    #[test]
+    fn move_pack_rejects_path_traversal_in_the_destination_name() {
+        let source = tempfile::tempdir().unwrap();
+        write_test_image(&source.path().join("a.png"));
+        std::fs::write(
+            source.path().join("manifest.toml"),
+            "schema_version = 1\nname = \"x\"\ndefault_scaling = \"Fill\"\nfallback_color = \"#000000\"\n\n[[images]]\nfile = \"a.png\"\nanchor = \"sunrise\"\n",
+        )
+        .unwrap();
+        let destination_root = tempfile::tempdir().unwrap();
+        let escape_target = destination_root.path().parent().unwrap().join("escaped-pack-test");
+        let _ = std::fs::remove_dir_all(&escape_target);
+
+        let traversal_name = format!("../{}", escape_target.file_name().unwrap().to_str().unwrap());
+        let result = move_pack(source.path(), destination_root.path(), &traversal_name);
+
+        assert!(matches!(result, Err(MoveError::InvalidName(_))), "expected InvalidName, got {result:?}");
+        assert!(!escape_target.exists(), "nothing must be written outside destination_root");
+        assert!(source.path().join("manifest.toml").exists(), "source must survive a rejected move");
+    }
+
+    #[test]
+    fn move_pack_rejects_an_absolute_destination_name() {
+        let source = tempfile::tempdir().unwrap();
+        write_test_image(&source.path().join("a.png"));
+        std::fs::write(source.path().join("manifest.toml"), "schema_version = 1\nname = \"x\"\ndefault_scaling = \"Fill\"\nfallback_color = \"#000000\"\n\n[[images]]\nfile = \"a.png\"\nanchor = \"sunrise\"\n").unwrap();
+        let destination_root = tempfile::tempdir().unwrap();
+
+        let result = move_pack(source.path(), destination_root.path(), "/tmp/should-not-be-created-by-this-test");
+        assert!(matches!(result, Err(MoveError::InvalidName(_))));
+        assert!(!std::path::Path::new("/tmp/should-not-be-created-by-this-test").exists());
+    }
+
+    /// Spec 011 US2 FR-007 (research.md R5) — `destination_root.join("")` previously
+    /// collapsed to `destination_root` itself, merging this pack's contents directly
+    /// into the shared packs directory on the very first collision-rename ever
+    /// performed with a blank field.
+    #[test]
+    fn move_pack_rejects_an_empty_destination_name() {
+        let source = tempfile::tempdir().unwrap();
+        write_test_image(&source.path().join("a.png"));
+        std::fs::write(source.path().join("manifest.toml"), "schema_version = 1\nname = \"x\"\ndefault_scaling = \"Fill\"\nfallback_color = \"#000000\"\n\n[[images]]\nfile = \"a.png\"\nanchor = \"sunrise\"\n").unwrap();
+        let destination_root = tempfile::tempdir().unwrap();
+        std::fs::write(destination_root.path().join("sentinel.txt"), b"pre-existing").unwrap();
+
+        let result = move_pack(source.path(), destination_root.path(), "");
+
+        assert!(matches!(result, Err(MoveError::InvalidName(_))));
+        assert!(destination_root.path().join("sentinel.txt").exists(), "destination_root's existing contents must be untouched");
+        assert!(source.path().join("manifest.toml").exists(), "source must survive a rejected move");
     }
 
     // --- T028: destination-name collision opens the prompt instead of overwriting ---
