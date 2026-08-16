@@ -432,10 +432,10 @@ test beyond "existing tests still pass."
 - [X] T044 [P] [US8] Route `tools/generate-starter-pack/src/main.rs`'s manifest generation through
       `pack_loader::manifest::render` instead of hand-built string interpolation (FR-041,
       research.md R35)
-- [ ] T045 [P] [US8] In `crates/renderer/src/surface.rs`'s `reconfigure_output`, guard
+- [X] T045 [P] [US8] In `crates/renderer/src/surface.rs`'s `reconfigure_output`, guard
       `caps.formats[0]`/`caps.alpha_modes[0]` with `.first().ok_or(...)`, degrading that one
       output on `None` instead of panicking (FR-042, research.md R36)
-- [ ] T046 [P] [US8] Add a module-level index comment in `crates/renderer/src/surface.rs` listing
+- [X] T046 [P] [US8] Add a module-level index comment in `crates/renderer/src/surface.rs` listing
       every trait impl that can originate a resize/hotplug event (FR-043)
 - [ ] T047 [P] [US8] In `crates/wallpaper-ipc/src/dbus_client.rs`, preserve the real `InvalidArgs`
       error message instead of collapsing every case to "output not found" (FR-044)

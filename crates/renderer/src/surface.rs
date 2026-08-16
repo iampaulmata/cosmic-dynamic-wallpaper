@@ -10,6 +10,31 @@
 //! deliberate divergence is the render path itself: `cosmic-bg` draws into an SHM
 //! buffer on the CPU (and has no crossfade at all); this daemon renders via `wgpu`
 //! (constitution Principle III: GPU-accelerated crossfade).
+//!
+//! ## Resize/hotplug event origin index (spec 011 US8 FR-043)
+//!
+//! Every trait impl below that can originate an output resize or a hotplug
+//! (add/remove) transition — kept as one list since these events arrive through
+//! several independent `smithay-client-toolkit` callbacks, not a single entry point:
+//!
+//! - [`OutputHandler::new_output`] — hotplug: a new `wl_output` appeared; adds a
+//!   tracked [`WallpaperOutput`] but does not itself size/configure a surface.
+//! - [`OutputHandler::update_output`] — resize: `wl_output`-level metadata changed
+//!   (e.g. a pure integer-scale change with no accompanying layer-surface configure);
+//!   calls [`WallpaperDaemon::reconfigure_output`] when the logical size actually
+//!   differs from what's cached.
+//! - [`OutputHandler::output_destroyed`] — hotplug: the output disappeared; drops its
+//!   tracked state.
+//! - [`LayerShellHandler::configure`] — resize: the common case, driven by the
+//!   compositor proposing a new layer-surface size; calls
+//!   [`WallpaperDaemon::reconfigure_output`] unconditionally (idempotent if the size is
+//!   unchanged).
+//! - [`LayerShellHandler::closed`] — hotplug: the compositor closed this output's
+//!   layer surface (typically follows an `output_destroyed`, but is its own event).
+//! - `Dispatch<wp_fractional_scale_v1::WpFractionalScaleV1, ()>::event` — not a resize
+//!   itself, but a fractional-scale preference change that a future resize/redraw uses;
+//!   listed here because it's easy to overlook as a fourth surface-geometry input
+//!   alongside the three above.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -975,14 +1000,26 @@ impl WallpaperDaemon {
         };
 
         let caps = wgpu_surface.get_capabilities(&gpu.adapter);
-        let format = caps.formats[0];
+        // Spec 011 US8 FR-042 (research.md R36): an adapter/surface combination that
+        // reports zero supported formats or alpha modes is unusual but not something
+        // `wgpu` itself rules out — indexing `[0]` on an empty `Vec` would panic
+        // (constitution Principle VIII forbids `unwrap`/`expect`/an implicit panic
+        // here). Degrade only this one output, not the whole daemon.
+        let Some(format) = caps.formats.first().copied() else {
+            tracing::error!(output = %self.outputs[index].id, "GPU surface reported no supported formats — skipping reconfigure for this output");
+            return;
+        };
+        let Some(alpha_mode) = caps.alpha_modes.first().copied() else {
+            tracing::error!(output = %self.outputs[index].id, "GPU surface reported no supported alpha modes — skipping reconfigure for this output");
+            return;
+        };
         let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
             width: new_size.0,
             height: new_size.1,
             present_mode: wgpu::PresentMode::Fifo,
-            alpha_mode: caps.alpha_modes[0],
+            alpha_mode,
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };
