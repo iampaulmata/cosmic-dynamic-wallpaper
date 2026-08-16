@@ -392,12 +392,12 @@ pole-latitude query returns near-instantly (quickstart.md automated table rows 1
       main thread's `ThreadId` at daemon startup and checking every subsequent `DaemonInterface`
       call runs on it, plus a doc-comment cross-reference to the existing "never contended" module
       comment (FR-037, research.md R32)
-- [ ] T041 [US7] In `crates/schedule-engine/src/location.rs` (or `query.rs`, whichever owns the
+- [X] T041 [US7] In `crates/schedule-engine/src/location.rs` (or `query.rs`, whichever owns the
       search entry point), add `const POLE_LATITUDE_THRESHOLD: f64 = 89.9999;` and an early
       `return None` when `location.latitude().abs() >= POLE_LATITUDE_THRESHOLD`, before the
       radius-doubling search runs; add regression test `pole_latitude_returns_none_fast` asserting
       a bounded cost (e.g. via a call-count or timing assertion) (FR-038, research.md R33)
-- [ ] T042 [P] [US7] Correct `MAX_SEARCH_RADIUS_DAYS`'s value/doc comment in
+- [X] T042 [P] [US7] Correct `MAX_SEARCH_RADIUS_DAYS`'s value/doc comment in
       `crates/schedule-engine/src/query.rs` to state the true worst-case search radius (up to 512
       days) under the existing check-then-double loop ordering (FR-039, research.md R33)
 - [X] T043 [US7] **Corrected during implementation** (research.md R34's corrected entry —
