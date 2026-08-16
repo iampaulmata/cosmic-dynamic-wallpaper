@@ -9,6 +9,8 @@ publish = false
 
 [dependencies]
 image = { version = "0.25", default-features = false, features = ["png"] }
+pack-loader = { path = "../../crates/pack-loader" }
+schedule-engine = { path = "../../crates/schedule-engine" }
 
 [lints.clippy]
 unwrap_used = "deny"

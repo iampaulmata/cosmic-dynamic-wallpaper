@@ -429,7 +429,7 @@ test beyond "existing tests still pass."
 
 ### Implementation for User Story 8
 
-- [ ] T044 [P] [US8] Route `tools/generate-starter-pack/src/main.rs`'s manifest generation through
+- [X] T044 [P] [US8] Route `tools/generate-starter-pack/src/main.rs`'s manifest generation through
       `pack_loader::manifest::render` instead of hand-built string interpolation (FR-041,
       research.md R35)
 - [ ] T045 [P] [US8] In `crates/renderer/src/surface.rs`'s `reconfigure_output`, guard

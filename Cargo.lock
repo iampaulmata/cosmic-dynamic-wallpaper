@@ -2034,6 +2034,8 @@ name = "generate-starter-pack"
 version = "0.2.0"
 dependencies = [
  "image",
+ "pack-loader",
+ "schedule-engine",
 ]
 
 [[package]]
