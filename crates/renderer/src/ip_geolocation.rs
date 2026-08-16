@@ -25,6 +25,7 @@ use stunclient::StunClient;
 
 use schedule_engine::Location;
 
+use crate::backoff::{next_backoff, INITIAL_BACKOFF};
 use crate::config::{LocationConfigEntry, ResolutionStatus};
 
 /// Public STUN server used for public-IP discovery (research.md R4) — the same
@@ -39,18 +40,6 @@ pub const STUN_TIMEOUT: Duration = Duration::from_secs(5);
 /// Public-IP cache TTL (research.md R4) — this external touchpoint happens at most a
 /// few times a day, not per solar-event resolution.
 pub const PUBLIC_IP_CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
-
-/// Exponential backoff bounds after a failed resolution attempt — same shape as
-/// `portal_location.rs`'s (spec 6 research.md R6): never a tight loop, self-recovers
-/// without the user needing to manually toggle the mode off and on.
-pub const INITIAL_BACKOFF: Duration = Duration::from_secs(30);
-/// The backoff ceiling — never waited longer than this between retries.
-pub const MAX_BACKOFF: Duration = Duration::from_secs(300);
-
-/// The next backoff delay after a failed attempt — doubles, capped at [`MAX_BACKOFF`].
-pub fn next_backoff(current: Duration) -> Duration {
-    current.saturating_mul(2).min(MAX_BACKOFF)
-}
 
 /// The well-known system path the bundled `.mmdb` database is installed to — a
 /// release-process download (README.md's "IP-geolocation database" section), never
@@ -398,14 +387,6 @@ mod tests {
         assert!(!cache.is_fresh(now + PUBLIC_IP_CACHE_TTL + Duration::from_secs(1)));
     }
 
-    /// Backoff doubles and caps, same contract as `portal_location.rs`'s identical
-    /// bound — never a tight loop.
-    #[test]
-    fn next_backoff_doubles_and_caps() {
-        let mut backoff = INITIAL_BACKOFF;
-        for _ in 0..10 {
-            backoff = next_backoff(backoff);
-        }
-        assert_eq!(backoff, MAX_BACKOFF);
-    }
+    // `next_backoff`'s doubling/capping coverage now lives in `backoff.rs` (spec 011
+    // US8 FR-045) — deduplicated from this module and `portal_location.rs`.
 }

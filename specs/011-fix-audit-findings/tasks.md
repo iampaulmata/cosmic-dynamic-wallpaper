@@ -439,7 +439,7 @@ test beyond "existing tests still pass."
       every trait impl that can originate a resize/hotplug event (FR-043)
 - [X] T047 [P] [US8] In `crates/wallpaper-ipc/src/dbus_client.rs`, preserve the real `InvalidArgs`
       error message instead of collapsing every case to "output not found" (FR-044)
-- [ ] T048 [P] [US8] Extract the backoff constants duplicated in
+- [X] T048 [P] [US8] Extract the backoff constants duplicated in
       `crates/renderer/src/portal_location.rs` and `crates/renderer/src/ip_geolocation.rs` into
       one shared module-level source (FR-045)
 - [ ] T049 [P] [US8] Factor the "spawn exactly once" pattern copy-pasted three times in
