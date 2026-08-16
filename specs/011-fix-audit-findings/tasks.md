@@ -456,7 +456,7 @@ test beyond "existing tests still pass."
       US4 (FR-050)
 - [X] T054 [P] [US8] Update `crates/wallpaper-settings/README.md` to mention the pack builder
       wizard and reflect the current test count (FR-051)
-- [ ] T055 [P] [US8] Add an in-flight guard on "Add pack folder…" in
+- [X] T055 [P] [US8] Add an in-flight guard on "Add pack folder…" in
       `crates/wallpaper-settings/src/app.rs`/`crates/wallpaper-settings/src/pages/packs.rs`
       preventing a rapid double-click from opening two concurrent file-chooser dialogs (FR-052)
 

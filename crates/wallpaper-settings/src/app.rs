@@ -181,7 +181,11 @@ impl cosmic::Application for App {
                 self.packs = pages::packs::State::load(&mut self.pack_registry);
             }
             Message::Packs(pages::packs::Message::AddFolderRequested) => {
-                pages::packs::request_add(&mut self.packs);
+                if !pages::packs::request_add(&mut self.packs) {
+                    // FR-052: a dialog is already in flight — a rapid double-click
+                    // must not open a second one.
+                    return Task::none();
+                }
                 return cosmic::task::future(async move {
                     use cosmic::dialog::file_chooser;
                     match file_chooser::open::Dialog::new().title("Choose a pack folder").open_folder().await {
@@ -197,7 +201,11 @@ impl cosmic::Application for App {
                 });
             }
             Message::Packs(pages::packs::Message::AddFileRequested) => {
-                pages::packs::request_add(&mut self.packs);
+                if !pages::packs::request_add(&mut self.packs) {
+                    // FR-052: a dialog is already in flight — a rapid double-click
+                    // must not open a second one.
+                    return Task::none();
+                }
                 return cosmic::task::future(async move {
                     use cosmic::dialog::file_chooser;
                     match file_chooser::open::Dialog::new().title("Choose an image file").open_file().await {
@@ -214,7 +222,9 @@ impl cosmic::Application for App {
             }
             Message::Packs(pages::packs::Message::AddCancelled) => {
                 // A cancelled file-chooser dialog is a no-op, not an error
-                // (research.md R1) — nothing to do.
+                // (research.md R1) — but the in-flight guard (FR-052) still needs
+                // clearing so a subsequent click can open a fresh dialog.
+                pages::packs::cancel_add(&mut self.packs);
             }
             Message::Packs(pages::packs::Message::AddResult(result)) => {
                 // Spec 010 (Custom Pack Builder) research.md R1: a picked directory
