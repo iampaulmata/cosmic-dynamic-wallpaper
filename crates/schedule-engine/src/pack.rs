@@ -20,6 +20,17 @@ pub const MAX_SOLAR_OFFSET_HOURS: i64 = 24;
 /// Spec 2 (pack loading) owns the real identifier shape (e.g. a path-derived id); this
 /// crate only needs something it can compare and hand back in query results
 /// (data-model.md `PackImage.id`).
+///
+/// **Length bound (spec 011 US8 FR-048)**: this type itself places no limit on the
+/// wrapped string — [`ImageId::new`] is infallible by design (a pure-logic crate with
+/// no I/O, per this module's own scope, so it has nothing meaningful to reject an
+/// oversized id *with*). In practice every real construction site is already bounded
+/// by something upstream: `pack_loader::load` builds every `ImageId` from a manifest
+/// `file` field, and the whole manifest text is capped at `pack_loader::MAX_MANIFEST_BYTES`
+/// (512 KiB, spec 011 US3 FR-011) before it's even parsed, so no single field —
+/// `ImageId` included — can exceed that either. A future caller that constructs an
+/// `ImageId` directly from fully untrusted input *without* going through that manifest
+/// cap first is responsible for bounding it itself before calling [`ImageId::new`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ImageId(String);
 
