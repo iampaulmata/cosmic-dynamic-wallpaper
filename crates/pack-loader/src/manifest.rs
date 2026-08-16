@@ -65,6 +65,18 @@ impl Color {
         let bytes = |s: &str| u8::from_str_radix(s, 16).ok();
         let invalid = || ManifestError::InvalidColor { value: value.to_string() };
 
+        // Spec 011 US1 FR-001 (research.md R1): `hex.len()` below counts *bytes*, and
+        // the slices further down (`hex[0..2]` etc.) are byte-offset slices — safe only
+        // when every byte offset is also a char boundary, which ASCII guarantees and
+        // non-ASCII input does not (e.g. "#€AAA" is 6 bytes but "€" alone spans bytes
+        // 0..3, so `hex[0..2]` would panic with "byte index 2 is not a char boundary").
+        // Reject non-ASCII input up front rather than switching every slice below to
+        // char-boundary-aware indexing — a manifest color is hex digits by definition,
+        // so non-ASCII is always invalid either way.
+        if !hex.is_ascii() {
+            return Err(invalid());
+        }
+
         match hex.len() {
             6 => {
                 let r = bytes(&hex[0..2]).ok_or_else(invalid)?;
@@ -439,6 +451,19 @@ mod tests {
         assert_eq!(Color::parse("#FF000080").unwrap(), Color { r: 255, g: 0, b: 0, a: 128 });
         assert!(Color::parse("not-a-color").is_err());
         assert!(Color::parse("#ZZZZZZ").is_err());
+    }
+
+    /// Spec 011 US1 FR-001 (research.md R1) — a hex-color string containing a
+    /// non-ASCII byte must return `Err`, never panic on a non-char-boundary byte
+    /// slice. "€" is 3 bytes (0xE2 0x82 0xAC), so "#€AAA" is 6 bytes total and used to
+    /// reach the 6-hex-digit branch before this fix, panicking on `hex[0..2]`.
+    #[test]
+    fn color_parse_rejects_non_ascii_hex() {
+        assert!(Color::parse("#€AAA").is_err());
+        assert!(Color::parse("€AAAAA").is_err());
+        // A non-ASCII value whose byte length doesn't even match 6/8 either way —
+        // guards the same path via the `_ =>` arm, not just the 6-byte arm above.
+        assert!(Color::parse("#€").is_err());
     }
 
     #[test]

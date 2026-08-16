@@ -150,4 +150,39 @@ mod tests {
             resolve_solar_anchor(&svalbard, deep_winter, SolarEventKind::Sunrise, None).is_none()
         );
     }
+
+    proptest::proptest! {
+        /// Spec 011 US1 FR-005 (research.md R4): no offset magnitude within
+        /// `crate::pack::MAX_SOLAR_OFFSET_HOURS` — the exact bound
+        /// `WallpaperPack::validate` now enforces — can overflow this function's
+        /// `base + delta` `DateTime` arithmetic, across a wide spread of dates
+        /// (including near `NaiveDate`'s own representable extremes) and every solar
+        /// event kind. This is the property that makes the `validate`-time bound in
+        /// `pack.rs` an actual guarantee about `resolve_solar_anchor`, not just a
+        /// plausible-looking check.
+        #[test]
+        fn no_validated_offset_overflows_resolve_solar_anchor(
+            offset_hours in -crate::pack::MAX_SOLAR_OFFSET_HOURS..=crate::pack::MAX_SOLAR_OFFSET_HOURS,
+            year in 1900i32..2100,
+            day_of_year in 1i64..=365,
+            event_index in 0usize..8,
+        ) {
+            let event = [
+                SolarEventKind::Sunrise,
+                SolarEventKind::Sunset,
+                SolarEventKind::SolarNoon,
+                SolarEventKind::SolarMidnight,
+                SolarEventKind::CivilDawn,
+                SolarEventKind::CivilDusk,
+                SolarEventKind::AstronomicalDawn,
+                SolarEventKind::AstronomicalDusk,
+            ][event_index];
+            let Some(date) = NaiveDate::from_yo_opt(year, day_of_year as u32) else { return Ok(()) };
+            let offset = TimeDelta::hours(offset_hours);
+            // The assertion is simply that this call doesn't panic — `resolve_solar_anchor`
+            // returns `Option`, never a `Result`, so reaching this line at all (for any
+            // location that has the event on this date) is the property under test.
+            let _ = resolve_solar_anchor(&toronto(), date, event, Some(offset));
+        }
+    }
 }

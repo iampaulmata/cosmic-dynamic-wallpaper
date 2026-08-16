@@ -16,6 +16,12 @@ image = { version = "0.25", default-features = false, features = [
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 humantime = "2.4"
 cosmic-config = { git = "https://github.com/pop-os/libcosmic", default-features = false, features = ["macro"] }
+# Cross-process exclusive lock around Registry::persist() (spec 011 US6 FR-022,
+# research.md R17) — a small, pure-safe-Rust wrapper over the platform advisory-lock
+# primitive (flock on Unix), chosen specifically so this crate doesn't have to open its
+# own unsafe FFI boundary for this (constitution: unsafe only in vetted, documented
+# shims).
+fd-lock = "4"
 
 [dev-dependencies]
 tempfile = "3.27"
