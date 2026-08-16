@@ -228,13 +228,45 @@ impl Registry {
             removed_origin
         })?;
 
-        if removed_origin == Some(PackOrigin::Package) && !self.removed_state.removed.contains(source) {
-            self.removed_state.removed.push(source.clone());
-            self.removed_state
-                .write_entry(&self.removed_config)
-                .map_err(|e| RegistryError::Storage { message: e.to_string() })?;
+        if removed_origin == Some(PackOrigin::Package) {
+            // Spec 011 adversarial re-review finding 3: this write used to go straight
+            // through `self.removed_state` (an in-memory snapshot, potentially stale
+            // relative to another process's concurrent write) with no lock at all —
+            // the exact lost-update race `with_locked_state` above exists to close for
+            // the main `entries` list, just left open for this second store. Routed
+            // through the same fd-lock/fresh-read pattern now, via
+            // `with_locked_removed_state`.
+            self.with_locked_removed_state(|removed| {
+                if !removed.contains(source) {
+                    removed.push(source.clone());
+                }
+            })?;
         }
         Ok(())
+    }
+
+    /// [`Self::with_locked_state`], applied to the separate removed-starter-packs
+    /// store instead of the main entries list — see that method's doc comment for the
+    /// full rationale (spec 011 US6 FR-022, research.md R17; extended to this second
+    /// store by adversarial re-review finding 3).
+    fn with_locked_removed_state<T>(&mut self, mutate: impl FnOnce(&mut Vec<PackSource>) -> T) -> Result<T, RegistryError> {
+        if let Some(parent) = self.lock_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| RegistryError::LockFailed { message: e.to_string() })?;
+        }
+        let lock_file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&self.lock_path)
+            .map_err(|e| RegistryError::LockFailed { message: e.to_string() })?;
+        let mut file_lock = fd_lock::RwLock::new(lock_file);
+        let _guard = file_lock.write().map_err(|e| RegistryError::LockFailed { message: e.to_string() })?;
+
+        let mut fresh = RemovedStarterPacksConfig::get_entry(&self.removed_config).unwrap_or_else(|(_errors, default)| default);
+        let result = mutate(&mut fresh.removed);
+        fresh.write_entry(&self.removed_config).map_err(|e| RegistryError::Storage { message: e.to_string() })?;
+        self.removed_state = fresh;
+        Ok(result)
     }
 
     /// Acquire the cross-process lock, then run `mutate` against a *freshly re-read*
@@ -251,12 +283,15 @@ impl Registry {
     /// committed. `self.state` is updated to match what was written, so this
     /// instance's own subsequent reads (e.g. `known_packs`) stay consistent too.
     ///
-    /// Scoped to `register_with_origin`/`remove` — the two mutations the audit's
-    /// finding is about. [`Registry::reload_all`]'s own `persist()` call remains
-    /// unlocked/best-effort (its own doc comment already frames it that way): the
-    /// `status` field it refreshes is cheaply re-derivable on the very next reload,
-    /// so a lost update there is much lower stakes than losing a `register`/`remove`
-    /// outright.
+    /// Guards the main `entries` list specifically — `register_with_origin`'s
+    /// mutation, and the `entries`-retaining half of `remove`'s. `remove`'s *other*
+    /// mutation, of the separate removed-starter-packs store, is guarded the same way
+    /// but through [`Self::with_locked_removed_state`] instead (adversarial re-review
+    /// finding 3 — that store used to be written unlocked). [`Registry::reload_all`]'s
+    /// own `persist()` call remains unlocked/best-effort (its own doc comment already
+    /// frames it that way): the `status` field it refreshes is cheaply re-derivable on
+    /// the very next reload, so a lost update there is much lower stakes than losing a
+    /// `register`/`remove` outright.
     fn with_locked_state<T>(&mut self, mutate: impl FnOnce(&mut Vec<PackRegistryEntry>) -> T) -> Result<T, RegistryError> {
         if let Some(parent) = self.lock_path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| RegistryError::LockFailed { message: e.to_string() })?;

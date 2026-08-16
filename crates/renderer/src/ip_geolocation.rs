@@ -160,10 +160,18 @@ fn haversine_km(a: Location, b: Location) -> f64 {
 /// `automatic_*`, plus [`MAX_PLAUSIBLE_LOCATION_JUMP_KM`]'s plausibility bound (FR-031,
 /// research.md R26): a new reading that implies an implausible jump from the most
 /// recent previously-trusted `ip_location` is logged and skipped — `entry` is left
-/// unchanged — rather than applied outright. The very first resolution (`ip_location`
-/// still `None`) has nothing to compare against, so it always applies.
+/// unchanged — rather than applied outright.
+///
+/// The very first IP-geolocation resolution (`ip_location` still `None`) falls back to
+/// checking against `entry.location` — the user's own manually-entered value, if any —
+/// instead of applying unconditionally (spec 011 adversarial re-review finding 5): a
+/// forged reply timed for exactly that first resolution previously bypassed this check
+/// entirely and became the new permanently-trusted baseline. Only when *neither*
+/// `ip_location` nor a manual `location` exists at all (nothing this process has ever
+/// trusted to compare against) does a reading still apply unchecked — there is no
+/// baseline to validate it against in that case.
 pub fn apply_reading(entry: &mut LocationConfigEntry, location: Location) {
-    if let Some(previous) = entry.ip_location {
+    if let Some(previous) = entry.ip_location.or(entry.location) {
         let jump_km = haversine_km(previous, location);
         if jump_km > MAX_PLAUSIBLE_LOCATION_JUMP_KM {
             tracing::warn!(
@@ -364,14 +372,30 @@ mod tests {
         assert_eq!(entry.ip_status, ResolutionStatus::Resolved);
     }
 
-    /// The very first resolution has no previous `ip_location` to compare against, so
-    /// it always applies, no matter how far from e.g. the manual location it is.
+    /// With no `ip_location` *and* no manual `location` at all — nothing this process
+    /// has ever trusted — the very first resolution has nothing to compare against, so
+    /// it always applies.
     #[test]
-    fn apply_reading_always_accepts_the_first_resolution() {
+    fn apply_reading_always_accepts_the_first_resolution_with_no_baseline_at_all() {
         let mut entry = LocationConfigEntry::default();
         let far = Location::new(-33.8688, 151.2093).unwrap(); // Sydney
         apply_reading(&mut entry, far);
         assert_eq!(entry.ip_location, Some(far));
+    }
+
+    /// Spec 011 adversarial re-review finding 5 — the audit's own threat model
+    /// extended: a forged reply timed for the very first IP-geolocation resolution
+    /// (before any `ip_location` baseline exists) must still be checked against a
+    /// manually-entered `location`, if the user already has one, instead of bypassing
+    /// the plausibility check entirely.
+    #[test]
+    fn apply_reading_checks_the_first_resolution_against_an_existing_manual_location() {
+        let mut entry = LocationConfigEntry { location: Some(Location::new(45.5019, -73.5674).unwrap()), ..Default::default() }; // Montreal
+        let forged = Location::new(-33.8688, 151.2093).unwrap(); // Sydney — ~16,700 km away
+
+        apply_reading(&mut entry, forged);
+
+        assert_eq!(entry.ip_location, None, "an implausible first reading must be rejected when a manual location exists to check it against");
     }
 
     /// T048: the public-IP cache respects its 24-hour TTL — fresh just under the

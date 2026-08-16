@@ -191,11 +191,14 @@ impl RendererConfig {
         }
     }
 
-    /// Persist this entry. Best-effort tightens the written directory's on-disk
-    /// permissions to `0700` on Unix afterward (spec 011 US7 FR-030, research.md
-    /// R25) — same fix as `LocationConfigEntry::save`, applied here since per-output
-    /// assignments can also reveal locally-sensitive filesystem paths.
+    /// Persist this entry. On Unix, best-effort pre-creates the target directory at
+    /// `0700` before writing and tightens it again afterward — same fix as
+    /// `LocationConfigEntry::save` (see its doc comment for the full rationale,
+    /// including spec 011 adversarial re-review finding 2), applied here since
+    /// per-output assignments can also reveal locally-sensitive filesystem paths.
     pub fn save(&self, config: &Config) -> Result<(), cosmic_config::Error> {
+        #[cfg(unix)]
+        crate::ensure_config_dir_permissions_before_write(RENDERER_CONFIG_ID, Self::VERSION);
         self.write_entry(config)?;
         #[cfg(unix)]
         crate::tighten_config_dir_permissions(RENDERER_CONFIG_ID, Self::VERSION);

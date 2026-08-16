@@ -163,10 +163,15 @@ impl DaemonInterface {
     /// this method hands location-derived data (active images, upcoming solar-
     /// transition timestamps) to any co-located same-uid process with no allow-list;
     /// see `contracts/wallpaperd-dbus-hardening.md` for why a full consent/allow-list
-    /// mechanism is out of scope for this fix.
+    /// mechanism is out of scope for this fix. Logged at `info!`, not `debug!` (spec
+    /// 011 adversarial re-review finding 4): `cosmic-wallpaperd`'s
+    /// `tracing_subscriber::fmt::init()` call installs no explicit filter, and that
+    /// default hides `debug!`-level events entirely — a `debug!` call here would never
+    /// actually reach `journalctl` unless a user already knew to set
+    /// `RUST_LOG=debug`, silently defeating this fix's own stated goal.
     fn query_all(&self) -> Vec<(String, bool, String, String)> {
         self.assert_main_thread();
-        tracing::debug!("QueryAll invoked");
+        tracing::info!("QueryAll invoked");
         let state = lock(&self.state);
         state
             .known_outputs

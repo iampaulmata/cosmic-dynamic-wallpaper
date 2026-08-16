@@ -97,6 +97,13 @@ enum LocationAction {
 }
 
 fn main() {
+    // Spec 011 (adversarial re-review) finding 2: this crate never installed a
+    // `tracing` subscriber, so `wallpaper_ipc`'s `tracing::warn!` calls (e.g.
+    // `LocationConfigEntry::save`/`RendererConfig::save`'s best-effort
+    // permission-tightening failure) were silently dropped for every real user
+    // running `wallpaperctl` — the primary process for `location set`/`assign`/etc.
+    // Written to stderr (never stdout, which `--json` output must stay pure on).
+    tracing_subscriber::fmt().with_writer(std::io::stderr).init();
     let cli = Cli::parse();
     match run(cli) {
         Ok(text) => {

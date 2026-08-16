@@ -524,8 +524,21 @@ impl WallpaperDaemon {
     }
 
     /// Draw output `index`'s current state (static image or in-progress crossfade) and
-    /// present it (T016, T017, T018).
+    /// present it (T016, T017, T018). Allows one round of `Lost`/`Outdated` recovery
+    /// (FR-034) — see [`Self::draw_inner`] for why that bound exists.
     fn draw(&mut self, index: usize) {
+        self.draw_inner(index, true);
+    }
+
+    /// [`Self::draw`]'s actual body. `allow_recovery` bounds the `draw` <->
+    /// `reconfigure_output` recovery cycle to at most one round-trip: a surface that
+    /// reports `Lost`/`Outdated` again right after being reconfigured (e.g. an output
+    /// removed mid-reconfigure, or a compositor/driver that never actually accepts the
+    /// new configuration) is logged and left for the *next* real event to retry,
+    /// instead of recursing — `reconfigure_output` always calls back in with
+    /// `allow_recovery: false`, so this can never recurse more than once regardless of
+    /// how persistently the surface stays lost.
+    fn draw_inner(&mut self, index: usize, allow_recovery: bool) {
         let Some(size) = self.outputs[index].size else { return };
         let Some(gpu) = self.gpu.as_ref() else { return };
         let Some(pipeline) = self.pipeline.as_ref() else { return };
@@ -548,20 +561,18 @@ impl WallpaperDaemon {
 
         let frame = match wgpu_surface.get_current_texture() {
             Ok(f) => f,
-            Err(e) if surface_error_needs_reconfigure(&e) => {
+            Err(e) if allow_recovery && surface_error_needs_reconfigure(&e) => {
                 // FR-034 (research.md R29) — the audit's own reproduction: `Lost`/
                 // `Outdated` specifically mean the surface itself needs reconfiguring
                 // (e.g. after a compositor resize/output-disable/re-enable cycle),
                 // not a transient one-frame hiccup — previously only logged, leaving
                 // the output stuck presenting nothing until some *other* event
                 // happened to trigger a fresh `reconfigure_output` call. Actively
-                // recover using the output's own last-known `size` instead. Bounded,
-                // not unconditional recursion: `reconfigure_output` only calls `draw`
-                // again after a *successful* `wgpu_surface.configure(...)`, at which
-                // point a freshly-configured surface's very next
-                // `get_current_texture()` call essentially always succeeds — an early
-                // return inside `reconfigure_output` (e.g. `ensure_gpu_surface`
-                // failing) does not call back into `draw` at all.
+                // recover using the output's own last-known `size` instead. Bounded to
+                // one round-trip via `allow_recovery` (see this method's doc comment)
+                // — a surface that's still `Lost`/`Outdated` immediately after being
+                // reconfigured falls through to the plain `Err(e)` arm below instead of
+                // recursing again.
                 let Some(conn) = self.conn.clone() else {
                     tracing::warn!(output = %self.outputs[index].id, error = %e, "get_current_texture failed (surface lost/outdated) but no Connection is available to recover");
                     return;
@@ -1035,7 +1046,10 @@ impl WallpaperDaemon {
             self.load_pack_for(index);
         }
         self.evaluate_output(index, chrono::Local::now());
-        self.draw(index);
+        // `allow_recovery: false` — see `draw_inner`'s doc comment: this is the one
+        // recovery round-trip `draw`'s `Lost`/`Outdated` arm gets, so it must not
+        // recurse back into `reconfigure_output` again if the surface is still bad.
+        self.draw_inner(index, false);
         // The output's real next-transition instant may have just changed (a newly
         // (re)configured output starts contributing to `next_wake()` for the first
         // time, or a resize can change which pack/schedule applies) — resync the
