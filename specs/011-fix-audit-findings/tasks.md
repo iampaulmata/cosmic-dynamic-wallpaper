@@ -444,7 +444,7 @@ test beyond "existing tests still pass."
       one shared module-level source (FR-045)
 - [X] T049 [P] [US8] Factor the "spawn exactly once" pattern copy-pasted three times in
       `crates/renderer/src/bin/cosmic-wallpaperd.rs` into one shared helper (FR-046)
-- [ ] T050 [P] [US8] Rename or doc-comment `crates/schedule-engine/src/query.rs`'s `active_before`
+- [X] T050 [P] [US8] Rename or doc-comment `crates/schedule-engine/src/query.rs`'s `active_before`
       field to clarify it holds the outgoing image during a transition, not the currently-active
       one (FR-047)
 - [ ] T051 [P] [US8] Document or enforce a length bound on `ImageId`'s wrapped string in
