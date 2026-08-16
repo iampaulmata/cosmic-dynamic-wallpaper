@@ -51,11 +51,17 @@ wallpaperctl reevaluate [--output <output-id>]
 
 ## Exit codes (FR-012)
 
+⚠️ **Superseded by spec 011's hardening delta**: the table below is this contract's original
+exit-code scheme, kept here for history. `specs/011-fix-audit-findings/contracts/
+wallpaperctl-cli-hardening.md` renumbers code `2` to mean "usage error" exclusively and moves
+"daemon unreachable" to a new code `4` (US7/FR-028/FR-029) — read that file for the current,
+authoritative table before relying on any exit code below.
+
 | Code | Meaning |
 |---|---|
 | 0 | Success |
 | 1 | Invalid input / validation failure (e.g. malformed location, unregistered pack) |
-| 2 | Daemon unreachable (`list outputs`, `query`, `reevaluate` only, FR-011) |
+| 2 | Daemon unreachable (`list outputs`, `query`, `reevaluate` only, FR-011) — **moved to code 4, see above** |
 | 3 | Underlying spec 2/3 error surfaced verbatim (pack load/manifest failure, config I/O failure) |
 
 Every non-zero exit is paired with a specific, actionable message on stderr naming what
@@ -92,3 +98,9 @@ acknowledgement shape.
 - The wire format of the D-Bus calls `query`/`reevaluate` make internally — that's
   contracts/wallpaperd-dbus-interface.md; this file only commits to the CLI's own
   command/output shape, which stays stable even if the underlying transport changes.
+- Input validation added after this contract shipped (e.g. `assign --output`'s value now being
+  checked for shape, and the `--output`/`--same-everywhere` conflict now routing through
+  `CliError::UsageError` instead of a direct `process::exit`) — see
+  `specs/011-fix-audit-findings/contracts/wallpaperctl-cli-hardening.md`, which supersedes the
+  exit-code table above and is additive everywhere else (no argument shape or `--json` schema
+  change).
