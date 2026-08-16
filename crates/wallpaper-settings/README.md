@@ -45,7 +45,10 @@ function building the real widgets:
   picker (`cosmic::dialog::file_chooser`); removing requires confirming in a dialog
   (`Application::dialog()`). Supersedes spec 7's original "browse registered packs,
   not register new ones" scope note — `wallpaperctl register`/`remove` remain fully
-  supported alongside the GUI, neither replaces the other.
+  supported alongside the GUI, neither replaces the other. A rapid double-click on
+  "Add pack folder…"/"Add image file…" can't open two concurrent file-chooser dialogs
+  — an in-flight guard (both disabling the button and refusing a second `update` call)
+  makes the second click a no-op instead (spec 011 US8 FR-052).
 - **Assignment** (FR-003, FR-010–FR-011, FR-013–FR-017, spec 008) — a "same pack
   everywhere" toggle (on by default) plus, when off, an independent per-display
   dropdown, writing the identical `wallpaper_ipc::RendererConfig` shape
@@ -103,7 +106,7 @@ finding 1, the same bug class `wallpaper-ipc`'s own extraction already fixed onc
 cargo test --package wallpaper-settings
 ```
 
-81 tests (spec 011 US8 FR-051 — previously documented as 29, stale since spec
+84 tests (spec 011 US8 FR-051 — previously documented as 29, stale since spec
 010-custom-pack-builder's `pack_builder` wizard landed) — each page's pure
 view-state/mapping logic, including the pack builder wizard's validation/self-check/
 placement-flow coverage, plus `pack_display`'s name/thumbnail resolution, independent
