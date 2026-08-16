@@ -364,12 +364,12 @@ pole-latitude query returns near-instantly (quickstart.md automated table rows 1
       a code comment as reconstructing `cosmic-config`'s internal-but-stable convention, per
       research.md R25) and `std::fs::set_permissions` that directory to mode `0o700`; add
       regression test `save_tightens_permissions` (FR-030, research.md R25)
-- [ ] T034 [US7] In `crates/renderer/src/ip_geolocation.rs`, add `const
+- [X] T034 [US7] In `crates/renderer/src/ip_geolocation.rs`, add `const
       MAX_PLAUSIBLE_LOCATION_JUMP_KM: f64 = 2000.0;` and compare a newly-resolved location against
       the most recent trusted one, rejecting (log + skip) a jump exceeding that bound with no
       intervening manual location change; add a unit test using a synthetic forged reply (FR-031,
       research.md R26)
-- [ ] T035 [US7] In `crates/renderer/src/bin/cosmic-wallpaperd.rs`, wrap the `PortalEvent::Reading`
+- [X] T035 [US7] In `crates/renderer/src/bin/cosmic-wallpaperd.rs`, wrap the `PortalEvent::Reading`
       handler insertion in the same 2s debounce primitive already used elsewhere in this file,
       replacing today's synchronous-per-event write (FR-032, research.md R27)
 - [ ] T036 [P] [US7] In `crates/renderer/src/gpu.rs`, add `const GPU_REQUEST_TIMEOUT: Duration =

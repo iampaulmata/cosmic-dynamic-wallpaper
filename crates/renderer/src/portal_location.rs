@@ -23,14 +23,14 @@
 //! installed and location services enabled — not available in this project's own dev
 //! environment (research.md R2); see `README.md`.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ashpd::desktop::location::{Accuracy, CreateSessionOptions, Location as PortalLocation, LocationProxy, StartOptions};
 use futures_util::{Stream, StreamExt};
 
 use schedule_engine::Location;
 
-use crate::config::{ResolutionStatus, LocationConfigEntry};
+use crate::config::{ResolutionStatus, LocationConfigEntry, REEVALUATION_DEADLINE};
 
 /// The resolution-attempt timeout (research.md R6) — distinct from spec 3 FR-007's
 /// 2-second *reaction* bound (how fast a config change is picked up). Generous enough
@@ -107,6 +107,54 @@ pub fn apply_reading(entry: &mut LocationConfigEntry, reading: PortalReading) {
 pub fn apply_failure(entry: &mut LocationConfigEntry, reason: String) {
     entry.automatic_location = None;
     entry.automatic_status = ResolutionStatus::Unavailable { reason };
+}
+
+/// In-process debounce for FR-032 (spec 011 US7, research.md R27) — the audit's own
+/// framing: unlike every other config write in this daemon, a raw `PortalEvent` was
+/// applied and persisted synchronously as it arrived, one write per event, instead of
+/// coalescing a rapid burst (the portal settling through several intermediate readings)
+/// the way `crate::config::Coalescer` already does for FR-014's per-output
+/// re-evaluations. Mirrors that struct's exact "record replaces the pending deadline,
+/// drained exactly once when due" semantics and the same [`REEVALUATION_DEADLINE`]
+/// window, specialized to a single buffered [`PortalEvent`] slot instead of a
+/// per-`OutputId` map (there's only ever one location stream to debounce here).
+#[derive(Debug, Default)]
+pub struct PortalDebouncer {
+    pending: Option<PortalEvent>,
+    deadline: Option<Instant>,
+}
+
+impl PortalDebouncer {
+    /// A fresh debouncer with nothing pending.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record `event` at `now`, replacing any not-yet-applied pending one and pushing
+    /// the deadline out to `now + REEVALUATION_DEADLINE` — a later event arriving
+    /// before the deadline supersedes the earlier one wholesale, never queued or
+    /// applied twice.
+    pub fn record(&mut self, event: PortalEvent, now: Instant) {
+        self.pending = Some(event);
+        self.deadline = Some(now + REEVALUATION_DEADLINE);
+    }
+
+    /// The pending event, drained, if its deadline has arrived as of `now` — `None`
+    /// otherwise (nothing pending, or not yet due). Mirrors [`crate::config::Coalescer::
+    /// due`]'s "returned at most once" contract.
+    pub fn due(&mut self, now: Instant) -> Option<PortalEvent> {
+        if self.deadline.is_some_and(|deadline| deadline <= now) {
+            self.deadline = None;
+            self.pending.take()
+        } else {
+            None
+        }
+    }
+
+    /// Whether an event is currently pending, not yet due.
+    pub fn is_pending(&self) -> bool {
+        self.pending.is_some()
+    }
 }
 
 /// One resolution attempt: create a portal session requesting [`Accuracy::City`]
@@ -265,6 +313,44 @@ mod tests {
         // Stays capped, never grows unbounded or wraps.
         backoff = next_backoff(backoff);
         assert_eq!(backoff, MAX_BACKOFF);
+    }
+
+    /// Spec 011 US7 FR-032 (research.md R27) — the audit's own reproduction: a rapid
+    /// burst of readings collapses to a single pending entry, never queued or
+    /// individually processed (mirrors `config::tests::repeated_changes_to_the_same_
+    /// output_coalesce` for `Coalescer`).
+    #[test]
+    fn portal_debouncer_coalesces_a_rapid_burst() {
+        let mut debouncer = PortalDebouncer::new();
+        let now = Instant::now();
+
+        debouncer.record(PortalEvent::Reading(reading(45.5019, -73.5674)), now);
+        debouncer.record(PortalEvent::Reading(reading(45.5, -73.5)), now + Duration::from_millis(500));
+        debouncer.record(PortalEvent::Failure("transient glitch".to_string()), now + Duration::from_millis(900));
+
+        // Not due yet at the *first* event's original deadline — pushed out by the
+        // later events.
+        assert!(debouncer.due(now + Duration::from_millis(1900)).is_none());
+        assert!(debouncer.is_pending());
+
+        // Due once the *latest* event's own deadline arrives, and only the latest
+        // event (the failure) is what gets applied.
+        let due = debouncer.due(now + Duration::from_millis(900) + REEVALUATION_DEADLINE);
+        assert!(matches!(due, Some(PortalEvent::Failure(reason)) if reason == "transient glitch"));
+        assert!(!debouncer.is_pending());
+    }
+
+    /// Draining via `due` is a one-shot: a second call at the same or a later instant
+    /// sees nothing pending.
+    #[test]
+    fn portal_debouncer_due_drains_exactly_once() {
+        let mut debouncer = PortalDebouncer::new();
+        let now = Instant::now();
+        debouncer.record(PortalEvent::Reading(reading(45.5019, -73.5674)), now);
+
+        let deadline = now + REEVALUATION_DEADLINE;
+        assert!(debouncer.due(deadline).is_some());
+        assert!(debouncer.due(deadline).is_none());
     }
 
     /// T019: a `LocationUpdated` value distinct from the currently-stored
