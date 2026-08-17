@@ -7,8 +7,14 @@
 # fresh before each packaging build, not a build- or test-time dependency.
 /assets/geoip/
 
-# Claude Code local machine state (permissions, etc.) — not shared project config
-.claude/settings.local.json
+# Claude Code project state (skills, local settings, scheduled-task locks) —
+# internal workflow tooling, not part of the published project
+/.claude/
+
+# Speckit scaffolding and its generated feature spec/plan/task docs —
+# internal workflow tooling, not part of the published project
+/.specify/
+/specs/
 
 # Editor/OS cruft
 .DS_Store
