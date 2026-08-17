@@ -165,7 +165,7 @@ fn manifest_toml(frames: &[Frame]) -> String {
         fallback_color: Color { r: 0x05, g: 0x05, b: 0x0f, a: 255 },
         images: frames
             .iter()
-            .map(|frame| ManifestDraftImage { file: frame.file.to_string(), anchor: frame.anchor })
+            .map(|frame| ManifestDraftImage { file: frame.file.to_string(), anchor: frame.anchor, scaling: None })
             .collect(),
     };
     render_manifest(&draft)

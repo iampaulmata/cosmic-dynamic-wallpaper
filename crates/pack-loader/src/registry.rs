@@ -88,6 +88,22 @@ pub struct PackRegistryEntry {
     /// `User`, exactly matching what it always meant.
     #[serde(default)]
     pub origin: PackOrigin,
+    /// Spec 012 FR-016/FR-018: a user-set label overriding this pack's default
+    /// display name, never written back to the underlying file/folder (FR-016).
+    /// `None` = no override; falls back to the usual manifest-name/file-stem
+    /// resolution (`pack_display::resolve_pack_display_name`). Only ever set by this
+    /// crate's callers for a `PackSource::StaticFile` entry in practice — a
+    /// `Directory` entry's display name lives in its own manifest `name` field
+    /// instead (research.md R1) — but kept on the shared struct rather than a
+    /// `StaticFile`-only side table, since `PackSource` isn't the enum boundary this
+    /// struct is built around and duplicating the whole entry type for one optional
+    /// field isn't warranted. `#[serde(default)]` (research.md R2 — the same
+    /// no-version-bump shape `origin` above already established: a `Vec`-element
+    /// field, not a top-level `cosmic-config` key, so plain serde's missing-field
+    /// tolerance is what makes an entry written before this field existed still load
+    /// correctly, as `None`).
+    #[serde(default)]
+    pub display_name: Option<String>,
 }
 
 /// The on-disk shape `cosmic-config` persists (FR-010). Not part of this crate's public
@@ -210,7 +226,27 @@ impl Registry {
             if entries.iter().any(|e| e.source == source) {
                 return;
             }
-            entries.push(PackRegistryEntry { source, status: RegistryStatus::Known, origin });
+            entries.push(PackRegistryEntry { source, status: RegistryStatus::Known, origin, display_name: None });
+        })
+    }
+
+    /// Spec 012 FR-016/FR-017: sets (or clears, with `None`) `source`'s display-name
+    /// override. A no-op `Ok(())` if `source` isn't currently registered, matching
+    /// [`Registry::register`]/[`Registry::remove`]'s own idempotent posture — there's
+    /// no entry to attach a name to, and silently creating one here would be a
+    /// surprising side effect for a "set the name" call to have. Routed through the
+    /// same [`Self::with_locked_state`] read-modify-write pattern every other mutation
+    /// of `entries` uses (spec 011 US6 FR-022, research.md R17) — a smaller mutation
+    /// than `register`/`remove` doesn't make it exempt from the same lost-update race
+    /// those exist to close. Callers are expected to have already normalized a blank/
+    /// whitespace-only name to `None` (FR-017) — this method itself doesn't inspect
+    /// the string, the same division of responsibility [`PackSource::resolve`] already
+    /// has for path validation ahead of `register`.
+    pub fn set_display_name(&mut self, source: &PackSource, name: Option<String>) -> Result<(), RegistryError> {
+        self.with_locked_state(|entries| {
+            if let Some(entry) = entries.iter_mut().find(|e| &e.source == source) {
+                entry.display_name = name;
+            }
         })
     }
 
@@ -681,7 +717,7 @@ mod tests {
         }
 
         fn entry(path: &str) -> PackRegistryEntry {
-            PackRegistryEntry { source: PackSource::StaticFile(path.into()), status: RegistryStatus::Known, origin: PackOrigin::User }
+            PackRegistryEntry { source: PackSource::StaticFile(path.into()), status: RegistryStatus::Known, origin: PackOrigin::User, display_name: None }
         }
 
         #[test]
@@ -800,7 +836,7 @@ mod tests {
         use super::*;
 
         fn registry_entry(source: PackSource, origin: PackOrigin) -> PackRegistryEntry {
-            PackRegistryEntry { source, status: RegistryStatus::Unavailable, origin }
+            PackRegistryEntry { source, status: RegistryStatus::Unavailable, origin, display_name: None }
         }
 
         #[test]
@@ -845,5 +881,89 @@ mod tests {
             assert!(!repair_source_if_relocated(&mut source));
             assert_eq!(source, PackSource::StaticFile(OLD_STARTER_PACK_SYSTEM_PATH.into()));
         }
+    }
+
+    // --- Spec 012 T013: PackRegistryEntry.display_name / Registry::set_display_name ---
+
+    #[test]
+    fn set_display_name_round_trips_through_save_and_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("sunrise.png");
+        std::fs::write(&file, b"x").unwrap();
+        let src = source(&file);
+
+        let (mut registry, custom_dir) = temp_registry();
+        registry.register(src.clone()).unwrap();
+        registry.set_display_name(&src, Some("Sunrise Glow".to_string())).unwrap();
+
+        let reopened = Registry::open_at(custom_dir.path()).unwrap();
+        let entry = reopened.known_packs().into_iter().find(|e| e.source == src).unwrap();
+        assert_eq!(entry.display_name.as_deref(), Some("Sunrise Glow"));
+    }
+
+    #[test]
+    fn set_display_name_to_none_clears_a_previously_set_name() {
+        let (mut registry, dir) = temp_registry();
+        let file = dir.path().join("a.png");
+        std::fs::write(&file, b"x").unwrap();
+        let src = source(&file);
+        registry.register(src.clone()).unwrap();
+        registry.set_display_name(&src, Some("Custom".to_string())).unwrap();
+
+        registry.set_display_name(&src, None).unwrap();
+
+        let entry = registry.known_packs().into_iter().find(|e| e.source == src).unwrap();
+        assert_eq!(entry.display_name, None);
+    }
+
+    #[test]
+    fn set_display_name_on_an_unregistered_source_is_a_harmless_noop() {
+        let (mut registry, dir) = temp_registry();
+        let file = dir.path().join("never-registered.png");
+        let src = source(&file);
+
+        assert!(registry.set_display_name(&src, Some("X".to_string())).is_ok());
+        assert!(registry.known_packs().is_empty(), "must not create an entry just to name it");
+    }
+
+    /// FR-021 (spec 012 US1 Clarifications): a display name doesn't survive its pack
+    /// being deleted — `remove` discards the whole entry, and `register`ing the same
+    /// source again afterward starts fresh (`display_name: None`), never recovering
+    /// the previous value.
+    #[test]
+    fn a_removed_and_re_registered_source_starts_with_no_display_name() {
+        let (mut registry, dir) = temp_registry();
+        let file = dir.path().join("a.png");
+        std::fs::write(&file, b"x").unwrap();
+        let src = source(&file);
+        registry.register(src.clone()).unwrap();
+        registry.set_display_name(&src, Some("Custom Name".to_string())).unwrap();
+
+        registry.remove(&src).unwrap();
+        registry.register(src.clone()).unwrap();
+
+        let entry = registry.known_packs().into_iter().find(|e| e.source == src).unwrap();
+        assert_eq!(entry.display_name, None, "a custom name must not silently reappear after delete + re-add");
+    }
+
+    /// An entry written before this field existed has no `display_name` key in its
+    /// on-disk RON at all — `#[serde(default)]` must still load it as `None` rather
+    /// than failing to parse. Mirrors `pre_existing_entry_with_no_origin_field_loads_
+    /// as_user_origin` above exactly (research.md R2, the identical precedent):
+    /// hand-writes the pre-spec-012 3-field shape (`source`, `status`, `origin` — no
+    /// `display_name`) directly, rather than round-tripping through this crate's own
+    /// `Serialize` impl, which would always include the field and so could never
+    /// actually exercise serde's missing-field fallback.
+    #[test]
+    fn pre_existing_entry_with_no_display_name_field_loads_as_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let entries_path = dir.path().join("cosmic").join(REGISTRY_CONFIG_ID).join("v1").join("entries");
+        std::fs::create_dir_all(entries_path.parent().unwrap()).unwrap();
+        std::fs::write(&entries_path, r#"[(source: StaticFile("/home/user/old-pack.jpg"), status: Known, origin: User)]"#).unwrap();
+
+        let registry = Registry::open_at(dir.path()).unwrap();
+        let packs = registry.known_packs();
+        assert_eq!(packs.len(), 1);
+        assert_eq!(packs[0].display_name, None);
     }
 }

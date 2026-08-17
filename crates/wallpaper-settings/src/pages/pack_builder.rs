@@ -1,24 +1,48 @@
-//! Custom Pack Builder wizard (spec 010) — turns a folder of images with no
-//! `manifest.toml` into a fully valid custom pack from within the GUI. Entered from
-//! `pages::packs`'s existing "Add pack folder…" flow when it hits
-//! `pack_loader::ManifestError::ManifestNotFound` (research.md R1) rather than a new
-//! nav page (research.md R9); owned by `App.pack_builder: Option<State>`.
+//! Custom Pack Builder wizard (spec 010, extended by spec 012) — the single interface
+//! for both turning a folder of images with no `manifest.toml` into a fully valid
+//! custom pack, and editing an already-registered folder pack's schedule/name/author
+//! in place. Two entry points into the same `State`/`Message`/`view` (spec 012 FR-005
+//! — deliberately one implementation, not a parallel "edit mode"):
+//! - **Add** (spec 010): entered from `pages::packs`'s "Add pack folder…" flow when it
+//!   hits `pack_loader::ManifestError::ManifestNotFound` (research.md R1) rather than a
+//!   new nav page (research.md R9) — [`open`], blank `State`.
+//! - **Edit** (spec 012 US1): entered from a `Directory` row's pencil icon on the Packs
+//!   screen — [`open_for_edit`], `State` pre-populated from the pack's current,
+//!   already-loaded content. Refuses to open (`Err`, no `State` at all) for any pack
+//!   that doesn't currently load — a missing folder, an unparseable manifest, a
+//!   manifest mixing solar/clock anchors, or a solar offset wider than this screen's
+//!   own ±12h range can represent (research.md R3) — rather than opening a
+//!   partially-populated or silently-lossy session. `edit_target: Some(_)` is what
+//!   distinguishes an edit session from an add session everywhere it matters: no
+//!   placement (Move/Keep) dialog on save (research.md R6), and `generate`'s success
+//!   writes straight back into the pack's existing location instead.
 //!
-//! Scope, in order: pick a scheduling mode (solar period or specific time, FR-004),
-//! assign every scanned image (FR-005–FR-009), name an author (FR-010), Generate a
-//! self-validated `manifest.toml` (FR-011, FR-012), then choose whether to move the
-//! folder into the application's standard pack location or leave it in place
-//! (FR-013–FR-017). See data-model.md §2 and contracts/pack-builder-gui-flow.md for the
-//! full state machine this module implements.
+//! Owned by `App.pack_builder: Option<State>` either way.
 //!
-//! Two design notes worth keeping in view while reading this file (both found while
-//! actually building the offset/time controls, refining data-model.md's sketch):
+//! Scope, in order: pick a scheduling mode (solar period or specific time, FR-004) —
+//! already chosen, for an edit session — assign every scanned image (FR-005–FR-009),
+//! name the pack and its author (FR-010; spec 012 FR-015 added the name field), Generate
+//! a self-validated `manifest.toml` (FR-011, FR-012), then — add flow only — choose
+//! whether to move the folder into the application's standard pack location or leave it
+//! in place (FR-013–FR-017). See data-model.md §2 and contracts/pack-builder-gui-flow.md
+//! (spec 010) plus contracts/pack-builder-edit-flow.md (spec 012) for the full state
+//! machine this module implements.
+//!
+//! Design notes worth keeping in view while reading this file:
 //! - A signed-hours field alone can't express "-15m" when hours is 0 (there's no
 //!   negative zero in `i32`) — `SolarAssignment` carries an explicit `offset_negative`
 //!   flag instead of relying on `offset_hours`'s own sign (research.md R6 still holds:
 //!   two `spin_button`s plus a small sign toggle, just three fields instead of two).
-//! - `combine_offset` therefore takes the sign explicitly rather than inferring it.
+//! - `combine_offset` therefore takes the sign explicitly rather than inferring it;
+//!   `decompose_offset` (spec 012) is its exact inverse, used to pre-fill an edit
+//!   session's rows from an already-loaded pack's `TimeAnchor`.
+//! - `PreservedManifestFields` (spec 012 FR-009) exists because `pack_loader::
+//!   LoadedPack` only exposes each image's *resolved* scaling (override-or-default),
+//!   not whether it had an explicit override in the original TOML — an edit session
+//!   reconstructs an equivalent, minimal override set from that resolved value rather
+//!   than re-parsing the raw manifest (research.md R5).
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use chrono::{Local, NaiveTime, TimeDelta, Timelike};
@@ -26,7 +50,7 @@ use cosmic::widget;
 use cosmic::Element;
 use image::ImageReader;
 use pack_loader::{Color, ManifestDraft, ManifestDraftImage, PackSource, Registry, ScalingMode};
-use schedule_engine::{Location, PackError, PackImage, SolarEventKind, TimeAnchor, WallpaperPack};
+use schedule_engine::{AnchorKind, Location, PackError, PackImage, SolarEventKind, TimeAnchor, WallpaperPack};
 
 /// The 8 recognized solar events, in the order shown in the dropdown (FR-005).
 pub const SOLAR_EVENTS: [SolarEventKind; 8] = [
@@ -110,6 +134,28 @@ pub struct PendingCollision {
     pub suggested_name: String,
 }
 
+/// The manifest fields this wizard's own controls never expose for editing —
+/// pack-level `default_scaling`/`fallback_color`, and any per-image `scaling`
+/// override — captured once from an already-loaded pack so an edit session can carry
+/// them forward completely unchanged (spec 012 FR-009, research.md R5). `None` for the
+/// add flow (`open`), which has never had any prior manifest to preserve fields from;
+/// `Some` for an edit session (`open_for_edit`).
+///
+/// `per_image_scaling` is keyed by file name (== `schedule_engine::ImageId`'s own
+/// string form) and holds only the images whose *resolved* scaling actually differs
+/// from the pack's `default_scaling` — `pack_loader::LoadedPack` only exposes the
+/// already-resolved value per image (override-or-default), not whether a given image
+/// had an explicit override in the original TOML, so this reconstructs an equivalent,
+/// minimal set of overrides from that resolved value rather than the raw manifest
+/// (which this crate has no read access to — `pack_loader::manifest::parse` is a
+/// private free function, not part of this crate's public API).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreservedManifestFields {
+    pub default_scaling: ScalingMode,
+    pub fallback_color: Color,
+    pub per_image_scaling: HashMap<String, ScalingMode>,
+}
+
 /// The wizard's full transient state — owned by `App.pack_builder`, never persisted.
 #[derive(Debug, Clone, PartialEq)]
 pub struct State {
@@ -117,6 +163,11 @@ pub struct State {
     pub mode: Option<AssignmentMode>,
     pub rows: Vec<ImageRow>,
     pub author: String,
+    /// Spec 012 FR-015/FR-016 (User Story 4): the pack's display name — pre-filled
+    /// from the folder name when adding (today's `build_draft` default, now made
+    /// explicit and user-editable rather than computed only at Generate time), or from
+    /// the loaded manifest's current `name` when editing.
+    pub name: String,
     /// Set whenever FR-008's check currently fails — blocks Generate.
     pub conflict: Option<String>,
     /// FR-017's error surface for a failed Generate (write or self-validation).
@@ -133,6 +184,15 @@ pub struct State {
     /// folder for Move) only at the moment the user actually makes that choice — see
     /// `finalize`. `Some` exactly when `pending_placement` is `Some`.
     pub pending_manifest_text: Option<String>,
+    /// Spec 012 (Edit Existing Packs): `None` for the add flow (unchanged); `Some(source)`
+    /// when this session is editing the already-registered pack at `source` — gates
+    /// which save path `generate()`'s success routes to (contracts/
+    /// pack-builder-edit-flow.md: a direct overwrite of `source_dir/manifest.toml`,
+    /// no placement dialog, no re-registration — research.md R6).
+    pub edit_target: Option<PackSource>,
+    /// Spec 012 FR-009: captured once by `open_for_edit`, threaded into `build_draft`
+    /// unchanged by anything this screen does. `None` for the add flow.
+    pub preserved: Option<PreservedManifestFields>,
 }
 
 #[derive(Debug, Clone)]
@@ -147,6 +207,8 @@ pub enum Message {
     TimeHourChanged(usize, u32),
     TimeMinuteChanged(usize, u32),
     AuthorChanged(String),
+    /// Spec 012 FR-015/FR-016 (User Story 4): the pack display-name field.
+    NameChanged(String),
     GenerateRequested,
     MoveRequested,
     KeepRequested,
@@ -168,6 +230,13 @@ pub fn should_open_for(path: &Path) -> bool {
     path.is_dir() && matches!(pack_loader::load_pack(path), Err(pack_loader::ManifestError::ManifestNotFound { .. }))
 }
 
+/// The folder-name-derived default pack name (research.md R10's original default,
+/// spec 012 FR-015: now surfaced as `State.name`'s starting value — editable — rather
+/// than computed only once, inline, at `generate()` time).
+fn folder_display_name(dir: &Path) -> String {
+    dir.file_name().and_then(|n| n.to_str()).unwrap_or("Custom Pack").to_string()
+}
+
 /// Opens the wizard at `source_dir` — called when the existing "Add pack folder…" flow
 /// hits `ManifestNotFound` (research.md R1). Scans the folder immediately, so the
 /// mode-choice screen can show a real scan error right away rather than deferring the
@@ -177,11 +246,13 @@ pub fn open(source_dir: PathBuf) -> State {
         Ok(rows) => (rows, None),
         Err(reason) => (Vec::new(), Some(reason)),
     };
+    let name = folder_display_name(&source_dir);
     State {
         source_dir,
         mode: None,
         rows,
         author: String::new(),
+        name,
         conflict: None,
         generate_error: None,
         move_error: None,
@@ -189,7 +260,95 @@ pub fn open(source_dir: PathBuf) -> State {
         pending_placement: None,
         scan_error,
         pending_manifest_text: None,
+        edit_target: None,
+        preserved: None,
     }
+}
+
+// --- Opening the wizard for an already-registered pack (spec 012 US1, research.md R3–R5) ---
+
+/// Spec 012 FR-004/FR-005/FR-019 (contracts/pack-builder-edit-flow.md): opens the
+/// wizard pre-populated from `source`'s current, already-loaded content — the same
+/// configuration screen [`open`] shows for a brand-new folder, just starting from
+/// everything the pack already has instead of blank. `Err(reason)` — no `State` at
+/// all — when `source` isn't a `Directory` at all (FR-010: a `StaticFile` pack has no
+/// schedule to edit here — routed to the separate rename-only prompt instead,
+/// contracts/packs-screen-icon-actions.md, before this function is ever reached in
+/// practice, but checked again here rather than trusting every future caller to keep
+/// getting that routing right), when the pack doesn't currently load at all (research.md
+/// R3 — a missing folder, an unparseable manifest, or a manifest mixing solar/clock
+/// anchors all collapse into this one `pack_loader::load_pack` call, with no separate
+/// mixed-anchor-specific check needed anywhere in this module), or when a solar image's
+/// offset is wider than this screen's own ±12h range can faithfully represent
+/// (research.md R3's own follow-on finding, [`offset_within_wizard_range`]) — every one
+/// of these is a "can't safely edit this one here" case, not something a
+/// partially-populated wizard should paper over.
+pub fn open_for_edit(source_dir: PathBuf, source: PackSource) -> Result<State, String> {
+    if !matches!(source, PackSource::Directory(_)) {
+        return Err(format!("{} is a single image, not a folder pack — it has no schedule to edit here.", source_dir.display()));
+    }
+    let loaded = pack_loader::load_pack(&source_dir).map_err(|e| e.to_string())?;
+
+    for image in loaded.pack.images() {
+        if let TimeAnchor::Solar { offset, .. } = image.anchor {
+            if !offset_within_wizard_range(offset) {
+                return Err(format!(
+                    "{} has a solar offset wider than this editor's ±12h range — edit its manifest.toml directly.",
+                    image.id
+                ));
+            }
+        }
+    }
+
+    let mode = match loaded.pack.anchor_kind() {
+        AnchorKind::Solar => AssignmentMode::SolarPeriod,
+        AnchorKind::Clock => AssignmentMode::SpecificTime,
+    };
+
+    let (mut rows, scan_error) = match scan_folder(&source_dir) {
+        Ok(rows) => (rows, None),
+        Err(reason) => (Vec::new(), Some(reason)),
+    };
+    for row in &mut rows {
+        let Some(image) = loaded.pack.images().iter().find(|img| img.id.as_str() == row.file_name) else {
+            continue; // FR-006: a file new since the manifest was last saved stays unassigned.
+        };
+        match image.anchor {
+            TimeAnchor::Solar { event, offset } => {
+                let (offset_negative, offset_hours, offset_minutes) = decompose_offset(offset);
+                row.solar = Some(SolarAssignment { event, offset_negative, offset_hours, offset_minutes });
+            }
+            TimeAnchor::Clock(time) => row.time = Some(time),
+        }
+    }
+
+    let per_image_scaling = loaded
+        .image_scaling
+        .iter()
+        .filter(|(_, scaling)| **scaling != loaded.default_scaling)
+        .map(|(id, scaling)| (id.as_str().to_string(), *scaling))
+        .collect();
+
+    Ok(State {
+        source_dir,
+        mode: Some(mode),
+        rows,
+        author: loaded.author.clone().unwrap_or_default(),
+        name: loaded.name.clone(),
+        conflict: None,
+        generate_error: None,
+        move_error: None,
+        pending_collision: None,
+        pending_placement: None,
+        scan_error,
+        pending_manifest_text: None,
+        edit_target: Some(source),
+        preserved: Some(PreservedManifestFields {
+            default_scaling: loaded.default_scaling,
+            fallback_color: loaded.fallback_color,
+            per_image_scaling,
+        }),
+    })
 }
 
 /// Scans `dir` for candidate images (research.md R2): keeps only files that pass a
@@ -252,12 +411,62 @@ pub fn combine_offset(negative: bool, hours: u32, minutes: u32) -> TimeDelta {
     }
 }
 
+/// Spec 012 US1 (research.md R4): the pure inverse of [`combine_offset`], used by
+/// `open_for_edit` to pre-fill a `SolarAssignment`'s sign/hours/minutes fields from an
+/// already-loaded pack's `TimeAnchor::Solar { offset, .. }`. `None` (no offset at all)
+/// decomposes to `(false, 0, 0)`, matching a freshly-added row's own zeroed default.
+/// Every whole-minute value `combine_offset` can itself produce round-trips through
+/// this exactly; this function does not clamp or reject an out-of-range magnitude
+/// itself (see [`offset_within_wizard_range`] for the caller-side check that decides
+/// whether a *loaded* pack's offset is even safe to hand to this at all).
+pub fn decompose_offset(offset: Option<TimeDelta>) -> (bool, u32, u32) {
+    let Some(delta) = offset else { return (false, 0, 0) };
+    let negative = delta < TimeDelta::zero();
+    let magnitude = if negative { -delta } else { delta };
+    let total_minutes = magnitude.num_minutes().max(0);
+    let hours = u32::try_from(total_minutes / 60).unwrap_or(u32::MAX);
+    let minutes = u32::try_from(total_minutes % 60).unwrap_or(0);
+    (negative, hours, minutes)
+}
+
+/// Spec 012 US1 (research.md R3, discovered while implementing `open_for_edit`):
+/// `schedule_engine::WallpaperPack::validate` accepts a solar offset up to
+/// `schedule_engine::MAX_SOLAR_OFFSET_HOURS` (24h) — wider than this wizard's own
+/// spin-button range (`combine_offset`'s ±12h cap). A pack with a wider offset than
+/// this loads successfully but can't be *faithfully* represented by this screen's
+/// controls: silently clamping it down on open would be exactly the kind of "reset a
+/// field this screen doesn't fully control" FR-009 rules out, just for an offset
+/// instead of a scaling mode. `open_for_edit` treats this the same as any other
+/// can't-safely-edit-this-pack case (FR-019) — refusing to open rather than opening
+/// with a value it would silently change if the user saved without touching that row
+/// at all.
+fn offset_within_wizard_range(offset: Option<TimeDelta>) -> bool {
+    match offset {
+        None => true,
+        Some(delta) => delta >= -TimeDelta::hours(12) && delta <= TimeDelta::hours(12),
+    }
+}
+
 /// Blank or whitespace-only input becomes "Artist Unknown" (FR-010); anything else is
 /// used verbatim, trimmed of leading/trailing whitespace.
 pub fn effective_author(input: &str) -> String {
     let trimmed = input.trim();
     if trimmed.is_empty() {
         "Artist Unknown".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// Spec 012 FR-015/FR-017: blank or whitespace-only input falls back to `fallback`
+/// (the folder's own name) rather than saving an empty pack name — the same shape as
+/// [`effective_author`], but with a dynamic fallback instead of a fixed string, since
+/// "no name set" means something different for every pack (its own folder name) rather
+/// than one shared default.
+pub fn effective_name(input: &str, fallback: &str) -> String {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        fallback.to_string()
     } else {
         trimmed.to_string()
     }
@@ -282,12 +491,23 @@ fn solar_row_anchor(assignment: SolarAssignment) -> TimeAnchor {
     TimeAnchor::solar(assignment.event, offset)
 }
 
-/// Builds the `ManifestDraft` Generate will render (FR-011), applying research.md R10's
-/// defaults: `name` from the folder name, `default_scaling = Fill`,
-/// `fallback_color = #000000`. Rows without an assignment for the active mode are
-/// skipped rather than panicking — callers are expected to have already checked
+/// Builds the `ManifestDraft` Generate will render (FR-011). For a brand-new pack
+/// (`preserved: None`), applies research.md R10's original defaults: `default_scaling =
+/// Fill`, `fallback_color = #000000`, no per-image scaling override. For an edit
+/// session (`preserved: Some(..)`), those three carry forward from the pack as it was
+/// loaded instead (spec 012 FR-009, research.md R5) — this screen never resets a field
+/// it doesn't itself show a control for. `name` falls back to `folder_name` when blank
+/// (FR-015/FR-017, `effective_name`). Rows without an assignment for the active mode
+/// are skipped rather than panicking — callers are expected to have already checked
 /// `all_assigned` (Generate is gated on it), but this stays total either way.
-pub fn build_draft(rows: &[ImageRow], mode: AssignmentMode, folder_name: &str, author: &str) -> ManifestDraft {
+pub fn build_draft(
+    rows: &[ImageRow],
+    mode: AssignmentMode,
+    name: &str,
+    folder_name: &str,
+    author: &str,
+    preserved: Option<&PreservedManifestFields>,
+) -> ManifestDraft {
     let images = rows
         .iter()
         .filter_map(|row| {
@@ -295,17 +515,17 @@ pub fn build_draft(rows: &[ImageRow], mode: AssignmentMode, folder_name: &str, a
                 AssignmentMode::SolarPeriod => row.solar.map(solar_row_anchor),
                 AssignmentMode::SpecificTime => row.time.map(TimeAnchor::clock),
             }?;
-            Some(ManifestDraftImage { file: row.file_name.clone(), anchor })
+            let scaling = preserved.and_then(|p| p.per_image_scaling.get(&row.file_name).copied());
+            Some(ManifestDraftImage { file: row.file_name.clone(), anchor, scaling })
         })
         .collect();
 
-    ManifestDraft {
-        name: folder_name.to_string(),
-        author: Some(effective_author(author)),
-        default_scaling: ScalingMode::Fill,
-        fallback_color: Color { r: 0, g: 0, b: 0, a: 255 },
-        images,
-    }
+    let (default_scaling, fallback_color) = match preserved {
+        Some(p) => (p.default_scaling, p.fallback_color),
+        None => (ScalingMode::Fill, Color { r: 0, g: 0, b: 0, a: 255 }),
+    };
+
+    ManifestDraft { name: effective_name(name, folder_name), author: Some(effective_author(author)), default_scaling, fallback_color, images }
 }
 
 /// FR-008: checks the current rows for a scheduling conflict. Returns `None` when
@@ -448,6 +668,14 @@ pub fn set_author(state: &mut State, author: String) {
     state.author = author;
 }
 
+/// Spec 012 FR-015 (US4): `NameChanged` — the raw text is stored as-is; blank/
+/// whitespace-only input isn't normalized here (mirrors `set_author`), only at the
+/// point `build_draft` actually needs an effective value (`effective_name`), so the
+/// text field itself never fights the user's typing.
+pub fn set_name(state: &mut State, name: String) {
+    state.name = name;
+}
+
 // --- Generate (FR-011, FR-012, FR-017; contracts/pack-loader-manifest-writer.md) ---
 
 /// Builds the draft, renders it, and self-validates it — the exact validation path a
@@ -470,9 +698,22 @@ pub fn set_author(state: &mut State, author: String) {
 /// manifest and skip the wizard entirely — an implicit "Keep it here" the user never
 /// actually chose. Deferring the write removes that window: nothing is written to
 /// `state.source_dir` until Move or Keep actually runs.
-pub fn generate(state: &mut State) {
+/// Returns `true` only when this call fully completed an **edit** session's save
+/// (self-validated, written, no further step needed) and the caller must close the
+/// wizard and refresh the Packs screen — mirrors `confirm_move`/`confirm_keep`'s own
+/// "did this fully finish" signal. Always `false` for the add flow: its own completion
+/// signal remains `confirm_move`/`confirm_keep`, triggered by a *later*, separate
+/// placement-dialog click, since a brand-new pack still needs a Move-vs-Keep decision
+/// this function doesn't make. An edit session has no placement dialog to wait for
+/// (research.md R6) — for it, Generate succeeding *is* the terminal action (spec 012
+/// FR-020: immediate save, no extra confirmation beyond Cancel already being available
+/// beforehand). Also `false` on any failure, surfaced via `state.generate_error` as
+/// before — `#[must_use]` because silently ignoring a `true` here would leave a
+/// successfully-saved edit session's wizard sitting open, showing stale state.
+#[must_use]
+pub fn generate(state: &mut State) -> bool {
     state.generate_error = None;
-    let Some(mode) = state.mode else { return };
+    let Some(mode) = state.mode else { return false };
 
     // Spec 011 US6 FR-026 (research.md R21): re-checks the same `all_assigned` pure
     // function the UI button's `enabled` state already gates on
@@ -485,21 +726,79 @@ pub fn generate(state: &mut State) {
     // check that's actually supposed to prevent that from being reachable at all.
     if !all_assigned(&state.rows, mode) {
         state.generate_error = Some("every image needs an assignment before a pack can be generated.".to_string());
-        return;
+        return false;
     }
 
-    let folder_name =
-        state.source_dir.file_name().and_then(|n| n.to_str()).unwrap_or("Custom Pack").to_string();
-    let draft = build_draft(&state.rows, mode, &folder_name, &state.author);
+    // Spec 012 FR-012/FR-013 (discovered while adding the edit-save path below): the
+    // add flow's own `can_generate` in `configuration_view` already disables the
+    // Generate button while `state.conflict.is_some()`, but — like `all_assigned`
+    // above (spec 011 FR-026) — that's only a UI-layer gate, not something this
+    // function re-checked itself. `WallpaperPack::validate` has no literal-duplicate-
+    // solar-anchor check of its own (only `detect_solar_conflict`'s UI-side check
+    // does, research.md R4's two-layer check), so without this, a call to `generate`
+    // that bypasses the disabled button (a bug, a stale conflict left over from a
+    // previous row edit, a programmatic trigger) could silently write a pack with two
+    // images racing for the same display moment — exactly what FR-012 requires never
+    // happen, not just "usually doesn't happen because the button was disabled."
+    if state.conflict.is_some() {
+        state.generate_error = Some("resolve the scheduling conflict before generating a pack.".to_string());
+        return false;
+    }
+
+    let folder_name = folder_display_name(&state.source_dir);
+    let draft = build_draft(&state.rows, mode, &state.name, &folder_name, &state.author, state.preserved.as_ref());
     let text = pack_loader::render(&draft);
 
     if let Err(e) = self_validate_in_scratch_dir(&state.source_dir, &draft, &text) {
         state.generate_error = Some(format!("the generated pack didn't validate: {e}"));
-        return;
+        return false;
+    }
+
+    if state.edit_target.is_some() {
+        // Spec 012 US1 (research.md R6): editing never relocates a pack, so there is
+        // no Move-vs-Keep choice to show — write straight into `source_dir`, the
+        // pack's existing, already-registered location, and this session is done.
+        return match write_edit_manifest(&state.source_dir, &text) {
+            Ok(()) => true,
+            Err(e) => {
+                state.generate_error = Some(e);
+                false
+            }
+        };
     }
 
     state.pending_manifest_text = Some(text);
     state.pending_placement = Some(GeneratedPlacement { generated_path: state.source_dir.clone() });
+    false
+}
+
+/// Spec 012 FR-007 (US1): overwrites `source_dir/manifest.toml` with `text` — the one
+/// write path in this module that replaces an *existing*, currently-registered pack's
+/// manifest in place, rather than writing into a brand-new or about-to-be-discarded
+/// location. A plain `std::fs::write` truncates before writing the new bytes, so a
+/// crash/failure mid-write could leave a half-written, unparseable manifest behind;
+/// this instead writes `text` to a same-directory temp file first, then
+/// `std::fs::rename`s it over the real manifest path. A same-directory rename is
+/// atomic on every platform this project targets (POSIX/Wayland-only, constitution
+/// Principle II), so `manifest.toml` is always either wholly the old content or wholly
+/// the new content, never a partial mix — satisfying FR-007's "on failure, the
+/// manifest on disk MUST remain exactly as it was" without needing to re-read and
+/// restore a backup after the fact. No second `pack_loader::load_pack` re-validation
+/// runs after the rename (unlike `write_manifest_and_register`'s existing pattern for
+/// a brand-new "Keep it here" pack): `text` was already proven to load successfully,
+/// against copies of these exact images, by `generate()`'s own
+/// `self_validate_in_scratch_dir` call immediately before this function runs — redoing
+/// that same check against the real directory moments later would be pure repetition,
+/// not an independent safety net (and, unlike the Keep path, there is no discardable
+/// scratch/destination directory left here to clean up if it somehow did fail).
+fn write_edit_manifest(source_dir: &Path, text: &str) -> Result<(), String> {
+    let manifest_path = source_dir.join(pack_loader::MANIFEST_FILE_NAME);
+    let tmp_path = source_dir.join(format!("{}.tmp-{}", pack_loader::MANIFEST_FILE_NAME, std::process::id()));
+    std::fs::write(&tmp_path, text).map_err(|e| format!("couldn't write the updated manifest: {e}"))?;
+    std::fs::rename(&tmp_path, &manifest_path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp_path);
+        format!("couldn't replace the existing manifest: {e}")
+    })
 }
 
 /// Validates `text` (the rendered manifest for `draft`) without writing anything into
@@ -851,6 +1150,14 @@ fn configuration_view(state: &State, mode: AssignmentMode) -> Element<'_, Messag
         AssignmentMode::SpecificTime => "Assign each image a time of day",
     }));
     layout = layout.push(rows_col);
+    // Spec 012 FR-015 (US4): the pack's display name — shown throughout the GUI in
+    // place of the folder name, never renaming the folder itself. Placeholder mirrors
+    // the author field's own "leave blank for the default" pattern, with the actual
+    // folder name as the concrete example rather than a generic placeholder string,
+    // since that default is different for every pack.
+    let folder_name = folder_display_name(&state.source_dir);
+    layout = layout.push(widget::text::body(format!("Pack name (leave blank for \"{folder_name}\")")));
+    layout = layout.push(widget::text_input::text_input(folder_name, &state.name).on_input(Message::NameChanged));
     layout = layout.push(widget::text::body("Author (leave blank for \"Artist Unknown\")"));
     layout = layout.push(widget::text_input::text_input("Artist Unknown", &state.author).on_input(Message::AuthorChanged));
 
@@ -1036,6 +1343,33 @@ mod tests {
         assert_eq!(effective_author("  Jane Author  "), "Jane Author");
     }
 
+    // --- Spec 012 US4 (T014): effective_name / set_name ---
+
+    #[test]
+    fn effective_name_blank_or_whitespace_falls_back_to_the_given_fallback() {
+        assert_eq!(effective_name("", "My Folder"), "My Folder");
+        assert_eq!(effective_name("   ", "My Folder"), "My Folder");
+    }
+
+    #[test]
+    fn effective_name_trims_and_keeps_a_real_name() {
+        assert_eq!(effective_name("  Sunrise Glow  ", "My Folder"), "Sunrise Glow");
+    }
+
+    #[test]
+    fn set_name_stores_the_raw_input_unnormalized() {
+        let mut state = open_test_state(&["a.png"]);
+        set_name(&mut state, "  Not Yet Trimmed  ".to_string());
+        assert_eq!(state.name, "  Not Yet Trimmed  ", "normalization happens at build_draft time, not on every keystroke");
+    }
+
+    #[test]
+    fn open_defaults_name_to_the_folder_name() {
+        let state = open_test_state(&["a.png"]);
+        let expected = state.source_dir.file_name().unwrap().to_str().unwrap();
+        assert_eq!(state.name, expected);
+    }
+
     // --- T011: all_assigned ---
 
     #[test]
@@ -1066,7 +1400,7 @@ mod tests {
         rows[0].solar = Some(solar(SolarEventKind::Sunrise));
         rows[1].solar = Some(SolarAssignment { event: SolarEventKind::Sunset, offset_negative: true, offset_hours: 0, offset_minutes: 30 });
 
-        let draft = build_draft(&rows, AssignmentMode::SolarPeriod, "My Folder", "");
+        let draft = build_draft(&rows, AssignmentMode::SolarPeriod, "", "My Folder", "", None);
 
         assert_eq!(draft.name, "My Folder");
         assert_eq!(draft.author.as_deref(), Some("Artist Unknown"));
@@ -1085,7 +1419,7 @@ mod tests {
     fn build_draft_keeps_a_supplied_author_name() {
         let mut rows = vec![image_row("a.png")];
         rows[0].time = Some(NaiveTime::from_hms_opt(6, 0, 0).unwrap());
-        let draft = build_draft(&rows, AssignmentMode::SpecificTime, "Folder", "  Jane  ");
+        let draft = build_draft(&rows, AssignmentMode::SpecificTime, "", "Folder", "  Jane  ", None);
         assert_eq!(draft.author.as_deref(), Some("Jane"));
         assert_eq!(draft.images[0].anchor, TimeAnchor::clock(NaiveTime::from_hms_opt(6, 0, 0).unwrap()));
     }
@@ -1257,7 +1591,7 @@ mod tests {
         assert!(state.conflict.is_none());
         assert!(all_assigned(&state.rows, AssignmentMode::SolarPeriod));
 
-        generate(&mut state);
+        let _ = generate(&mut state);
         assert_eq!(state.generate_error, None, "{:?}", state.generate_error);
         assert!(state.pending_placement.is_some());
         // Spec 011 US6 FR-027 (research.md R22): the manifest isn't written to
@@ -1289,7 +1623,7 @@ mod tests {
         set_time_minute(&mut state, 1, 0);
         assert!(state.conflict.is_none());
 
-        generate(&mut state);
+        let _ = generate(&mut state);
         assert_eq!(state.generate_error, None, "{:?}", state.generate_error);
         assert!(!dir.path().join(pack_loader::MANIFEST_FILE_NAME).exists(), "must not write until Move/Keep is chosen");
 
@@ -1331,7 +1665,7 @@ mod tests {
         // `generate` is called directly rather than through any UI gate.
         set_solar_event_by_index(&mut state, 0, 0, None);
 
-        generate(&mut state);
+        let _ = generate(&mut state);
 
         assert!(state.generate_error.is_some(), "generate() must refuse to run with an unassigned row");
         assert!(state.pending_placement.is_none(), "must not proceed to placement");
@@ -1456,7 +1790,7 @@ mod tests {
         let mut state = open(dir.path().to_path_buf());
         set_mode(&mut state, AssignmentMode::SolarPeriod);
         set_solar_event_by_index(&mut state, 0, 0, None);
-        generate(&mut state);
+        let _ = generate(&mut state);
         assert!(state.pending_placement.is_some());
 
         // Pre-create a colliding destination under a scratch registry dir.
@@ -1549,7 +1883,7 @@ mod tests {
         set_mode(&mut state, AssignmentMode::SolarPeriod);
         set_solar_event_by_index(&mut state, 0, 0, None);
 
-        generate(&mut state);
+        let _ = generate(&mut state);
 
         assert_eq!(state.generate_error, None, "{:?}", state.generate_error);
         assert!(state.pending_placement.is_some());
@@ -1569,4 +1903,426 @@ mod tests {
     // --- T032: FR-018 scan failures already covered above
     // (open_reports_a_scan_error_for_a_folder_with_no_images /
     // open_reports_a_scan_error_for_too_many_images) — listed here for traceability.
+
+    // --- Spec 012 US1: decompose_offset (T004) ---
+
+    #[test]
+    fn decompose_offset_none_is_zeroed() {
+        assert_eq!(decompose_offset(None), (false, 0, 0));
+    }
+
+    #[test]
+    fn decompose_offset_splits_a_positive_value_into_hours_and_minutes() {
+        assert_eq!(decompose_offset(Some(TimeDelta::hours(2) + TimeDelta::minutes(15))), (false, 2, 15));
+    }
+
+    #[test]
+    fn decompose_offset_reports_the_sign_and_the_magnitude_for_a_negative_value() {
+        assert_eq!(decompose_offset(Some(-(TimeDelta::minutes(45)))), (true, 0, 45));
+        assert_eq!(decompose_offset(Some(-TimeDelta::hours(1))), (true, 1, 0));
+    }
+
+    #[test]
+    fn decompose_offset_round_trips_through_combine_offset() {
+        for (negative, hours, minutes) in [(false, 0, 0), (false, 3, 27), (true, 5, 10), (false, 12, 0), (true, 12, 0)] {
+            let delta = combine_offset(negative, hours, minutes);
+            assert_eq!(decompose_offset(Some(delta)), (negative, hours, minutes), "round-trip failed for ({negative}, {hours}, {minutes})");
+        }
+    }
+
+    #[test]
+    fn offset_within_wizard_range_accepts_the_twelve_hour_boundary_and_rejects_beyond_it() {
+        assert!(offset_within_wizard_range(None));
+        assert!(offset_within_wizard_range(Some(TimeDelta::hours(12))));
+        assert!(offset_within_wizard_range(Some(-TimeDelta::hours(12))));
+        assert!(!offset_within_wizard_range(Some(TimeDelta::hours(12) + TimeDelta::minutes(1))));
+        assert!(!offset_within_wizard_range(Some(-TimeDelta::hours(13))));
+    }
+
+    // --- Spec 012 US1: open_for_edit (T005) ---
+
+    /// Mirrors `pack_display.rs`'s own test helper of the same shape — writes a real
+    /// manifest.toml plus placeholder images so `pack_loader::load_pack` (and thus
+    /// `open_for_edit`) has something real to load.
+    fn write_pack_dir(dir: &Path, manifest_body: &str, images: &[&str]) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join(pack_loader::MANIFEST_FILE_NAME), manifest_body).unwrap();
+        for name in images {
+            write_test_image(&dir.join(name));
+        }
+    }
+
+    /// FR-010: a standalone single-image pack has no schedule to edit through this
+    /// wizard — `open_for_edit` refuses a `StaticFile` source outright rather than
+    /// relying solely on its callers to route it elsewhere first (see this function's
+    /// own doc comment for why the check is duplicated here).
+    #[test]
+    fn open_for_edit_fails_for_a_static_file_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("sunrise.png");
+        write_test_image(&file);
+        let source = PackSource::resolve(&file).unwrap();
+        assert!(open_for_edit(file, source).is_err());
+    }
+
+    #[test]
+    fn open_for_edit_prefills_a_solar_mode_pack() {
+        let dir = tempfile::tempdir().unwrap();
+        let pack_dir = dir.path().join("solar-pack");
+        write_pack_dir(
+            &pack_dir,
+            r##"
+                schema_version = 1
+                name = "Solar Pack"
+                author = "Jane Author"
+                default_scaling = "Fill"
+                fallback_color = "#000000"
+                [[images]]
+                file = "dawn.png"
+                anchor = "sunrise"
+                [[images]]
+                file = "dusk.png"
+                anchor = "sunset-45m"
+            "##,
+            &["dawn.png", "dusk.png"],
+        );
+        let source = PackSource::resolve(&pack_dir).unwrap();
+
+        let state = open_for_edit(pack_dir.clone(), source.clone()).unwrap();
+
+        assert_eq!(state.mode, Some(AssignmentMode::SolarPeriod));
+        assert_eq!(state.author, "Jane Author");
+        assert_eq!(state.name, "Solar Pack");
+        assert_eq!(state.edit_target, Some(source));
+        assert!(state.scan_error.is_none());
+        assert_eq!(state.rows.len(), 2);
+
+        let dawn = state.rows.iter().find(|r| r.file_name == "dawn.png").unwrap();
+        assert_eq!(dawn.solar, Some(SolarAssignment { event: SolarEventKind::Sunrise, offset_negative: false, offset_hours: 0, offset_minutes: 0 }));
+
+        let dusk = state.rows.iter().find(|r| r.file_name == "dusk.png").unwrap();
+        assert_eq!(dusk.solar, Some(SolarAssignment { event: SolarEventKind::Sunset, offset_negative: true, offset_hours: 0, offset_minutes: 45 }));
+    }
+
+    #[test]
+    fn open_for_edit_prefills_a_clock_mode_pack() {
+        let dir = tempfile::tempdir().unwrap();
+        let pack_dir = dir.path().join("clock-pack");
+        write_pack_dir(
+            &pack_dir,
+            "schema_version = 1\nname = \"Clock Pack\"\ndefault_scaling = \"Fill\"\nfallback_color = \"#000000\"\n\n[[images]]\nfile = \"a.png\"\nanchor = \"06:00\"\n[[images]]\nfile = \"b.png\"\nanchor = \"18:30\"\n",
+            &["a.png", "b.png"],
+        );
+        let source = PackSource::resolve(&pack_dir).unwrap();
+
+        let state = open_for_edit(pack_dir, source).unwrap();
+
+        assert_eq!(state.mode, Some(AssignmentMode::SpecificTime));
+        let a = state.rows.iter().find(|r| r.file_name == "a.png").unwrap();
+        assert_eq!(a.time, Some(NaiveTime::from_hms_opt(6, 0, 0).unwrap()));
+        let b = state.rows.iter().find(|r| r.file_name == "b.png").unwrap();
+        assert_eq!(b.time, Some(NaiveTime::from_hms_opt(18, 30, 0).unwrap()));
+    }
+
+    /// FR-006: a file added to the folder since the manifest was last saved shows up
+    /// as an unassigned row rather than being skipped or causing an error.
+    #[test]
+    fn open_for_edit_shows_a_newly_added_file_as_unassigned() {
+        let dir = tempfile::tempdir().unwrap();
+        let pack_dir = dir.path().join("pack");
+        write_pack_dir(
+            &pack_dir,
+            "schema_version = 1\nname = \"Pack\"\ndefault_scaling = \"Fill\"\nfallback_color = \"#000000\"\n\n[[images]]\nfile = \"a.png\"\nanchor = \"sunrise\"\n",
+            &["a.png"],
+        );
+        write_test_image(&pack_dir.join("new.png")); // not in the manifest at all
+        let source = PackSource::resolve(&pack_dir).unwrap();
+
+        let state = open_for_edit(pack_dir, source).unwrap();
+
+        assert_eq!(state.rows.len(), 2);
+        let new_row = state.rows.iter().find(|r| r.file_name == "new.png").unwrap();
+        assert_eq!(new_row.solar, None, "a newly-added file must start unassigned");
+    }
+
+    /// Corrected understanding vs. this feature's original spec wording (discovered
+    /// while writing this test — see spec.md's Acceptance Scenario 6 and FR-006, both
+    /// updated to match): a file the *current* manifest still references but that's
+    /// gone from the folder does **not** just quietly disappear as an unassigned-row
+    /// non-issue — `pack_loader::load_pack` itself already refuses to load a manifest
+    /// referencing a missing image (`path_safety`/`image_check`'s existing checks, run
+    /// for every pack load, not just this wizard's), so `open_for_edit`'s very first
+    /// step (loading the pack at all) already fails first. This is exactly the same
+    /// "can't safely edit this pack" refusal as a missing folder or mixed anchors —
+    /// there is no reachable path where a row is silently dropped for a file the
+    /// *manifest* still expects. (A file the manifest never mentioned in the first
+    /// place — the *added*, not removed, case — is the one FR-006 scenario that
+    /// really does degrade gracefully: see
+    /// `open_for_edit_shows_a_newly_added_file_as_unassigned` above.)
+    #[test]
+    fn open_for_edit_fails_when_the_folder_is_missing_a_file_the_manifest_still_references() {
+        let dir = tempfile::tempdir().unwrap();
+        let pack_dir = dir.path().join("pack");
+        write_pack_dir(
+            &pack_dir,
+            "schema_version = 1\nname = \"Pack\"\ndefault_scaling = \"Fill\"\nfallback_color = \"#000000\"\n\n[[images]]\nfile = \"a.png\"\nanchor = \"sunrise\"\n[[images]]\nfile = \"b.png\"\nanchor = \"sunset\"\n",
+            &["a.png", "b.png"],
+        );
+        std::fs::remove_file(pack_dir.join("b.png")).unwrap();
+        let source = PackSource::Directory(pack_dir.clone());
+
+        let result = open_for_edit(pack_dir, source);
+
+        assert!(result.is_err(), "a manifest referencing a now-missing file must refuse to open, not silently drop that row");
+    }
+
+    #[test]
+    fn open_for_edit_fails_for_a_directory_with_no_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        let pack_dir = dir.path().join("broken");
+        std::fs::create_dir_all(&pack_dir).unwrap();
+        write_test_image(&pack_dir.join("a.png")); // no manifest.toml at all
+        let source = PackSource::Directory(pack_dir.clone());
+        assert!(open_for_edit(pack_dir, source).is_err());
+    }
+
+    #[test]
+    fn open_for_edit_fails_for_a_folder_that_no_longer_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let vanished = dir.path().join("never-existed");
+        let source = PackSource::Directory(vanished.clone());
+        assert!(open_for_edit(vanished, source).is_err());
+    }
+
+    /// Research.md R3: a manifest mixing solar and clock anchors already fails to
+    /// *load* at all (`WallpaperPack::validate` rejects `MixedAnchorTypes`) — so
+    /// `open_for_edit` refuses it via the exact same `Err` path as any other load
+    /// failure, with no separate mixed-anchor-specific check anywhere in this module.
+    #[test]
+    fn open_for_edit_fails_for_a_manifest_mixing_solar_and_clock_anchors() {
+        let dir = tempfile::tempdir().unwrap();
+        let pack_dir = dir.path().join("mixed");
+        write_pack_dir(
+            &pack_dir,
+            "schema_version = 1\nname = \"Mixed\"\ndefault_scaling = \"Fill\"\nfallback_color = \"#000000\"\n\n[[images]]\nfile = \"a.png\"\nanchor = \"sunrise\"\n[[images]]\nfile = \"b.png\"\nanchor = \"06:00\"\n",
+            &["a.png", "b.png"],
+        );
+        let source = PackSource::Directory(pack_dir.clone());
+        assert!(open_for_edit(pack_dir, source).is_err());
+    }
+
+    /// Research.md R3's own follow-on finding: `schedule_engine` accepts a solar
+    /// offset up to 24h (`MAX_SOLAR_OFFSET_HOURS`), wider than this wizard's own ±12h
+    /// spin-button range — such a pack loads fine but can't be faithfully
+    /// re-represented by this screen, so editing it is refused rather than silently
+    /// clamped (which would be exactly the kind of silent field-reset FR-009 forbids).
+    #[test]
+    fn open_for_edit_fails_for_a_solar_offset_wider_than_the_wizard_can_represent() {
+        let dir = tempfile::tempdir().unwrap();
+        let pack_dir = dir.path().join("wide-offset");
+        write_pack_dir(
+            &pack_dir,
+            "schema_version = 1\nname = \"Wide\"\ndefault_scaling = \"Fill\"\nfallback_color = \"#000000\"\n\n[[images]]\nfile = \"a.png\"\nanchor = \"sunrise+18h\"\n",
+            &["a.png"],
+        );
+        let source = PackSource::Directory(pack_dir.clone());
+        assert!(open_for_edit(pack_dir, source).is_err());
+    }
+
+    /// FR-009: an original per-image scaling override and a non-default pack-level
+    /// `default_scaling`/`fallback_color` are captured into `preserved` untouched.
+    #[test]
+    fn open_for_edit_captures_preserved_fields_not_exposed_by_this_screen() {
+        let dir = tempfile::tempdir().unwrap();
+        let pack_dir = dir.path().join("custom-scaling");
+        write_pack_dir(
+            &pack_dir,
+            r##"
+                schema_version = 1
+                name = "Custom Scaling"
+                default_scaling = "Fit"
+                fallback_color = "#112233"
+                [[images]]
+                file = "a.png"
+                anchor = "sunrise"
+                scaling = "Center"
+                [[images]]
+                file = "b.png"
+                anchor = "sunset"
+            "##,
+            &["a.png", "b.png"],
+        );
+        let source = PackSource::resolve(&pack_dir).unwrap();
+
+        let state = open_for_edit(pack_dir, source).unwrap();
+        let preserved = state.preserved.as_ref().unwrap();
+
+        assert_eq!(preserved.default_scaling, ScalingMode::Fit);
+        assert_eq!(preserved.fallback_color, Color { r: 0x11, g: 0x22, b: 0x33, a: 255 });
+        assert_eq!(preserved.per_image_scaling.get("a.png"), Some(&ScalingMode::Center));
+        assert_eq!(preserved.per_image_scaling.get("b.png"), None, "b.png inherits default_scaling, so it's not recorded as an override");
+    }
+
+    // --- Spec 012 US1 (T006/T007): build_draft/generate honor `preserved`/`name` ---
+
+    #[test]
+    fn build_draft_with_no_preserved_fields_matches_todays_add_flow_defaults() {
+        let mut rows = vec![image_row("a.png")];
+        rows[0].solar = Some(solar(SolarEventKind::Sunrise));
+        let draft = build_draft(&rows, AssignmentMode::SolarPeriod, "My Pack", "Fallback", "", None);
+
+        assert_eq!(draft.name, "My Pack");
+        assert_eq!(draft.default_scaling, ScalingMode::Fill);
+        assert_eq!(draft.fallback_color, Color { r: 0, g: 0, b: 0, a: 255 });
+        assert_eq!(draft.images[0].scaling, None);
+    }
+
+    #[test]
+    fn build_draft_with_preserved_fields_carries_them_forward_unchanged() {
+        let mut rows = vec![image_row("a.png"), image_row("b.png")];
+        rows[0].solar = Some(solar(SolarEventKind::Sunrise));
+        rows[1].solar = Some(solar(SolarEventKind::Sunset));
+        let mut per_image_scaling = HashMap::new();
+        per_image_scaling.insert("a.png".to_string(), ScalingMode::Center);
+        let preserved = PreservedManifestFields { default_scaling: ScalingMode::Fit, fallback_color: Color { r: 1, g: 2, b: 3, a: 255 }, per_image_scaling };
+
+        let draft = build_draft(&rows, AssignmentMode::SolarPeriod, "Kept Name", "Fallback", "", Some(&preserved));
+
+        assert_eq!(draft.default_scaling, ScalingMode::Fit);
+        assert_eq!(draft.fallback_color, Color { r: 1, g: 2, b: 3, a: 255 });
+        assert_eq!(draft.images.iter().find(|i| i.file == "a.png").unwrap().scaling, Some(ScalingMode::Center));
+        assert_eq!(draft.images.iter().find(|i| i.file == "b.png").unwrap().scaling, None);
+    }
+
+    #[test]
+    fn build_draft_falls_back_to_the_folder_name_when_name_is_blank() {
+        let mut rows = vec![image_row("a.png")];
+        rows[0].solar = Some(solar(SolarEventKind::Sunrise));
+        let draft = build_draft(&rows, AssignmentMode::SolarPeriod, "   ", "Folder Fallback", "", None);
+        assert_eq!(draft.name, "Folder Fallback");
+    }
+
+    /// T019 (generate_solar_mode_produces_a_pack_that_loads_back_as_configured) already
+    /// covers the add flow's full round trip; this covers the **edit** flow's own
+    /// round trip end to end: open_for_edit → change one row → generate() → the
+    /// manifest on disk reflects only that change, with no placement dialog at all.
+    #[test]
+    fn generate_on_an_edit_session_overwrites_the_manifest_directly_with_no_placement_dialog() {
+        let dir = tempfile::tempdir().unwrap();
+        let pack_dir = dir.path().join("pack");
+        write_pack_dir(
+            &pack_dir,
+            "schema_version = 1\nname = \"Pack\"\nauthor = \"Original Author\"\ndefault_scaling = \"Fill\"\nfallback_color = \"#000000\"\n\n[[images]]\nfile = \"a.png\"\nanchor = \"sunrise\"\n[[images]]\nfile = \"b.png\"\nanchor = \"sunset\"\n",
+            &["a.png", "b.png"],
+        );
+        let source = PackSource::resolve(&pack_dir).unwrap();
+        let mut state = open_for_edit(pack_dir.clone(), source).unwrap();
+
+        // Change only b.png's event, from sunset to solar noon.
+        let b_index = state.rows.iter().position(|r| r.file_name == "b.png").unwrap();
+        set_solar_event_by_index(&mut state, b_index, SOLAR_EVENTS.iter().position(|e| *e == SolarEventKind::SolarNoon).unwrap(), None);
+
+        let closed = generate(&mut state);
+
+        assert!(closed, "an edit session's successful Generate must report the wizard as fully done: {:?}", state.generate_error);
+        assert!(state.pending_placement.is_none(), "an edit session must never show the add flow's placement dialog");
+
+        let loaded = pack_loader::load_pack(&pack_dir).unwrap();
+        assert_eq!(loaded.author.as_deref(), Some("Original Author"), "author must be unchanged");
+        let a = loaded.pack.images().iter().find(|i| i.id.as_str() == "a.png").unwrap();
+        assert_eq!(a.anchor, TimeAnchor::solar(SolarEventKind::Sunrise, None), "a.png's assignment must be unchanged");
+        let b = loaded.pack.images().iter().find(|i| i.id.as_str() == "b.png").unwrap();
+        assert_eq!(b.anchor, TimeAnchor::solar(SolarEventKind::SolarNoon, None), "b.png must reflect the edit");
+    }
+
+    /// FR-007: a self-validation failure during an edit session must leave the
+    /// existing manifest.toml completely untouched — the same guarantee
+    /// `generate_blocked_by_a_duplicate_time_never_writes_a_manifest` already proves
+    /// for the add flow, proved here for the edit flow's own direct-write path.
+    #[test]
+    fn generate_on_an_edit_session_leaves_the_manifest_untouched_when_blocked_by_a_conflict() {
+        let dir = tempfile::tempdir().unwrap();
+        let pack_dir = dir.path().join("pack");
+        let original = "schema_version = 1\nname = \"Pack\"\ndefault_scaling = \"Fill\"\nfallback_color = \"#000000\"\n\n[[images]]\nfile = \"a.png\"\nanchor = \"sunrise\"\n[[images]]\nfile = \"b.png\"\nanchor = \"sunset\"\n";
+        write_pack_dir(&pack_dir, original, &["a.png", "b.png"]);
+        let source = PackSource::resolve(&pack_dir).unwrap();
+        let mut state = open_for_edit(pack_dir.clone(), source).unwrap();
+
+        // Force a conflict: both images now assigned to sunrise.
+        let b_index = state.rows.iter().position(|r| r.file_name == "b.png").unwrap();
+        set_solar_event_by_index(&mut state, b_index, SOLAR_EVENTS.iter().position(|e| *e == SolarEventKind::Sunrise).unwrap(), None);
+        assert!(state.conflict.is_some());
+
+        let closed = generate(&mut state);
+
+        assert!(!closed);
+        assert_eq!(std::fs::read_to_string(pack_dir.join(pack_loader::MANIFEST_FILE_NAME)).unwrap(), original, "the manifest on disk must be byte-for-byte unchanged");
+    }
+
+    // --- Spec 012 US3 (T011/T012): negative offsets and conflict detection behave
+    // identically whether the row came from `open` (add) or `open_for_edit` (edit). ---
+
+    /// T011: the exact same conflict-detection/mutator functions the add flow's own
+    /// `detect_conflict_solar_catches_identical_literal_assignments_without_a_location`
+    /// exercises, driven this time against a `State` that came from `open_for_edit` —
+    /// there is no separate "edit mode" branch anywhere in `detect_conflict`/
+    /// `toggle_solar_offset_sign`/`set_solar_offset_hours`/`set_solar_offset_minutes`
+    /// for this to accidentally miss (FR-005's "same interface" guarantee, made
+    /// concrete): they all take a plain `&mut State`/`&[ImageRow]`, with no knowledge
+    /// of `edit_target` at all.
+    #[test]
+    fn conflict_detection_behaves_identically_in_an_edit_session_as_in_the_add_flow() {
+        let dir = tempfile::tempdir().unwrap();
+        let pack_dir = dir.path().join("pack");
+        write_pack_dir(
+            &pack_dir,
+            "schema_version = 1\nname = \"Pack\"\ndefault_scaling = \"Fill\"\nfallback_color = \"#000000\"\n\n[[images]]\nfile = \"a.png\"\nanchor = \"sunrise\"\n[[images]]\nfile = \"b.png\"\nanchor = \"sunset\"\n",
+            &["a.png", "b.png"],
+        );
+        let source = PackSource::resolve(&pack_dir).unwrap();
+        let mut state = open_for_edit(pack_dir, source).unwrap();
+        assert!(state.conflict.is_none(), "sunrise and sunset don't conflict");
+
+        // Move b.png onto a.png's exact assignment (sunrise, no offset) — must be
+        // flagged, identically to how the add flow's own equivalent test asserts.
+        let b_index = state.rows.iter().position(|r| r.file_name == "b.png").unwrap();
+        let sunrise_index = SOLAR_EVENTS.iter().position(|e| *e == SolarEventKind::Sunrise).unwrap();
+        set_solar_event_by_index(&mut state, b_index, sunrise_index, None);
+        assert!(state.conflict.is_some(), "an edit session must catch a literal duplicate assignment exactly like the add flow does");
+
+        // Nudge b.png's offset away by 15 minutes — the conflict must clear, exactly
+        // as `toggle_solar_offset_sign`/`set_solar_offset_minutes` already behave for
+        // the add flow.
+        set_solar_offset_minutes(&mut state, b_index, 15, None);
+        assert!(state.conflict.is_none(), "changing one image's offset must clear the conflict, same as in the add flow");
+    }
+
+    /// T012: a negative offset set during an edit session is bounded to the same
+    /// ±12h magnitude `combine_offset` already enforces for the add flow —
+    /// `set_solar_offset_hours`/`toggle_solar_offset_sign` are the exact same
+    /// functions either flow calls, so this is a regression guard confirming the
+    /// shared-interface design didn't accidentally bypass that clamp for a
+    /// pre-filled (rather than freshly-added) row.
+    #[test]
+    fn negative_offset_set_during_an_edit_session_is_bounded_to_twelve_hours() {
+        let dir = tempfile::tempdir().unwrap();
+        let pack_dir = dir.path().join("pack");
+        write_pack_dir(
+            &pack_dir,
+            "schema_version = 1\nname = \"Pack\"\ndefault_scaling = \"Fill\"\nfallback_color = \"#000000\"\n\n[[images]]\nfile = \"a.png\"\nanchor = \"sunrise\"\n",
+            &["a.png"],
+        );
+        let source = PackSource::resolve(&pack_dir).unwrap();
+        let mut state = open_for_edit(pack_dir, source).unwrap();
+        let a_index = 0;
+
+        toggle_solar_offset_sign(&mut state, a_index, None); // now negative
+        set_solar_offset_hours(&mut state, a_index, 20, None); // attempt to exceed the cap
+        set_solar_offset_minutes(&mut state, a_index, 45, None); // attempt to exceed the cap
+
+        let assignment = state.rows[a_index].solar.unwrap();
+        assert!(assignment.offset_negative);
+        assert_eq!(assignment.offset_hours, 12, "hours must clamp to the same ±12h cap the add flow uses");
+        assert_eq!(assignment.offset_minutes, 0, "minutes must be forced to 0 once hours reaches the cap, same as the add flow");
+    }
 }
