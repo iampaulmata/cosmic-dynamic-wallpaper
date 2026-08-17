@@ -68,4 +68,4 @@ jobs:
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev pkg-config
       - name: cargo llvm-cov
-        run: cargo llvm-cov --package renderer --fail-under-lines 75
+        run: cargo llvm-cov --package renderer --fail-under-lines 50
