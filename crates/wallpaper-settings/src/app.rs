@@ -10,7 +10,7 @@ use cosmic::{executor, Core, Element};
 use schedule_engine::Location;
 use wallpaper_ipc::{effective_location, LocationConfigEntry, RendererConfig};
 
-use crate::{pack_display, pages};
+use crate::pages;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Page {
@@ -78,8 +78,11 @@ impl App {
     fn refresh_assignment(&mut self) {
         let renderer_config = RendererConfig::migrate_from_old_app_id(&self.renderer_config_store);
         let known_outputs = wallpaper_ipc::DbusClient::connect().and_then(|c| c.query_all()).map(|entries| entries.into_iter().map(|e| e.output).collect()).unwrap_or_default();
-        let available_packs = self.pack_registry.known_packs().into_iter().map(|e| e.source).collect();
-        self.assignment = pages::assignment::State { known_outputs, available_packs, current_config: renderer_config };
+        let known_packs = self.pack_registry.known_packs();
+        let available_packs = known_packs.iter().map(|e| e.source.clone()).collect();
+        let available_pack_display_names = known_packs.iter().map(|e| e.display_name.clone()).collect();
+        self.assignment =
+            pages::assignment::State { known_outputs, available_packs, available_pack_display_names, current_config: renderer_config };
     }
 
     /// The current/next thumbnails on the Timeline page (`pack_display::
@@ -142,8 +145,15 @@ impl cosmic::Application for App {
         let packs = pages::packs::State::load(&mut pack_registry);
         let renderer_config = RendererConfig::migrate_from_old_app_id(&renderer_config_store);
         let known_outputs = wallpaper_ipc::DbusClient::connect().and_then(|c| c.query_all()).map(|entries| entries.into_iter().map(|e| e.output).collect()).unwrap_or_default();
-        let available_packs = pack_registry.known_packs().into_iter().map(|e| e.source).collect();
-        let assignment = pages::assignment::State { known_outputs, available_packs, current_config: renderer_config.clone() };
+        let known_packs = pack_registry.known_packs();
+        let available_packs = known_packs.iter().map(|e| e.source.clone()).collect();
+        let available_pack_display_names = known_packs.iter().map(|e| e.display_name.clone()).collect();
+        let assignment = pages::assignment::State {
+            known_outputs,
+            available_packs,
+            available_pack_display_names,
+            current_config: renderer_config.clone(),
+        };
         let location = pages::location::State::load(LocationConfigEntry::migrate_from_old_app_id(&location_config_store));
         let timeline_location = effective_location(&LocationConfigEntry::migrate_from_old_app_id(&location_config_store));
         let timeline = pages::timeline::State::load(renderer_config.clone(), timeline_location);
@@ -252,6 +262,42 @@ impl cosmic::Application for App {
             }
             Message::Packs(pages::packs::Message::RemoveCancelled) => {
                 pages::packs::cancel_removal(&mut self.packs);
+            }
+            // Spec 012 US1 (contracts/pack-builder-edit-flow.md): a `Directory` row's
+            // edit icon. `open_for_edit` is synchronous (no async file-chooser step,
+            // unlike Add — the folder is already known) — `Ok` opens the wizard
+            // exactly like a fresh `AddResult` success does; `Err` (the pack doesn't
+            // currently load, or has a solar offset this screen can't represent —
+            // research.md R3) surfaces inline on the Packs screen instead of opening
+            // anything (FR-019).
+            Message::Packs(pages::packs::Message::EditRequested(source)) => {
+                match pages::pack_builder::open_for_edit(source.path().to_path_buf(), source.clone()) {
+                    Ok(state) => {
+                        self.packs.edit_error = None;
+                        self.pack_builder = Some(state);
+                    }
+                    Err(reason) => {
+                        self.packs.edit_error = Some(reason);
+                    }
+                }
+            }
+            // Spec 012 FR-010 (contracts/packs-screen-icon-actions.md): a `StaticFile`
+            // row's edit icon opens the rename-only dialog instead of the wizard.
+            // This module (not `pages::packs`) looks up the current `display_name` —
+            // `packs::State` never holds a `Registry` reference of its own.
+            Message::Packs(pages::packs::Message::RenameRequested(source)) => {
+                let current_name =
+                    self.pack_registry.known_packs().into_iter().find(|e| e.source == source).and_then(|e| e.display_name);
+                pages::packs::request_rename(&mut self.packs, source, current_name);
+            }
+            Message::Packs(pages::packs::Message::RenameNameChanged(name)) => {
+                pages::packs::set_rename_name(&mut self.packs, name);
+            }
+            Message::Packs(pages::packs::Message::RenameConfirmed) => {
+                pages::packs::confirm_rename(&mut self.packs, &mut self.pack_registry);
+            }
+            Message::Packs(pages::packs::Message::RenameCancelled) => {
+                pages::packs::cancel_rename(&mut self.packs);
             }
             Message::Assignment(pages::assignment::Message::ToggleSameEverywhere(toggled_on)) => {
                 let default_pack = self.assignment.available_packs.first().cloned();
@@ -363,9 +409,23 @@ impl cosmic::Application for App {
                     pages::pack_builder::set_author(state, author);
                 }
             }
-            Message::PackBuilder(pages::pack_builder::Message::GenerateRequested) => {
+            Message::PackBuilder(pages::pack_builder::Message::NameChanged(name)) => {
                 if let Some(state) = self.pack_builder.as_mut() {
-                    pages::pack_builder::generate(state);
+                    pages::pack_builder::set_name(state, name);
+                }
+            }
+            Message::PackBuilder(pages::pack_builder::Message::GenerateRequested) => {
+                // Spec 012 US1 (research.md R6): `generate()` now returns `true` only
+                // when it fully completed an *edit* session's save — there's no
+                // placement dialog for an edit to wait for afterward, so a `true` here
+                // is this session's terminal action, exactly like `MoveRequested`/
+                // `KeepRequested` closing the wizard below. The add flow's own
+                // `generate()` call always returns `false` here; it still closes only
+                // later, via those same `MoveRequested`/`KeepRequested` handlers.
+                let closed = self.pack_builder.as_mut().map(pages::pack_builder::generate).unwrap_or(false);
+                if closed {
+                    self.pack_builder = None;
+                    self.packs = pages::packs::State::load(&mut self.pack_registry);
                 }
             }
             Message::PackBuilder(pages::pack_builder::Message::MoveRequested) => {
@@ -433,8 +493,20 @@ impl cosmic::Application for App {
                 return Some(dialog.map(Message::PackBuilder));
             }
         }
+        // Spec 012 FR-010: the rename-only dialog, checked next — mutually exclusive
+        // with the removal dialog below in practice (a pack's row only ever has one
+        // dialog open against it at a time), but given a defined precedence either way.
+        if let Some(dialog) = pages::packs::rename_dialog(&self.packs) {
+            return Some(dialog.map(Message::Packs));
+        }
         let source = self.packs.pending_removal.as_ref()?;
-        let name = pack_display::resolve_pack_name(source).unwrap_or_else(|| "(unnamed pack)".to_string());
+        let name = self
+            .packs
+            .rows
+            .iter()
+            .find(|row| &row.source == source)
+            .map(|row| row.name.clone())
+            .unwrap_or_else(|| "(unnamed pack)".to_string());
         Some(
             widget::dialog()
                 .title("Remove pack?")

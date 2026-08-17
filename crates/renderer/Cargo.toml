@@ -1,6 +1,6 @@
 [package]
 name = "renderer"
-version = "0.2.0"
+version = "0.2.2"
 edition.workspace = true
 license.workspace = true
 description = "Wallpaper renderer daemon (cosmic-wallpaperd) for the Cosmic Dynamic Wallpaper project — see README.md"
@@ -64,14 +64,19 @@ expect_used = "deny"
 
 [package.metadata.deb]
 name = "cosmic-dynamic-wallpaper"
-# Debian revision "1" for the 0.2.0 upstream version — the first release out of the
-# initial 0.1.0 beta line, so the revision counter resets fresh (normal Debian
-# versioning convention: each new upstream version starts its own revision series).
-# 0.1.0's own revisions: "1" was the initial cosmic-dynamic-wallpaper artifact under
-# the new package name (spec 009-project-rename); "2" fixed a real bug found via live
-# upgrade testing — the bundled starter pack's registry entry was left pointing at the
-# pre-rename system path. Both are distinct from the old "dynamic-wallpaper" name's own
-# separate beta.1-3 revisions before the rename.
+# Debian revision "1" for the 0.2.2 upstream version — a minor revision (spec 012:
+# edit existing packs, pencil/trash icon actions, pack/image display names), so the
+# revision counter resets fresh (normal Debian versioning convention: each new
+# upstream version starts its own revision series). Note: "0.2.1" was tagged on an
+# abandoned line (a version bump for the app-icon work that never actually merged to
+# main — see commit 1d8eba4, unreachable from history) and was never released, so this
+# jumps straight to 0.2.2 to avoid reusing that tag. 0.2.0's own revision was "1" (the
+# first release out of the initial 0.1.0 beta line). 0.1.0's own revisions: "1" was the
+# initial cosmic-dynamic-wallpaper artifact under the new package name (spec
+# 009-project-rename); "2" fixed a real bug found via live upgrade testing — the
+# bundled starter pack's registry entry was left pointing at the pre-rename system
+# path. All distinct from the old "dynamic-wallpaper" name's own separate beta.1-3
+# revisions before the rename.
 revision = "1"
 maintainer = "iampaulmata <paul.mata42@gmail.com>"
 copyright = "2026, iampaulmata <paul.mata42@gmail.com>"

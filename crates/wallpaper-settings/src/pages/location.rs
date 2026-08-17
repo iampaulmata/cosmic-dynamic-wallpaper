@@ -53,9 +53,9 @@ impl State {
 
 fn mode_label(mode: LocationMode) -> &'static str {
     match mode {
-        LocationMode::Manual => "Manual",
-        LocationMode::Automatic => "Automatic (portal)",
         LocationMode::IpGeolocation => "IP-geolocation",
+        LocationMode::Automatic => "Automatic (portal)",
+        LocationMode::Manual => "Manual",
     }
 }
 
@@ -114,25 +114,16 @@ fn portal_status_label(status: &ResolutionStatus) -> String {
 
 pub fn view(state: &State) -> Element<'_, Message> {
     let mut mode_section = widget::settings::section().title("Location mode");
-    for mode in [LocationMode::Manual, LocationMode::Automatic, LocationMode::IpGeolocation] {
+    for mode in [LocationMode::IpGeolocation, LocationMode::Automatic, LocationMode::Manual] {
         let radio = widget::radio("", mode, Some(state.entry.mode), Message::SelectMode);
         if mode == LocationMode::IpGeolocation {
-            // FR-007: discoverable by hover, before the option is selected.
-            let with_tooltip = widget::tooltip(radio, widget::text::body(IP_GEOLOCATION_DISCLOSURE), widget::tooltip::Position::Bottom);
-            // FR-008: also discoverable by tap/click, for input with no hover
-            // capability — independent of the tooltip above.
             let info_icon = widget::button::icon(widget::icon::from_name("dialog-information-symbolic"))
                 .on_press(Message::ToggleIpDisclosure);
-            // Info icon goes to the left of the radio button (not the usual
-            // convention) so the radio itself stays aligned with the other rows'
-            // radio buttons instead of being pushed out of line. The icon button is
-            // taller than the bare radio, so the row needs explicit vertical
-            // centering or the radio sits above-center next to it.
             let row = widget::row::with_capacity(2)
                 .spacing(cosmic::theme::spacing().space_xs)
                 .align_y(cosmic::iced::Alignment::Center)
                 .push(info_icon)
-                .push(with_tooltip);
+                .push(radio);
             mode_section = mode_section.add(widget::settings::item(mode_label(mode), row));
             if state.show_ip_disclosure {
                 mode_section = mode_section.add(widget::text::caption(IP_GEOLOCATION_DISCLOSURE));

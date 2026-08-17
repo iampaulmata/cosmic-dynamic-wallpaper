@@ -1,6 +1,6 @@
 [package]
 name = "generate-starter-pack"
-version = "0.2.0"
+version = "0.2.2"
 edition.workspace = true
 license.workspace = true
 description = "Maintainer-only, one-time-run tool that produces the bundled starter pack's static images (spec 7 US2, research.md R5) — never a runtime dependency of wallpaperd/wallpaperctl/wallpaper-settings"
