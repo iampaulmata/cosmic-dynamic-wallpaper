@@ -27,6 +27,28 @@ pub fn resolve_pack_name(source: &PackSource) -> Option<String> {
     }
 }
 
+/// Spec 012 FR-015/FR-016/SC-006: layers a registry-level `display_name` override
+/// (set via the rename-only dialog for a standalone image pack — research.md R1; a
+/// directory pack's display name instead lives in its own manifest `name` field,
+/// already what `resolve_pack_name` reads) on top of `resolve_pack_name`'s existing
+/// resolution. `override_name` is expected already normalized by its caller — never
+/// `Some("")`/whitespace-only (contracts/pack-registry-display-name.md puts that
+/// responsibility on the GUI layer, not `Registry` or this function) — but this
+/// defensively ignores a blank one anyway rather than ever showing an empty label,
+/// matching the Edge Cases rule that a whitespace-only name behaves like an unset one.
+/// Every caller that already has a full `PackRegistryEntry` in hand should use this
+/// instead of `resolve_pack_name` directly, so a custom name shows up everywhere a
+/// pack's name is shown, not just on the Packs screen (SC-006).
+pub fn resolve_pack_display_name(source: &PackSource, override_name: Option<&str>) -> Option<String> {
+    if let Some(name) = override_name {
+        let trimmed = name.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+    resolve_pack_name(source)
+}
+
 /// The pack's author/license note, if the manifest declares one (a static pack, with
 /// no manifest, never has one). `None` both when there's no note and when the pack
 /// can't be loaded at all — callers show a placeholder for either case.
@@ -146,6 +168,66 @@ mod tests {
         let source = PackSource::Directory(dir.path().to_path_buf());
 
         assert_eq!(resolve_pack_name(&source), None);
+    }
+
+    // --- Spec 012 T016: resolve_pack_display_name ---
+
+    #[test]
+    fn resolve_pack_display_name_prefers_a_static_file_pack_override_over_its_file_stem() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("sunrise.png");
+        image::RgbImage::new(2, 2).save(&file).unwrap();
+        let source = PackSource::resolve(&file).unwrap();
+
+        assert_eq!(resolve_pack_display_name(&source, Some("Golden Hour")), Some("Golden Hour".to_string()));
+    }
+
+    #[test]
+    fn resolve_pack_display_name_falls_through_to_resolve_pack_name_when_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("sunrise.png");
+        image::RgbImage::new(2, 2).save(&file).unwrap();
+        let source = PackSource::resolve(&file).unwrap();
+
+        assert_eq!(resolve_pack_display_name(&source, None), Some("sunrise".to_string()));
+    }
+
+    /// Edge Cases: a whitespace-only override behaves like an unset one, defensively,
+    /// even though callers are expected to have already normalized it away.
+    #[test]
+    fn resolve_pack_display_name_ignores_a_blank_override() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("sunrise.png");
+        image::RgbImage::new(2, 2).save(&file).unwrap();
+        let source = PackSource::resolve(&file).unwrap();
+
+        assert_eq!(resolve_pack_display_name(&source, Some("   ")), Some("sunrise".to_string()));
+    }
+
+    /// A directory pack's display name still comes from its manifest, not from a
+    /// registry-level override — research.md R1: that field is never set for a
+    /// `Directory` entry by this feature's own UI, but this confirms the read side
+    /// doesn't accidentally let one take priority if it somehow were set.
+    #[test]
+    fn resolve_pack_display_name_for_a_directory_pack_still_prefers_the_manifest_name_when_no_override() {
+        let dir = tempfile::tempdir().unwrap();
+        let pack_dir = dir.path().join("mountains");
+        write_pack_dir(
+            &pack_dir,
+            r##"
+                schema_version = 1
+                name = "Mountains"
+                default_scaling = "Fill"
+                fallback_color = "#000000"
+                [[images]]
+                file = "noon.png"
+                anchor = "solar_noon"
+            "##,
+            &["noon.png"],
+        );
+        let source = PackSource::resolve(&pack_dir).unwrap();
+
+        assert_eq!(resolve_pack_display_name(&source, None), Some("Mountains".to_string()));
     }
 
     #[test]

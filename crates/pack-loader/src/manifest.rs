@@ -148,15 +148,23 @@ pub struct ManifestDraft {
     pub images: Vec<ManifestDraftImage>,
 }
 
-/// A single image entry in a [`ManifestDraft`] — deliberately has no `scaling` field
-/// (unlike [`ManifestImage`]): a wizard-generated draft never sets a per-image scaling
-/// override (spec 010 research.md R10).
+/// A single image entry in a [`ManifestDraft`]. A wizard-generated *new* pack never
+/// sets `scaling` (spec 010 research.md R10 — always `None`, inheriting the pack's
+/// `default_scaling`); spec 012's edit flow is the first caller that ever sets it,
+/// specifically to carry an existing per-image override forward unchanged when only
+/// the schedule/author/name is what the user actually edited (spec 012 FR-009,
+/// research.md R5 — corrected from that research note's original assumption that no
+/// field would be needed here at all).
 #[derive(Debug, Clone)]
 pub struct ManifestDraftImage {
     /// File name, relative to the pack directory.
     pub file: String,
     /// When this image becomes active.
     pub anchor: TimeAnchor,
+    /// Per-image scaling override, if any — `None` inherits the pack's
+    /// `default_scaling` (omitted from the rendered TOML entirely, matching
+    /// [`ManifestDraft::author`]'s own "omit when unset" rule).
+    pub scaling: Option<ScalingMode>,
 }
 
 /// The raw `#[derive(Deserialize)]` shape read directly from TOML, before any semantic
@@ -287,6 +295,8 @@ struct RawManifestOut {
 struct RawManifestImageOut {
     file: String,
     anchor: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scaling: Option<String>,
 }
 
 /// Render a [`ManifestDraft`] into `manifest.toml` text (spec 010 contracts/
@@ -305,7 +315,11 @@ pub fn render(draft: &ManifestDraft) -> String {
         images: draft
             .images
             .iter()
-            .map(|img| RawManifestImageOut { file: img.file.clone(), anchor: format_anchor(&img.anchor) })
+            .map(|img| RawManifestImageOut {
+                file: img.file.clone(),
+                anchor: format_anchor(&img.anchor),
+                scaling: img.scaling.map(|s| format_scaling(s).to_string()),
+            })
             .collect(),
     };
     // `RawManifestOut`'s fields are all plain, always-serializable types (String/u32/a
@@ -551,6 +565,7 @@ fallback_color = "#000000"
             images: vec![ManifestDraftImage {
                 file: "dawn.jpg".to_string(),
                 anchor: TimeAnchor::solar(SolarEventKind::Sunrise, None),
+                scaling: None,
             }],
         };
 
@@ -574,6 +589,7 @@ fallback_color = "#000000"
             images: vec![ManifestDraftImage {
                 file: "a.png".to_string(),
                 anchor: TimeAnchor::clock(NaiveTime::from_hms_opt(12, 0, 0).unwrap()),
+                scaling: None,
             }],
         };
 
@@ -597,10 +613,12 @@ fallback_color = "#000000"
                 ManifestDraftImage {
                     file: "a.png".to_string(),
                     anchor: TimeAnchor::solar(SolarEventKind::Sunrise, None),
+                    scaling: None,
                 },
                 ManifestDraftImage {
                     file: "b.png".to_string(),
                     anchor: TimeAnchor::solar(SolarEventKind::Sunset, Some(TimeDelta::minutes(-30))),
+                    scaling: None,
                 },
             ],
         };
@@ -619,5 +637,38 @@ fallback_color = "#000000"
             parsed.images[1].anchor,
             TimeAnchor::solar(SolarEventKind::Sunset, Some(TimeDelta::minutes(-30)))
         );
+    }
+
+    /// Spec 012 FR-009/research.md R5: a `ManifestDraftImage.scaling` override
+    /// round-trips through `render`/`parse` unchanged, and `None` still omits the
+    /// `scaling` key entirely rather than writing an empty/default one — the edit
+    /// flow's own preserved-field carry-forward depends on both halves of this.
+    #[test]
+    fn render_round_trips_a_per_image_scaling_override_and_omits_it_when_none() {
+        let draft = ManifestDraft {
+            name: "Mixed Scaling".to_string(),
+            author: None,
+            default_scaling: ScalingMode::Fill,
+            fallback_color: Color { r: 0, g: 0, b: 0, a: 255 },
+            images: vec![
+                ManifestDraftImage {
+                    file: "a.png".to_string(),
+                    anchor: TimeAnchor::solar(SolarEventKind::Sunrise, None),
+                    scaling: Some(ScalingMode::Center),
+                },
+                ManifestDraftImage {
+                    file: "b.png".to_string(),
+                    anchor: TimeAnchor::solar(SolarEventKind::Sunset, None),
+                    scaling: None,
+                },
+            ],
+        };
+
+        let text = render(&draft);
+        assert!(text.contains("scaling = \"Center\""), "explicit override must be written: {text}");
+        let parsed = parse(&text, std::path::Path::new("manifest.toml")).unwrap();
+
+        assert_eq!(parsed.images[0].scaling, Some(ScalingMode::Center));
+        assert_eq!(parsed.images[1].scaling, None, "an image with no override must parse back to None, not Fill");
     }
 }

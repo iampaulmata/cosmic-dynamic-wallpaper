@@ -68,13 +68,21 @@ pub enum Message {
 pub struct State {
     pub known_outputs: Vec<String>,
     pub available_packs: Vec<PackSource>,
+    /// Spec 012 SC-006: each pack's registry-level display-name override, same order/
+    /// index as `available_packs` — `app.rs` builds both from the same
+    /// `Registry::known_packs()` pass. `None` at an index means that pack has no
+    /// override set (falls back to `pack_display::resolve_pack_name`'s usual
+    /// resolution, same as before this field existed).
+    pub available_pack_display_names: Vec<Option<String>>,
     pub current_config: RendererConfig,
 }
 
 /// User Story 4 (spec.md FR-010/FR-011, "Assignment page shows pack names, not
 /// paths") is satisfied here by construction, not by a separate code path: every
 /// dropdown's option labels *and* its selected-value display are `pack_display::
-/// resolve_pack_name` results — there is deliberately no `source.path().display()`
+/// resolve_pack_display_name` results (spec 012 SC-006 extended this to also honor a
+/// pack's custom display name, not just its manifest/file-derived one) — there is
+/// deliberately no `source.path().display()`
 /// or `current.path().display()` anywhere below (plan.md finding 3, contracts/
 /// gui-usability-improvements.md). If you're looking for US4's own implementation,
 /// this is it.
@@ -90,7 +98,10 @@ pub fn view(state: &State) -> Element<'_, Message> {
     let labels: Vec<String> = state
         .available_packs
         .iter()
-        .map(|s| pack_display::resolve_pack_name(s).unwrap_or_else(|| "(unnamed pack)".to_string()))
+        .zip(state.available_pack_display_names.iter())
+        .map(|(s, override_name)| {
+            pack_display::resolve_pack_display_name(s, override_name.as_deref()).unwrap_or_else(|| "(unnamed pack)".to_string())
+        })
         .collect();
 
     let enabled = state.current_config.same_pack_everywhere.is_some();
