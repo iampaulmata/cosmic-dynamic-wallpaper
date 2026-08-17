@@ -40,7 +40,12 @@ pub fn packs(registry: &mut Registry, json: bool) -> String {
         } else {
             entries
                 .iter()
-                .map(|e| format!("{}\t{}\t{}", e.name, e.source, e.status))
+                // FR-018 (research.md R14): `e.name` is untrusted, pack-author-
+                // controlled data — sanitized here, in the human-readable rendering
+                // closure only, so it can never masquerade as extra tab-delimited
+                // rows. `e.source`/`e.status` are this program's own values, not
+                // untrusted manifest content.
+                .map(|e| format!("{}\t{}\t{}", output::sanitize_for_tsv(&e.name), e.source, e.status))
                 .collect::<Vec<_>>()
                 .join("\n")
         }
@@ -85,6 +90,37 @@ mod tests {
         let out = packs(&mut registry, false);
         assert!(out.contains("known"));
         assert!(out.contains(&file.file_name().unwrap().to_string_lossy().to_string()));
+    }
+
+    /// Spec 011 US5 FR-018 (research.md R14) — the audit's own reproduction: a pack
+    /// whose manifest `name` contains a tab and a newline must not render as extra
+    /// fake rows in the human-readable output; `--json` must still carry the raw
+    /// value verbatim (its own string escaping already makes structural injection
+    /// impossible, and downstream JSON consumers expect the untouched value).
+    #[test]
+    fn tab_newline_escaped_in_human_output_but_not_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let pack_dir = dir.path().join("evil-pack");
+        std::fs::create_dir(&pack_dir).unwrap();
+        image::RgbImage::new(2, 2).save(pack_dir.join("a.png")).unwrap();
+        std::fs::write(
+            pack_dir.join(pack_loader::MANIFEST_FILE_NAME),
+            "schema_version = 1\nname = \"evil\\tDP-3\\tknown\\nfake-row\"\ndefault_scaling = \"Fill\"\nfallback_color = \"#000000\"\n\n[[images]]\nfile = \"a.png\"\nanchor = \"sunrise\"\n",
+        )
+        .unwrap();
+
+        let registry_dir = tempfile::tempdir().unwrap();
+        let mut registry = Registry::open_at(registry_dir.path()).unwrap();
+        registry.register(pack_loader::PackSource::resolve(&pack_dir).unwrap()).unwrap();
+
+        let human = packs(&mut registry, false);
+        assert_eq!(human.lines().count(), 1, "a crafted name must not fabricate extra rows:\n{human}");
+        // Exactly the two real `name\tsource\tstatus` field-separator tabs remain —
+        // none from the (now-sanitized) name field itself.
+        assert_eq!(human.matches('\t').count(), 2, "unexpected tab count in: {human:?}");
+
+        let json = packs(&mut registry, true);
+        assert!(json.contains("evil\\tDP-3\\tknown\\nfake-row"), "--json must still carry the raw value, JSON-escaped: {json}");
     }
 
     /// Scenario 4: `list outputs` fails fast with `DaemonUnreachable` when no daemon is

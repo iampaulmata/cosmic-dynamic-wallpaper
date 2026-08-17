@@ -25,6 +25,7 @@ use stunclient::StunClient;
 
 use schedule_engine::Location;
 
+use crate::backoff::{next_backoff, INITIAL_BACKOFF};
 use crate::config::{LocationConfigEntry, ResolutionStatus};
 
 /// Public STUN server used for public-IP discovery (research.md R4) — the same
@@ -39,18 +40,6 @@ pub const STUN_TIMEOUT: Duration = Duration::from_secs(5);
 /// Public-IP cache TTL (research.md R4) — this external touchpoint happens at most a
 /// few times a day, not per solar-event resolution.
 pub const PUBLIC_IP_CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
-
-/// Exponential backoff bounds after a failed resolution attempt — same shape as
-/// `portal_location.rs`'s (spec 6 research.md R6): never a tight loop, self-recovers
-/// without the user needing to manually toggle the mode off and on.
-pub const INITIAL_BACKOFF: Duration = Duration::from_secs(30);
-/// The backoff ceiling — never waited longer than this between retries.
-pub const MAX_BACKOFF: Duration = Duration::from_secs(300);
-
-/// The next backoff delay after a failed attempt — doubles, capped at [`MAX_BACKOFF`].
-pub fn next_backoff(current: Duration) -> Duration {
-    current.saturating_mul(2).min(MAX_BACKOFF)
-}
 
 /// The well-known system path the bundled `.mmdb` database is installed to — a
 /// release-process download (README.md's "IP-geolocation database" section), never
@@ -144,10 +133,59 @@ pub fn lookup_location(mmdb_path: &Path, ip: IpAddr) -> Result<Location, String>
     Location::new(latitude, longitude).map_err(|e| format!("IP-geolocation database returned an invalid location: {e}"))
 }
 
+/// Sanity bound on a single IP-geolocation jump between consecutive successful
+/// resolutions (spec 011 US7 FR-031, research.md R26) — the audit's own suggested
+/// mitigation for a forged STUN reply: a lone implausible jump (say, two continents
+/// apart within one resolution interval) is rejected rather than applied, even though
+/// it would otherwise validate cleanly through [`Location::new`]. ~2000 km is generous
+/// relative to any real short-notice relocation (a flight, a move) while still catching
+/// the threat model described — a forged UDP reply pointing at an arbitrary location.
+pub const MAX_PLAUSIBLE_LOCATION_JUMP_KM: f64 = 2000.0;
+
+/// Great-circle distance between two locations, in kilometers (haversine formula) —
+/// only used by [`MAX_PLAUSIBLE_LOCATION_JUMP_KM`]'s plausibility check; not exposed
+/// more broadly since no other part of this project currently needs a distance
+/// calculation.
+fn haversine_km(a: Location, b: Location) -> f64 {
+    const EARTH_RADIUS_KM: f64 = 6371.0;
+    let (lat1, lat2) = (a.latitude().to_radians(), b.latitude().to_radians());
+    let d_lat = (b.latitude() - a.latitude()).to_radians();
+    let d_lon = (b.longitude() - a.longitude()).to_radians();
+    let h = (d_lat / 2.0).sin().powi(2) + lat1.cos() * lat2.cos() * (d_lon / 2.0).sin().powi(2);
+    2.0 * EARTH_RADIUS_KM * h.sqrt().asin()
+}
+
 /// Validate `location` and record a successful resolution — mirrors
 /// `portal_location::apply_reading`'s exact posture for the `ip_*` fields instead of
-/// `automatic_*`.
+/// `automatic_*`, plus [`MAX_PLAUSIBLE_LOCATION_JUMP_KM`]'s plausibility bound (FR-031,
+/// research.md R26): a new reading that implies an implausible jump from the most
+/// recent previously-trusted `ip_location` is logged and skipped — `entry` is left
+/// unchanged — rather than applied outright.
+///
+/// The very first IP-geolocation resolution (`ip_location` still `None`) falls back to
+/// checking against `entry.location` — the user's own manually-entered value, if any —
+/// instead of applying unconditionally (spec 011 adversarial re-review finding 5): a
+/// forged reply timed for exactly that first resolution previously bypassed this check
+/// entirely and became the new permanently-trusted baseline. Only when *neither*
+/// `ip_location` nor a manual `location` exists at all (nothing this process has ever
+/// trusted to compare against) does a reading still apply unchecked — there is no
+/// baseline to validate it against in that case.
 pub fn apply_reading(entry: &mut LocationConfigEntry, location: Location) {
+    if let Some(previous) = entry.ip_location.or(entry.location) {
+        let jump_km = haversine_km(previous, location);
+        if jump_km > MAX_PLAUSIBLE_LOCATION_JUMP_KM {
+            tracing::warn!(
+                jump_km,
+                max_plausible_km = MAX_PLAUSIBLE_LOCATION_JUMP_KM,
+                previous_latitude = previous.latitude(),
+                previous_longitude = previous.longitude(),
+                new_latitude = location.latitude(),
+                new_longitude = location.longitude(),
+                "rejected an implausible IP-geolocation jump — keeping the previous trusted location"
+            );
+            return;
+        }
+    }
     entry.ip_location = Some(location);
     entry.ip_status = ResolutionStatus::Resolved;
 }
@@ -299,6 +337,67 @@ mod tests {
         assert_eq!(entry.ip_location, Some(location));
     }
 
+    /// Spec 011 US7 FR-031 (research.md R26) — the audit's own threat model: a single
+    /// forged STUN reply causing one implausible jump is rejected, keeping the
+    /// previous trusted location, rather than applied outright.
+    #[test]
+    fn apply_reading_rejects_an_implausible_jump_from_a_forged_reply() {
+        let mut entry = LocationConfigEntry::default();
+        let real = Location::new(45.5019, -73.5674).unwrap(); // Montreal
+        apply_reading(&mut entry, real);
+        assert_eq!(entry.ip_location, Some(real));
+
+        // A forged reply claiming Sydney, Australia — ~16,700 km away, clearly
+        // implausible as a follow-up resolution moments later.
+        let forged = Location::new(-33.8688, 151.2093).unwrap();
+        apply_reading(&mut entry, forged);
+
+        assert_eq!(entry.ip_location, Some(real), "an implausible jump must be rejected, not applied");
+        assert_eq!(entry.ip_status, ResolutionStatus::Resolved);
+    }
+
+    /// A genuinely plausible jump (a real short-notice relocation, or simply two
+    /// nearby ISP exit points) is accepted, not caught by the bound meant for the
+    /// forged-reply threat model above.
+    #[test]
+    fn apply_reading_accepts_a_plausible_nearby_jump() {
+        let mut entry = LocationConfigEntry::default();
+        let first = Location::new(45.5019, -73.5674).unwrap(); // Montreal
+        apply_reading(&mut entry, first);
+
+        let nearby = Location::new(40.7128, -74.006).unwrap(); // New York, ~500 km away
+        apply_reading(&mut entry, nearby);
+
+        assert_eq!(entry.ip_location, Some(nearby));
+        assert_eq!(entry.ip_status, ResolutionStatus::Resolved);
+    }
+
+    /// With no `ip_location` *and* no manual `location` at all — nothing this process
+    /// has ever trusted — the very first resolution has nothing to compare against, so
+    /// it always applies.
+    #[test]
+    fn apply_reading_always_accepts_the_first_resolution_with_no_baseline_at_all() {
+        let mut entry = LocationConfigEntry::default();
+        let far = Location::new(-33.8688, 151.2093).unwrap(); // Sydney
+        apply_reading(&mut entry, far);
+        assert_eq!(entry.ip_location, Some(far));
+    }
+
+    /// Spec 011 adversarial re-review finding 5 — the audit's own threat model
+    /// extended: a forged reply timed for the very first IP-geolocation resolution
+    /// (before any `ip_location` baseline exists) must still be checked against a
+    /// manually-entered `location`, if the user already has one, instead of bypassing
+    /// the plausibility check entirely.
+    #[test]
+    fn apply_reading_checks_the_first_resolution_against_an_existing_manual_location() {
+        let mut entry = LocationConfigEntry { location: Some(Location::new(45.5019, -73.5674).unwrap()), ..Default::default() }; // Montreal
+        let forged = Location::new(-33.8688, 151.2093).unwrap(); // Sydney — ~16,700 km away
+
+        apply_reading(&mut entry, forged);
+
+        assert_eq!(entry.ip_location, None, "an implausible first reading must be rejected when a manual location exists to check it against");
+    }
+
     /// T048: the public-IP cache respects its 24-hour TTL — fresh just under the
     /// boundary, stale just at/over it.
     #[test]
@@ -312,14 +411,6 @@ mod tests {
         assert!(!cache.is_fresh(now + PUBLIC_IP_CACHE_TTL + Duration::from_secs(1)));
     }
 
-    /// Backoff doubles and caps, same contract as `portal_location.rs`'s identical
-    /// bound — never a tight loop.
-    #[test]
-    fn next_backoff_doubles_and_caps() {
-        let mut backoff = INITIAL_BACKOFF;
-        for _ in 0..10 {
-            backoff = next_backoff(backoff);
-        }
-        assert_eq!(backoff, MAX_BACKOFF);
-    }
+    // `next_backoff`'s doubling/capping coverage now lives in `backoff.rs` (spec 011
+    // US8 FR-045) — deduplicated from this module and `portal_location.rs`.
 }

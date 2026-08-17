@@ -1,0 +1,8 @@
+schema_version = 1
+name = "Absolute Path Attempt Pack"
+default_scaling = "Fill"
+fallback_color = "#000000"
+
+[[images]]
+file = "/etc/passwd"
+anchor = "sunrise"

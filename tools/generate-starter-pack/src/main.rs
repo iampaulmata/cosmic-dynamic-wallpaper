@@ -23,17 +23,20 @@
 use std::path::{Path, PathBuf};
 
 use image::{Rgb, RgbImage};
+use pack_loader::{render as render_manifest, Color, ManifestDraft, ManifestDraftImage, ScalingMode};
+use schedule_engine::{SolarEventKind, TimeAnchor};
 
 const WIDTH: u32 = 1920;
 const HEIGHT: u32 = 1080;
 
-/// One frame of the day cycle: its anchor (spec 2 manifest anchor grammar), output
-/// file name, top/bottom sky gradient colors, and an optional glow (position as a
-/// fraction of image height, color, radius as a fraction of image width) standing in
-/// for the sun/moon — deliberately simple procedural shapes, not an attempt at
-/// photorealism.
+/// One frame of the day cycle: its anchor (spec 1's [`TimeAnchor`], reused verbatim —
+/// see [`manifest_toml`]'s doc comment for why this tool no longer hand-builds the
+/// on-disk anchor string itself), output file name, top/bottom sky gradient colors, and
+/// an optional glow (position as a fraction of image height, color, radius as a
+/// fraction of image width) standing in for the sun/moon — deliberately simple
+/// procedural shapes, not an attempt at photorealism.
 struct Frame {
-    anchor: &'static str,
+    anchor: TimeAnchor,
     file: &'static str,
     top: Rgb<u8>,
     bottom: Rgb<u8>,
@@ -50,56 +53,56 @@ struct Glow {
 fn frames() -> Vec<Frame> {
     vec![
         Frame {
-            anchor: "astronomical_dawn",
+            anchor: TimeAnchor::solar(SolarEventKind::AstronomicalDawn, None),
             file: "01-astronomical-dawn.png",
             top: Rgb([8, 10, 28]),
             bottom: Rgb([28, 24, 58]),
             glow: None,
         },
         Frame {
-            anchor: "civil_dawn",
+            anchor: TimeAnchor::solar(SolarEventKind::CivilDawn, None),
             file: "02-civil-dawn.png",
             top: Rgb([30, 34, 74]),
             bottom: Rgb([120, 90, 110]),
             glow: Some(Glow { y_fraction: 1.05, color: Rgb([255, 190, 140]), radius_fraction: 0.55 }),
         },
         Frame {
-            anchor: "sunrise",
+            anchor: TimeAnchor::solar(SolarEventKind::Sunrise, None),
             file: "03-sunrise.png",
             top: Rgb([120, 150, 210]),
             bottom: Rgb([255, 170, 110]),
             glow: Some(Glow { y_fraction: 0.92, color: Rgb([255, 235, 180]), radius_fraction: 0.4 }),
         },
         Frame {
-            anchor: "solar_noon",
+            anchor: TimeAnchor::solar(SolarEventKind::SolarNoon, None),
             file: "04-solar-noon.png",
             top: Rgb([60, 140, 230]),
             bottom: Rgb([180, 220, 250]),
             glow: Some(Glow { y_fraction: 0.08, color: Rgb([255, 255, 240]), radius_fraction: 0.28 }),
         },
         Frame {
-            anchor: "sunset",
+            anchor: TimeAnchor::solar(SolarEventKind::Sunset, None),
             file: "05-sunset.png",
             top: Rgb([70, 70, 140]),
             bottom: Rgb([255, 120, 90]),
             glow: Some(Glow { y_fraction: 0.9, color: Rgb([255, 210, 150]), radius_fraction: 0.42 }),
         },
         Frame {
-            anchor: "civil_dusk",
+            anchor: TimeAnchor::solar(SolarEventKind::CivilDusk, None),
             file: "06-civil-dusk.png",
             top: Rgb([20, 18, 50]),
             bottom: Rgb([130, 60, 90]),
             glow: Some(Glow { y_fraction: 1.05, color: Rgb([220, 120, 120]), radius_fraction: 0.5 }),
         },
         Frame {
-            anchor: "astronomical_dusk",
+            anchor: TimeAnchor::solar(SolarEventKind::AstronomicalDusk, None),
             file: "07-astronomical-dusk.png",
             top: Rgb([6, 8, 24]),
             bottom: Rgb([26, 22, 54]),
             glow: None,
         },
         Frame {
-            anchor: "solar_midnight",
+            anchor: TimeAnchor::solar(SolarEventKind::SolarMidnight, None),
             file: "08-solar-midnight.png",
             top: Rgb([2, 3, 12]),
             bottom: Rgb([10, 10, 26]),
@@ -150,19 +153,22 @@ fn render(frame: &Frame) -> RgbImage {
     img
 }
 
+/// Spec 011 US8 FR-041 (research.md R35): build the manifest through
+/// `pack_loader::render` — the same writer the pack-builder wizard uses — instead of
+/// hand-built string interpolation, so this tool can never drift from the schema the
+/// loader actually accepts (and gets quoting/escaping correctness for free).
 fn manifest_toml(frames: &[Frame]) -> String {
-    let mut out = String::new();
-    out.push_str("schema_version = 1\n");
-    out.push_str("name = \"Solar Gradient\"\n");
-    out.push_str("author = \"Cosmic Dynamic Wallpaper project — procedurally generated, no photography, CC0\"\n");
-    out.push_str("default_scaling = \"Fill\"\n");
-    out.push_str("fallback_color = \"#05050f\"\n");
-    for frame in frames {
-        out.push_str("\n[[images]]\n");
-        out.push_str(&format!("file = \"{}\"\n", frame.file));
-        out.push_str(&format!("anchor = \"{}\"\n", frame.anchor));
-    }
-    out
+    let draft = ManifestDraft {
+        name: "Solar Gradient".to_string(),
+        author: Some("Cosmic Dynamic Wallpaper project — procedurally generated, no photography, CC0".to_string()),
+        default_scaling: ScalingMode::Fill,
+        fallback_color: Color { r: 0x05, g: 0x05, b: 0x0f, a: 255 },
+        images: frames
+            .iter()
+            .map(|frame| ManifestDraftImage { file: frame.file.to_string(), anchor: frame.anchor })
+            .collect(),
+    };
+    render_manifest(&draft)
 }
 
 fn main() {

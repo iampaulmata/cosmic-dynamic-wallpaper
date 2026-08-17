@@ -7,11 +7,30 @@ use crate::error::PackError;
 /// The maximum number of anchors a pack may contain (FR-001).
 pub const MAX_ANCHORS: usize = 64;
 
+/// The largest magnitude a solar anchor's offset may have, in hours (spec 011 US1
+/// FR-004, research.md R4). Double the pack-builder GUI's own existing ±12h clamp
+/// (spec 010-custom-pack-builder), giving hand-authored manifests headroom the GUI
+/// doesn't need while still making `solar::resolve_solar_anchor`'s `base + delta`
+/// `DateTime + TimeDelta` arithmetic provably unable to overflow — no realistic date
+/// plus 24h can overflow `chrono`'s `DateTime` range.
+pub const MAX_SOLAR_OFFSET_HOURS: i64 = 24;
+
 /// An opaque, `Eq`-comparable image identifier.
 ///
 /// Spec 2 (pack loading) owns the real identifier shape (e.g. a path-derived id); this
 /// crate only needs something it can compare and hand back in query results
 /// (data-model.md `PackImage.id`).
+///
+/// **Length bound (spec 011 US8 FR-048)**: this type itself places no limit on the
+/// wrapped string — [`ImageId::new`] is infallible by design (a pure-logic crate with
+/// no I/O, per this module's own scope, so it has nothing meaningful to reject an
+/// oversized id *with*). In practice every real construction site is already bounded
+/// by something upstream: `pack_loader::load` builds every `ImageId` from a manifest
+/// `file` field, and the whole manifest text is capped at `pack_loader::MAX_MANIFEST_BYTES`
+/// (512 KiB, spec 011 US3 FR-011) before it's even parsed, so no single field —
+/// `ImageId` included — can exceed that either. A future caller that constructs an
+/// `ImageId` directly from fully untrusted input *without* going through that manifest
+/// cap first is responsible for bounding it itself before calling [`ImageId::new`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ImageId(String);
 
@@ -104,6 +123,24 @@ impl WallpaperPack {
         });
         if !uniform {
             return Err(PackError::MixedAnchorTypes);
+        }
+
+        // Spec 011 US1 FR-004 (research.md R4): bound every solar anchor's offset
+        // magnitude here — the single centralized validation pass this crate already
+        // uses for every other pack-level invariant (`MAX_ANCHORS`, mixed-anchor-type)
+        // — rather than at `TimeAnchor::solar`'s bare, infallible constructor (which
+        // both the manifest parser and test code call freely).
+        // Compared directly against `TimeDelta` bounds (not `offset.num_hours().abs()`)
+        // deliberately: `TimeDelta::MIN.num_hours()` can be `i64::MIN`, and `i64::MIN.abs()`
+        // itself overflows/panics — using `TimeDelta`'s own `Ord` avoids reintroducing
+        // exactly the class of bug this check exists to prevent.
+        let max_offset = chrono::TimeDelta::hours(MAX_SOLAR_OFFSET_HOURS);
+        for img in &images {
+            if let TimeAnchor::Solar { event, offset: Some(offset) } = img.anchor {
+                if offset > max_offset || offset < -max_offset {
+                    return Err(PackError::SolarOffsetOutOfRange { event, offset });
+                }
+            }
         }
 
         let mut seen_ids = std::collections::HashSet::with_capacity(images.len());
@@ -243,6 +280,35 @@ mod tests {
     fn accepts_exactly_max_anchors() {
         let images: Vec<_> = (0..64).map(|i| solar_image(&i.to_string())).collect();
         assert!(WallpaperPack::validate(images).is_ok());
+    }
+
+    /// Spec 011 US1 FR-004 (research.md R4) — the audit's exact reproduction:
+    /// `TimeAnchor::solar(Sunrise, Some(TimeDelta::MAX))` previously passed validation
+    /// cleanly and only panicked later, on the first `query()` call, with a
+    /// `DateTime + TimeDelta` overflow. `validate` must now reject it directly.
+    #[test]
+    fn solar_offset_out_of_range_rejected() {
+        let image = PackImage::new("img0", TimeAnchor::Solar { event: SolarEventKind::Sunrise, offset: Some(chrono::TimeDelta::MAX) });
+        assert_eq!(
+            WallpaperPack::validate(vec![image]),
+            Err(PackError::SolarOffsetOutOfRange { event: SolarEventKind::Sunrise, offset: chrono::TimeDelta::MAX })
+        );
+    }
+
+    #[test]
+    fn solar_offset_at_exactly_the_limit_is_accepted() {
+        let at_limit = chrono::TimeDelta::hours(MAX_SOLAR_OFFSET_HOURS);
+        for offset in [at_limit, -at_limit] {
+            let image = PackImage::new("img0", TimeAnchor::Solar { event: SolarEventKind::Sunrise, offset: Some(offset) });
+            assert!(WallpaperPack::validate(vec![image]).is_ok(), "offset {offset:?} should be within the {MAX_SOLAR_OFFSET_HOURS}h limit");
+        }
+    }
+
+    #[test]
+    fn solar_offset_one_hour_past_the_limit_is_rejected() {
+        let just_over = chrono::TimeDelta::hours(MAX_SOLAR_OFFSET_HOURS) + chrono::TimeDelta::hours(1);
+        let image = PackImage::new("img0", TimeAnchor::Solar { event: SolarEventKind::Sunset, offset: Some(just_over) });
+        assert!(matches!(WallpaperPack::validate(vec![image]), Err(PackError::SolarOffsetOutOfRange { .. })));
     }
 
     #[test]

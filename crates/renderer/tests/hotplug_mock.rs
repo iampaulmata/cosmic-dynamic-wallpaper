@@ -484,3 +484,28 @@ fn output_resize_triggers_reconfiguration() {
         let _ = rig.conn.flush();
     });
 }
+
+/// Spec 011 US1 FR-002 (research.md R2): the layer-shell protocol legitimately
+/// reports 0 on an axis when both opposing anchors are set on that axis — exactly
+/// what a real compositor's own `Configure` event can send, not malformed input. Prior
+/// to the fix this reached `wgpu::Surface::configure` with a zero dimension and
+/// panicked the whole daemon, not just this one output — this test's real assertion is
+/// that no panic occurs, for both axes independently.
+#[test]
+fn zero_size_reconfigure_does_not_panic() {
+    with_timeout("zero_size_reconfigure_does_not_panic", || {
+        let mut rig = TestRig::new();
+        rig.connect_output("TEST-1", 1920, 1080);
+        assert_eq!(rig.daemon.output_ids().len(), 1);
+
+        rig.configure_last_layer_surface(0, 600);
+        rig.roundtrip();
+        assert_eq!(rig.daemon.output_ids().len(), 1, "zero-width configure didn't panic or tear down the output");
+
+        rig.configure_last_layer_surface(800, 0);
+        rig.roundtrip();
+        assert_eq!(rig.daemon.output_ids().len(), 1, "zero-height configure didn't panic or tear down the output");
+
+        let _ = rig.conn.flush();
+    });
+}

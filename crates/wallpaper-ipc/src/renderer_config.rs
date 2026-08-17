@@ -28,10 +28,73 @@ const OLD_RENDERER_CONFIG_ID: &str = "com.system76.CosmicWallpaper.Renderer";
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct OutputId(String);
 
+/// The longest identifier [`OutputId::validated`] accepts (spec 011 US4/US5, FR-017/
+/// FR-019) — generous headroom over any real connector name (`"eDP-1"`, `"DP-3"`, ...
+/// are a handful of bytes), while still bounding the two untrusted boundaries that
+/// construct an `OutputId` from external input: the D-Bus `output_id` argument and
+/// `wallpaperctl assign --output`.
+pub const MAX_OUTPUT_ID_BYTES: usize = 256;
+
+/// Why [`OutputId::validated`] rejected a candidate identifier.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OutputIdError {
+    /// The identifier was empty.
+    Empty,
+    /// The identifier exceeded [`MAX_OUTPUT_ID_BYTES`].
+    TooLong {
+        /// The rejected identifier's actual length, in bytes.
+        len: usize,
+    },
+    /// The identifier contained a byte outside the charset every real Wayland
+    /// connector name uses (spec 011 US5 FR-019 — the audit's own reproduction,
+    /// `--output "DP-3;rm -rf /"`, is only caught by this check; it's well within the
+    /// length limit and non-empty).
+    InvalidCharacters,
+}
+
+impl fmt::Display for OutputIdError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            OutputIdError::Empty => write!(f, "output id must not be empty"),
+            OutputIdError::TooLong { len } => {
+                write!(f, "output id is {len} bytes, longer than the {MAX_OUTPUT_ID_BYTES}-byte limit")
+            }
+            OutputIdError::InvalidCharacters => {
+                write!(f, "output id must contain only ASCII letters, digits, '-', and '_' (real connector names, e.g. \"eDP-1\", \"DP-3\", never do otherwise)")
+            }
+        }
+    }
+}
+
+impl std::error::Error for OutputIdError {}
+
 impl OutputId {
-    /// Wrap a connector-name string as an opaque [`OutputId`].
+    /// Wrap a connector-name string as an opaque [`OutputId`] with no validation —
+    /// for trusted internal construction from a real Wayland connector name (spec 3's
+    /// own compositor-reported strings), never from CLI/D-Bus input directly.
     pub fn new(id: impl Into<String>) -> Self {
         Self(id.into())
+    }
+
+    /// Construct an [`OutputId`] from untrusted input (a D-Bus method argument, or
+    /// `wallpaperctl assign --output`'s value — spec 011 US4/US5, FR-017/FR-019,
+    /// research.md R13), rejecting an empty, overlong, or oddly-shaped identifier
+    /// rather than silently accepting a value that can never match a real output.
+    /// Every real Wayland connector name (`"eDP-1"`, `"DP-3"`, `"HDMI-A-1"`,
+    /// `"Virtual-1"`) is ASCII letters/digits/`-`/`_` only — the character check below
+    /// is generous within that shape, not a hand-picked allow-list of known prefixes.
+    pub fn validated(id: impl Into<String>) -> Result<Self, OutputIdError> {
+        let id = id.into();
+        if id.is_empty() {
+            return Err(OutputIdError::Empty);
+        }
+        if id.len() > MAX_OUTPUT_ID_BYTES {
+            return Err(OutputIdError::TooLong { len: id.len() });
+        }
+        if !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
+            return Err(OutputIdError::InvalidCharacters);
+        }
+        Ok(Self(id))
     }
 
     /// Borrow the identifier as a string slice.
@@ -107,12 +170,39 @@ impl RendererConfig {
     /// Read the current entry, falling back to the default (empty overrides, toggle
     /// off, 45s crossfade) if nothing has been written yet.
     pub fn load(config: &Config) -> Self {
-        Self::get_entry(config).unwrap_or_else(|(_errors, default)| default)
+        Self::load_reporting_corruption(config).0
     }
 
-    /// Persist this entry.
+    /// [`Self::load`], but also reports whether the fallback-to-default path was
+    /// taken because of a genuine read/parse error, not just "never configured"
+    /// (spec 011 US6 FR-023, research.md R18) — see
+    /// [`crate::LocationConfigEntry::load_reporting_corruption`]'s doc comment for the
+    /// full rationale; this is the identical fix applied to the renderer config.
+    pub fn load_reporting_corruption(config: &Config) -> (Self, bool) {
+        match Self::get_entry(config) {
+            Ok(entry) => (entry, false),
+            Err((errors, default)) => {
+                let corrupted = errors.iter().any(cosmic_config::Error::is_err);
+                if corrupted {
+                    tracing::warn!(?errors, "renderer config could not be fully read — falling back to defaults for the affected field(s)");
+                }
+                (default, corrupted)
+            }
+        }
+    }
+
+    /// Persist this entry. On Unix, best-effort pre-creates the target directory at
+    /// `0700` before writing and tightens it again afterward — same fix as
+    /// `LocationConfigEntry::save` (see its doc comment for the full rationale,
+    /// including spec 011 adversarial re-review finding 2), applied here since
+    /// per-output assignments can also reveal locally-sensitive filesystem paths.
     pub fn save(&self, config: &Config) -> Result<(), cosmic_config::Error> {
-        self.write_entry(config)
+        #[cfg(unix)]
+        crate::ensure_config_dir_permissions_before_write(RENDERER_CONFIG_ID, Self::VERSION);
+        self.write_entry(config)?;
+        #[cfg(unix)]
+        crate::tighten_config_dir_permissions(RENDERER_CONFIG_ID, Self::VERSION);
+        Ok(())
     }
 
     /// Load `new_config`, migrating forward from the pre-rename application id
@@ -179,6 +269,38 @@ mod tests {
 
     fn source(path: &str) -> PackSource {
         PackSource::StaticFile(path.into())
+    }
+
+    #[test]
+    fn output_id_validated_rejects_empty() {
+        assert_eq!(OutputId::validated(""), Err(OutputIdError::Empty));
+    }
+
+    #[test]
+    fn output_id_validated_rejects_oversized() {
+        let too_long = "x".repeat(MAX_OUTPUT_ID_BYTES + 1);
+        assert_eq!(OutputId::validated(too_long.clone()), Err(OutputIdError::TooLong { len: too_long.len() }));
+    }
+
+    #[test]
+    fn output_id_validated_accepts_real_connector_names() {
+        assert_eq!(OutputId::validated("DP-3").unwrap(), OutputId::new("DP-3"));
+        assert_eq!(OutputId::validated("eDP-1").unwrap(), OutputId::new("eDP-1"));
+        assert_eq!(OutputId::validated("HDMI-A-1").unwrap(), OutputId::new("HDMI-A-1"));
+        assert_eq!(OutputId::validated("Virtual-1").unwrap(), OutputId::new("Virtual-1"));
+        // Exactly at the limit is still accepted (only *over* the limit is rejected).
+        let at_limit = "x".repeat(MAX_OUTPUT_ID_BYTES);
+        assert!(OutputId::validated(at_limit).is_ok());
+    }
+
+    /// Spec 011 US5 FR-019 (research.md R13/R15) — the audit's own reproduction:
+    /// `--output "DP-3;rm -rf /"` is non-empty and well within the length limit, so
+    /// only a character-class check catches it.
+    #[test]
+    fn output_id_validated_rejects_shell_metacharacters() {
+        assert_eq!(OutputId::validated("DP-3;rm -rf /"), Err(OutputIdError::InvalidCharacters));
+        assert_eq!(OutputId::validated("DP-3\n"), Err(OutputIdError::InvalidCharacters));
+        assert_eq!(OutputId::validated("../etc/passwd"), Err(OutputIdError::InvalidCharacters));
     }
 
     #[test]
@@ -260,6 +382,52 @@ mod tests {
         let reloaded = RendererConfig::load(&config);
         assert_eq!(reloaded.overrides.len(), 1);
         assert_eq!(reloaded.crossfade_duration_secs, 30);
+    }
+
+    /// Spec 011 US6 FR-023 (research.md R18) — same fix as
+    /// `location_config::tests::corrupted_file_surfaces_warning_not_silent_default`,
+    /// applied to `RendererConfig`.
+    #[test]
+    fn corrupted_file_surfaces_warning_not_silent_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = RendererConfig::open_at(dir.path()).unwrap();
+        RendererConfig::default().save(&config).unwrap();
+
+        let key_path =
+            dir.path().join("cosmic").join(RENDERER_CONFIG_ID).join(format!("v{}", RendererConfig::VERSION)).join("crossfade_duration_secs");
+        assert!(key_path.exists(), "expected cosmic-config's own on-disk layout at {}", key_path.display());
+        std::fs::write(&key_path, b"not valid RON {{{").unwrap();
+
+        let (loaded, corrupted) = RendererConfig::load_reporting_corruption(&config);
+        assert!(corrupted);
+        assert_eq!(loaded.crossfade_duration_secs, RendererConfig::default().crossfade_duration_secs);
+    }
+
+    #[test]
+    fn never_configured_is_not_reported_as_corruption() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = RendererConfig::open_at(dir.path()).unwrap();
+
+        let (loaded, corrupted) = RendererConfig::load_reporting_corruption(&config);
+        assert!(!corrupted);
+        assert_eq!(loaded, RendererConfig::default());
+    }
+
+    /// Spec 011 US7 FR-030 (research.md R25) — same fix and same rationale as
+    /// `location_config::tests::save_tightens_permissions`, applied to `RendererConfig`.
+    #[cfg(unix)]
+    #[test]
+    fn save_tightens_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        crate::test_support::with_scratch_xdg_config_home(|| {
+            let config = RendererConfig::open().unwrap();
+            RendererConfig::default().save(&config).unwrap();
+
+            let dir = dirs::config_dir().unwrap().join("cosmic").join(RENDERER_CONFIG_ID).join(format!("v{}", RendererConfig::VERSION));
+            let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o700, "expected the config directory to be tightened to 0700, got {mode:o}");
+        });
     }
 
     /// T018: closes research.md R2's own real-bug precedent (see this module's doc

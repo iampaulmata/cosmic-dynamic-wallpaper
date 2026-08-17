@@ -1714,6 +1714,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "caf1079563223d5d59d83c85886a56e586cfd5c1a26292e971a0fa266531ac5a"
 
 [[package]]
+name = "fd-lock"
+version = "4.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ce92ff622d6dadf7349484f42c93271a0d49b7cc4d466a936405bacbe10aa78"
+dependencies = [
+ "cfg-if",
+ "rustix 1.1.4",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
 name = "fdeflate"
 version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2023,6 +2034,8 @@ name = "generate-starter-pack"
 version = "0.2.0"
 dependencies = [
  "image",
+ "pack-loader",
+ "schedule-engine",
 ]
 
 [[package]]
@@ -3974,6 +3987,8 @@ version = "0.2.0"
 dependencies = [
  "chrono",
  "cosmic-config",
+ "dirs",
+ "fd-lock",
  "humantime",
  "image",
  "schedule-engine",
@@ -5886,11 +5901,13 @@ name = "wallpaper-ipc"
 version = "0.2.0"
 dependencies = [
  "cosmic-config",
+ "dirs",
  "pack-loader",
  "schedule-engine",
  "serde",
  "serde_json",
  "tempfile",
+ "tracing",
  "zbus",
 ]
 
@@ -5924,6 +5941,8 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "tracing",
+ "tracing-subscriber",
  "wallpaper-ipc",
  "zbus",
 ]

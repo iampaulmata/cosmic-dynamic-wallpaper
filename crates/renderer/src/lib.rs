@@ -8,6 +8,7 @@
 //! non-Fill scaling modes).
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
+pub mod backoff;
 pub mod config;
 pub mod crossfade;
 pub mod dbus_service;

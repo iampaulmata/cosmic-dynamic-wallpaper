@@ -19,6 +19,11 @@ use crate::path_safety;
 /// one named constant so it's easy to find/change.
 pub const MANIFEST_FILE_NAME: &str = "manifest.toml";
 
+/// The largest a `manifest.toml` may be before it's rejected outright, checked before
+/// the file is read fully into memory (spec 011 US3 FR-011, research.md R8 —
+/// clarified value: 512 KB, roughly 40x a realistic 64-anchor manifest's actual size).
+pub const MAX_MANIFEST_BYTES: u64 = 512 * 1024;
+
 /// The output of a successful load (data-model.md `LoadedPack`) — what spec 1
 /// (scheduling) and spec 3 (renderer) actually consume.
 #[derive(Debug, Clone)]
@@ -69,9 +74,29 @@ fn load_directory_pack(dir: &Path) -> Result<LoadedPack, ManifestError> {
     if !manifest_path.is_file() {
         return Err(ManifestError::ManifestNotFound { path: manifest_path });
     }
+    // Spec 011 US3 FR-011 (research.md R8): reject an oversized manifest before it's
+    // read fully into memory — a single `stat` (`metadata`), cheap even against a
+    // multi-gigabyte attack file.
+    let size = std::fs::metadata(&manifest_path)
+        .map_err(|e| ManifestError::Io { path: manifest_path.clone(), message: e.to_string() })?
+        .len();
+    if size > MAX_MANIFEST_BYTES {
+        return Err(ManifestError::ManifestTooLarge { path: manifest_path.clone(), size });
+    }
     let text = std::fs::read_to_string(&manifest_path)
         .map_err(|e| ManifestError::Io { path: manifest_path.clone(), message: e.to_string() })?;
     let parsed = manifest::parse(&text, &manifest_path)?;
+
+    // Spec 011 US3 FR-010 (research.md R7): reject an over-cap image count *before*
+    // any per-image filesystem work (resolve/containment-check/header-read) runs
+    // below — `WallpaperPack::validate` (called after that loop) already enforces
+    // `MAX_ANCHORS`, but only after every declared entry has already cost a handful of
+    // syscalls each. A manifest declaring 500,000 entries previously forced 500,000
+    // syscalls before being rejected; this is a single, cheap length check first,
+    // returning the exact same error shape `validate` would have produced anyway.
+    if parsed.images.len() > schedule_engine::MAX_ANCHORS {
+        return Err(ManifestError::InvalidPack(schedule_engine::PackError::TooManyAnchors { count: parsed.images.len() }));
+    }
 
     let mut pack_images = Vec::with_capacity(parsed.images.len());
     let mut image_paths = HashMap::with_capacity(parsed.images.len());
@@ -162,5 +187,44 @@ mod tests {
     fn load_pack_on_a_directory_with_no_manifest_is_manifest_not_found() {
         let dir = tempfile::tempdir().unwrap();
         assert!(matches!(load_pack(dir.path()), Err(ManifestError::ManifestNotFound { .. })));
+    }
+
+    /// Spec 011 US3 FR-010 (research.md R7): a manifest declaring more entries than
+    /// `MAX_ANCHORS` must be rejected *before* any per-image filesystem work runs —
+    /// proven here by having every declared entry reference a file that doesn't exist.
+    /// If the per-image loop ran even once before the cap check, the first entry
+    /// would fail with `MissingImageFile`, not `TooManyAnchors` — asserting the
+    /// specific error variant is what actually proves the ordering, not just that
+    /// *some* error occurred.
+    #[test]
+    fn anchor_cap_rejected_before_per_image_io() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut manifest = String::from("schema_version = 1\nname = \"x\"\ndefault_scaling = \"Fill\"\nfallback_color = \"#000000\"\n\n");
+        for i in 0..(schedule_engine::MAX_ANCHORS + 1) {
+            manifest.push_str(&format!("[[images]]\nfile = \"does-not-exist-{i}.png\"\nanchor = \"sunrise\"\n\n"));
+        }
+        std::fs::write(dir.path().join(MANIFEST_FILE_NAME), manifest).unwrap();
+
+        let result = load_pack(dir.path());
+        assert!(
+            matches!(result, Err(ManifestError::InvalidPack(schedule_engine::PackError::TooManyAnchors { .. }))),
+            "expected TooManyAnchors (rejected before any per-image I/O), got {result:?}"
+        );
+    }
+
+    /// Spec 011 US3 FR-011 (research.md R8) — a `manifest.toml` over
+    /// `MAX_MANIFEST_BYTES` is rejected before being read fully into memory. Content is
+    /// deliberately not otherwise-valid TOML: if the size check didn't run first, this
+    /// would instead surface as a `ParseFailure`, not `ManifestTooLarge` — asserting the
+    /// specific variant is what proves the ordering.
+    #[test]
+    fn oversized_manifest_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let oversized = "# padding\n".repeat((MAX_MANIFEST_BYTES as usize / 10) + 1000);
+        assert!(oversized.len() as u64 > MAX_MANIFEST_BYTES);
+        std::fs::write(dir.path().join(MANIFEST_FILE_NAME), &oversized).unwrap();
+
+        let result = load_pack(dir.path());
+        assert!(matches!(result, Err(ManifestError::ManifestTooLarge { .. })), "expected ManifestTooLarge, got {result:?}");
     }
 }

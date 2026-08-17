@@ -10,6 +10,31 @@
 //! deliberate divergence is the render path itself: `cosmic-bg` draws into an SHM
 //! buffer on the CPU (and has no crossfade at all); this daemon renders via `wgpu`
 //! (constitution Principle III: GPU-accelerated crossfade).
+//!
+//! ## Resize/hotplug event origin index (spec 011 US8 FR-043)
+//!
+//! Every trait impl below that can originate an output resize or a hotplug
+//! (add/remove) transition — kept as one list since these events arrive through
+//! several independent `smithay-client-toolkit` callbacks, not a single entry point:
+//!
+//! - [`OutputHandler::new_output`] — hotplug: a new `wl_output` appeared; adds a
+//!   tracked [`WallpaperOutput`] but does not itself size/configure a surface.
+//! - [`OutputHandler::update_output`] — resize: `wl_output`-level metadata changed
+//!   (e.g. a pure integer-scale change with no accompanying layer-surface configure);
+//!   calls [`WallpaperDaemon::reconfigure_output`] when the logical size actually
+//!   differs from what's cached.
+//! - [`OutputHandler::output_destroyed`] — hotplug: the output disappeared; drops its
+//!   tracked state.
+//! - [`LayerShellHandler::configure`] — resize: the common case, driven by the
+//!   compositor proposing a new layer-surface size; calls
+//!   [`WallpaperDaemon::reconfigure_output`] unconditionally (idempotent if the size is
+//!   unchanged).
+//! - [`LayerShellHandler::closed`] — hotplug: the compositor closed this output's
+//!   layer surface (typically follows an `output_destroyed`, but is its own event).
+//! - `Dispatch<wp_fractional_scale_v1::WpFractionalScaleV1, ()>::event` — not a resize
+//!   itself, but a fractional-scale preference change that a future resize/redraw uses;
+//!   listed here because it's easy to overlook as a fourth surface-geometry input
+//!   alongside the three above.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -58,6 +83,94 @@ use crate::texture::GpuTexture;
 /// the schema's own default).
 pub const CROSSFADE_DURATION: Duration = Duration::from_secs(45);
 
+/// How soon to retry an output whose surface is still `Lost`/`Outdated` after
+/// [`WallpaperDaemon::draw_inner`]'s one bounded recovery attempt (spec 011
+/// adversarial re-review finding 2) — short enough that a transient GPU/compositor
+/// hiccup self-heals quickly, long enough not to hammer a genuinely-broken surface in
+/// a tight loop. Deliberately much shorter than the schedule engine's own
+/// next-transition wake (which could be hours away) or the 60s no-schedule ceiling
+/// [`WallpaperDaemon::next_wake_instant`] otherwise falls back to.
+pub const SURFACE_RECOVERY_RETRY_INTERVAL: Duration = Duration::from_secs(5);
+
+/// The most distinct decoded textures [`TextureCache`] keeps resident per output at
+/// once (spec 011 US7 FR-036, research.md R31) — an unbounded cache previously grew
+/// without limit for a large pack (many distinct images across countless solar/
+/// time-of-day anchors), each held GPU memory forever. 16 comfortably covers a
+/// realistic pack's actively-cycling working set (a crossfade only ever needs 2 at
+/// once) with headroom, while still bounding the worst case.
+pub const MAX_CACHED_TEXTURES_PER_OUTPUT: usize = 16;
+
+/// A bounded least-recently-used cache of decoded GPU textures for one output (spec 011
+/// US7 FR-036, research.md R31), replacing a plain `HashMap<ImageId, GpuTexture>`.
+/// Evicts the least-recently-*used* entry (not least-recently-inserted — both a cache
+/// hit via [`Self::contains_key`] and a fresh [`Self::insert`] mark an entry
+/// most-recently-used) once a fresh insert would exceed
+/// [`MAX_CACHED_TEXTURES_PER_OUTPUT`]. [`Self::get`] deliberately does *not* touch
+/// recency itself (staying `&self`, not `&mut self`) — every read in `draw` is for an
+/// id `ensure_texture` already touched moments earlier via `contains_key`/`insert` on
+/// the same evaluation tick, so a second touch on read would be redundant, and keeping
+/// `get` non-mutating lets `draw` borrow two entries (`outgoing`/`incoming`) from the
+/// same cache in one expression.
+#[derive(Default)]
+struct TextureCache {
+    entries: HashMap<ImageId, GpuTexture>,
+    /// Access order, oldest (least recently used) first.
+    recency: Vec<ImageId>,
+}
+
+impl TextureCache {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    /// Whether `id` is cached — also marks it most-recently-used (see this type's doc
+    /// comment for why that's the right place for the "touch", not `get`).
+    fn contains_key(&mut self, id: &ImageId) -> bool {
+        let present = self.entries.contains_key(id);
+        if present {
+            self.touch(id);
+        }
+        present
+    }
+
+    fn get(&self, id: &ImageId) -> Option<&GpuTexture> {
+        self.entries.get(id)
+    }
+
+    /// Insert a freshly-decoded texture, evicting the least-recently-used entry first
+    /// if the cache is already at [`MAX_CACHED_TEXTURES_PER_OUTPUT`] and `id` isn't
+    /// already present (a re-insert of an existing id never needs to evict).
+    fn insert(&mut self, id: ImageId, texture: GpuTexture) {
+        if !self.entries.contains_key(&id) && self.entries.len() >= MAX_CACHED_TEXTURES_PER_OUTPUT {
+            self.evict_least_recently_used();
+        }
+        self.touch(&id);
+        self.entries.insert(id, texture);
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.recency.clear();
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    fn touch(&mut self, id: &ImageId) {
+        self.recency.retain(|existing| existing != id);
+        self.recency.push(id.clone());
+    }
+
+    fn evict_least_recently_used(&mut self) {
+        if !self.recency.is_empty() {
+            let lru = self.recency.remove(0);
+            self.entries.remove(&lru);
+        }
+    }
+}
+
 /// Per-output render state: the layer surface, its `wgpu` bridge, and everything
 /// needed to decide what to draw on its next frame.
 struct WallpaperOutput {
@@ -84,11 +197,23 @@ struct WallpaperOutput {
     size: Option<(u32, u32)>,
     loaded_pack: Option<LoadedPack>,
     /// Decoded textures for the current pack, keyed by image id — reused across
-    /// frames rather than re-decoding every tick.
-    textures: HashMap<ImageId, GpuTexture>,
+    /// frames rather than re-decoding every tick. Bounded (FR-036) — see
+    /// [`TextureCache`]'s doc comment.
+    textures: TextureCache,
     active_image: Option<ImageId>,
     transition: Option<CrossfadeTransition>,
     frame_callback_pending: bool,
+    /// Set when [`WallpaperDaemon::draw_inner`] gives up on a `Lost`/`Outdated`
+    /// surface after its one bounded recovery attempt (spec 011 adversarial re-review
+    /// finding 2) — without this, the *only* remaining triggers for a retry are the
+    /// schedule engine's own next-transition wake, a hotplug/resize event, or an
+    /// explicit `reevaluate` call, any of which could be hours away, leaving the
+    /// output stuck dark far longer than the transient GPU/compositor hiccup this is
+    /// actually meant to recover from. [`WallpaperDaemon::next_wake_instant`] folds
+    /// this into the idle-wait timer's deadline so a genuinely-stuck output gets a
+    /// bounded, dedicated retry instead of depending entirely on unrelated events.
+    /// Cleared as soon as a draw succeeds again.
+    surface_recovery_retry_at: Option<Instant>,
 }
 
 /// The `wallpaperd` application state — one instance drives every managed output plus
@@ -127,6 +252,16 @@ pub struct WallpaperDaemon {
     /// from within a source callback, so storing it on the very `Data` it drives is
     /// sound.
     loop_handle: Option<calloop::LoopHandle<'static, WallpaperDaemon>>,
+    /// Set once at startup ([`WallpaperDaemon::set_connection`]) — lets [`Self::draw`]
+    /// actively recover from `wgpu::SurfaceError::Lost`/`Outdated` (FR-034, research.md
+    /// R29) by re-running [`Self::reconfigure_output`], which needs a `&Connection` to
+    /// (re)bind the GPU surface but otherwise has no `Connection` available from
+    /// `draw`'s own call sites (`evaluate_and_draw_all`/`evaluate_and_draw`, called
+    /// from the idle-wait timer and D-Bus `reevaluate`, neither of which is itself a
+    /// Wayland event callback that receives one). Same `Option<_>`-set-once-at-startup
+    /// posture as `loop_handle` above; `Connection` is cheaply `Clone` (an `Rc`-backed
+    /// handle), so storing a clone here is sound.
+    conn: Option<Connection>,
     /// The currently-registered idle-wait timer's token, if any — removed before a
     /// fresh one is inserted at a recomputed deadline.
     idle_timer_token: Option<calloop::RegistrationToken>,
@@ -183,6 +318,7 @@ impl WallpaperDaemon {
             coalescer: Coalescer::new(),
             exit: false,
             loop_handle: None,
+            conn: None,
             idle_timer_token: None,
             dbus_state: std::sync::Arc::new(std::sync::Mutex::new(crate::dbus_service::DbusState::default())),
         })
@@ -219,10 +355,11 @@ impl WallpaperDaemon {
             wgpu_surface: None,
             size: None,
             loaded_pack: None,
-            textures: HashMap::new(),
+            textures: TextureCache::new(),
             active_image: None,
             transition: None,
             frame_callback_pending: false,
+            surface_recovery_retry_at: None,
         });
     }
 
@@ -251,6 +388,17 @@ impl WallpaperDaemon {
                 .ok_or_else(|| RendererError::GpuDeviceUnavailable { reason: "null Wayland surface pointer".into() })?,
         ));
 
+        // SAFETY (spec 011 US7 FR-035, research.md R30): `create_surface_unsafe`'s
+        // contract requires both raw handles to remain valid for as long as the
+        // returned `wgpu::Surface` is alive. `raw_display` borrows `conn`'s
+        // `wl_display` — `conn` is `WallpaperDaemon`'s own `Connection` (or a clone of
+        // it, see `Self::conn`'s doc comment), kept alive for this daemon's entire
+        // process lifetime, strictly outliving any `wgpu::Surface` built from it.
+        // `raw_window` borrows `self.outputs[index].layer`'s `wl_surface` — the
+        // resulting `wgpu_surface` is stored in that *same* `WallpaperOutput` struct
+        // (`self.outputs[index].wgpu_surface`, set just below) as the `layer` it was
+        // derived from, so the two are dropped together in `remove_output`: the
+        // `wl_surface` handle can never outlive the `wgpu::Surface` built from it.
         let wgpu_surface = unsafe {
             self.instance
                 .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle { raw_display_handle: raw_display, raw_window_handle: raw_window })
@@ -278,6 +426,24 @@ impl WallpaperDaemon {
 
         match pack_loader::load_pack(source.path()) {
             Ok(loaded) => {
+                // Spec 011 US7 FR-040 (research.md R34, corrected during
+                // implementation — see that file's note): `WallpaperPack::validate`
+                // cannot itself perform this check, since solar-anchored duplicate
+                // instants are date-dependent and `validate` takes no date/location at
+                // all (schedule-engine/src/pack.rs's own doc comment on
+                // `check_solar_duplicate_instant`). The only real runtime caller of
+                // this daemon's pack-loading path (`load_pack_for`, here) never called
+                // it at all before this fix — only the settings GUI's custom pack
+                // builder did, and only at build time. Best-effort, log-only: a
+                // collision degrades to a logged warning (a zero-width transition on
+                // today's date), never blocks the load (constitution Principle VIII) —
+                // and is naturally re-checked every time this method re-runs (pack
+                // (re)assignment, daemon restart, or a new day's first evaluation).
+                if let Some(location) = self.location.as_ref() {
+                    if let Err(e) = loaded.pack.check_solar_duplicate_instant(location, chrono::Local::now().date_naive()) {
+                        tracing::warn!(output = %id, error = %e, "pack has two solar anchors resolving to the same instant today — one will be skipped");
+                    }
+                }
                 self.outputs[index].textures.clear();
                 self.outputs[index].loaded_pack = Some(loaded);
                 self.outputs[index].active_image = None;
@@ -308,14 +474,25 @@ impl WallpaperDaemon {
         match result {
             Ok(Some(result)) => {
                 let output = &mut self.outputs[index];
-                if let Some(t) = &result.transition {
+                // Spec 011 US1 FR-003 (research.md R3): `t.progress` isn't visibly
+                // clamped upstream, and both `Duration::from_secs_f64` (NaN/negative/
+                // infinite) and the `Instant - Duration` subtraction below (an
+                // out-of-range Duration) panic on bad input — any future schedule-math
+                // bug returning an out-of-range value must not take down the whole
+                // daemon. A non-finite progress routes into the same "no visible
+                // transition" fallback the `else` branch below already handles
+                // (holding `result.active_before` steady); a finite-but-out-of-range
+                // progress (e.g. a rounding-driven `1.00001`) is clamped to `0.0..=1.0`
+                // instead of dropped, since the transition itself is still meaningful.
+                let sanitized = result.transition.as_ref().and_then(|t| sanitize_transition_progress(t.progress).map(|p| (t, p)));
+                if let Some((t, progress)) = sanitized {
                     let now = Instant::now();
                     let already_this_pair =
                         output.transition.as_ref().is_some_and(|existing| existing.outgoing == t.outgoing && existing.incoming == t.incoming);
                     if !already_this_pair {
                         // A fresh transition (FR-011: supersedes cleanly — a new value
                         // simply replaces the old one, see crossfade.rs's own doc).
-                        let started_at = now - Duration::from_secs_f64(t.progress * crossfade_duration.as_secs_f64());
+                        let started_at = now - Duration::from_secs_f64(progress * crossfade_duration.as_secs_f64());
                         output.transition =
                             Some(CrossfadeTransition { outgoing: t.outgoing.clone(), incoming: t.incoming.clone(), started_at, duration: crossfade_duration });
                     }
@@ -338,7 +515,7 @@ impl WallpaperDaemon {
         }
     }
 
-    fn ensure_texture(gpu: &GpuContext, cache: &mut HashMap<ImageId, GpuTexture>, pack: &LoadedPack, id: &ImageId) {
+    fn ensure_texture(gpu: &GpuContext, cache: &mut TextureCache, pack: &LoadedPack, id: &ImageId) {
         if cache.contains_key(id) {
             return;
         }
@@ -368,8 +545,21 @@ impl WallpaperDaemon {
     }
 
     /// Draw output `index`'s current state (static image or in-progress crossfade) and
-    /// present it (T016, T017, T018).
+    /// present it (T016, T017, T018). Allows one round of `Lost`/`Outdated` recovery
+    /// (FR-034) — see [`Self::draw_inner`] for why that bound exists.
     fn draw(&mut self, index: usize) {
+        self.draw_inner(index, true);
+    }
+
+    /// [`Self::draw`]'s actual body. `allow_recovery` bounds the `draw` <->
+    /// `reconfigure_output` recovery cycle to at most one round-trip: a surface that
+    /// reports `Lost`/`Outdated` again right after being reconfigured (e.g. an output
+    /// removed mid-reconfigure, or a compositor/driver that never actually accepts the
+    /// new configuration) is logged and left for the *next* real event to retry,
+    /// instead of recursing — `reconfigure_output` always calls back in with
+    /// `allow_recovery: false`, so this can never recurse more than once regardless of
+    /// how persistently the surface stays lost.
+    fn draw_inner(&mut self, index: usize, allow_recovery: bool) {
         let Some(size) = self.outputs[index].size else { return };
         let Some(gpu) = self.gpu.as_ref() else { return };
         let Some(pipeline) = self.pipeline.as_ref() else { return };
@@ -392,8 +582,40 @@ impl WallpaperDaemon {
 
         let frame = match wgpu_surface.get_current_texture() {
             Ok(f) => f,
+            Err(e) if allow_recovery && surface_error_needs_reconfigure(&e) => {
+                // FR-034 (research.md R29) — the audit's own reproduction: `Lost`/
+                // `Outdated` specifically mean the surface itself needs reconfiguring
+                // (e.g. after a compositor resize/output-disable/re-enable cycle),
+                // not a transient one-frame hiccup — previously only logged, leaving
+                // the output stuck presenting nothing until some *other* event
+                // happened to trigger a fresh `reconfigure_output` call. Actively
+                // recover using the output's own last-known `size` instead. Bounded to
+                // one round-trip via `allow_recovery` (see this method's doc comment)
+                // — a surface that's still `Lost`/`Outdated` immediately after being
+                // reconfigured falls through to the plain `Err(e)` arm below instead of
+                // recursing again.
+                let Some(conn) = self.conn.clone() else {
+                    tracing::warn!(output = %self.outputs[index].id, error = %e, "get_current_texture failed (surface lost/outdated) but no Connection is available to recover");
+                    self.arm_surface_recovery_retry(index);
+                    return;
+                };
+                tracing::warn!(output = %self.outputs[index].id, error = %e, "surface lost/outdated — reconfiguring to recover");
+                self.reconfigure_output(&conn, index, size);
+                return;
+            }
             Err(e) => {
                 tracing::warn!(output = %self.outputs[index].id, error = %e, "get_current_texture failed, skipping frame");
+                // Spec 011 adversarial re-review finding 2: if this is a `Lost`/
+                // `Outdated` surface that either wasn't allowed to recover this call
+                // (`allow_recovery: false`, i.e. the one round-trip from
+                // `reconfigure_output` already failed) or wasn't attempted at all
+                // (`Timeout`/`OutOfMemory` don't route through the arm above), keep
+                // retrying on a short bounded interval — see
+                // `surface_recovery_retry_at`'s doc comment for why this can't be left
+                // to the schedule engine's own next-transition wake alone.
+                if surface_error_needs_reconfigure(&e) {
+                    self.arm_surface_recovery_retry(index);
+                }
                 return;
             }
         };
@@ -401,6 +623,9 @@ impl WallpaperDaemon {
         let incoming_scaling = self.image_scaling_for(index, &incoming_id);
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
         pipeline.render(&gpu.device, &gpu.queue, &view, outgoing, outgoing_scaling, incoming, incoming_scaling, progress, size);
+        // A frame was just successfully presented below — this output has recovered
+        // (or never needed to), so any pending recovery retry is stale.
+        self.outputs[index].surface_recovery_retry_at = None;
 
         let wl_surface = self.outputs[index].layer.wl_surface().clone();
         wl_surface.damage_buffer(0, 0, size.0 as i32, size.1 as i32);
@@ -417,6 +642,19 @@ impl WallpaperDaemon {
 
         wl_surface.commit();
         frame.present();
+    }
+
+    /// Arms (or refreshes) output `index`'s bounded surface-recovery retry deadline
+    /// (spec 011 adversarial re-review finding 2) — see
+    /// [`WallpaperOutput::surface_recovery_retry_at`]'s doc comment. Does not itself
+    /// reschedule the idle-wait timer; callers already inside a `draw`/`reconfigure`
+    /// chain triggered by a timer firing will pick up the new deadline the next time
+    /// `reschedule_idle_timer` runs (every `on_idle_timer_fire`), and a chain triggered
+    /// by some other event (a D-Bus `reevaluate`, a hotplug) still wants the *next*
+    /// idle-timer recompute — not this call — to fold it in, to avoid rescheduling a
+    /// `calloop` timer source from deep inside recovery logic.
+    fn arm_surface_recovery_retry(&mut self, index: usize) {
+        self.outputs[index].surface_recovery_retry_at = Some(Instant::now() + SURFACE_RECOVERY_RETRY_INTERVAL);
     }
 
     /// Re-evaluate and draw every currently-managed output right now — the entry
@@ -545,12 +783,19 @@ impl WallpaperDaemon {
         self.loop_handle = Some(handle);
     }
 
-    /// `min(schedule-driven next_wake, earliest pending coalesced deadline)`,
-    /// converted from `DateTime<Local>`/`Instant` (calendar) domain into `Instant`
-    /// (monotonic) domain relative to *now* — `Instant` has no calendar epoch, so a
-    /// `DateTime` can't be compared to it directly. Falls back to a 60s ceiling if
-    /// nothing is pending at all, so the daemon still wakes periodically rather than
-    /// sleeping forever (e.g. to notice a system clock jump).
+    /// Store a clone of the daemon's `Connection` (FR-034, research.md R29) — see the
+    /// `conn` field's doc comment for why [`Self::draw`] needs this.
+    pub fn set_connection(&mut self, conn: Connection) {
+        self.conn = Some(conn);
+    }
+
+    /// `min(schedule-driven next_wake, earliest pending coalesced deadline, earliest
+    /// pending surface-recovery retry)`, converted from `DateTime<Local>`/`Instant`
+    /// (calendar) domain into `Instant` (monotonic) domain relative to *now* —
+    /// `Instant` has no calendar epoch, so a `DateTime` can't be compared to it
+    /// directly. Falls back to a 60s ceiling if nothing is pending at all, so the
+    /// daemon still wakes periodically rather than sleeping forever (e.g. to notice a
+    /// system clock jump).
     fn next_wake_instant(&self) -> Instant {
         let now_local = chrono::Local::now();
         let from_schedule = self.next_wake().map(|target| {
@@ -558,13 +803,15 @@ impl WallpaperDaemon {
             Instant::now() + delta
         });
         let from_coalescer = self.coalescer.earliest_pending();
+        // Spec 011 adversarial re-review finding 2: without this, a `Lost`/`Outdated`
+        // output that failed its one bounded recovery attempt would only get retried
+        // whenever `from_schedule`/`from_coalescer` next happened to fire — the
+        // schedule engine's own next-transition wake can easily be hours away, leaving
+        // the output stuck dark far longer than the transient hiccup this exists to
+        // recover from. See `surface_recovery_retry_at`'s doc comment.
+        let from_surface_recovery = self.outputs.iter().filter_map(|o| o.surface_recovery_retry_at).min();
 
-        match (from_schedule, from_coalescer) {
-            (Some(a), Some(b)) => a.min(b),
-            (Some(a), None) => a,
-            (None, Some(b)) => b,
-            (None, None) => Instant::now() + Duration::from_secs(60),
-        }
+        earliest_wake([from_schedule, from_coalescer, from_surface_recovery], Duration::from_secs(60))
     }
 
     /// Replace the idle-wait timer with a fresh single-shot deadline computed from
@@ -635,6 +882,199 @@ impl WallpaperDaemon {
     }
 }
 
+/// Spec 011 US1 FR-002 (research.md R2): the layer-shell protocol legitimately reports
+/// 0 on an axis when both opposing anchors are set on that axis (exactly what
+/// `add_output` does) — spec-compliant compositor behavior, not bad input.
+/// `wgpu::Surface::configure` panics on a zero dimension, so treat 0 as "pick a size"
+/// (clamp to 1) rather than passing it straight through; a 1x1 surface is a
+/// degenerate-but-valid render target that stays alive until the next real configure
+/// event corrects it. Extracted as a pure function so this specific clamp is
+/// unit-testable without a real (or even mock) GPU surface.
+fn clamp_reconfigure_size(size: (u32, u32)) -> (u32, u32) {
+    (size.0.max(1), size.1.max(1))
+}
+
+/// Spec 011 US1 FR-003 (research.md R3): sanitizes a crossfade transition's raw
+/// `progress` value before it reaches `Duration::from_secs_f64`/`Instant` arithmetic,
+/// both of which panic on bad input. Returns `None` for a non-finite value (NaN or
+/// +/-infinity) — the caller treats that the same as "no visible transition" rather
+/// than trying to derive a meaningless `started_at` from it. Returns
+/// `Some(progress.clamp(0.0, 1.0))` for any finite value, so a merely out-of-range
+/// (but finite) progress still drives a transition, just clamped to a sane bound.
+fn sanitize_transition_progress(progress: f64) -> Option<f64> {
+    if !progress.is_finite() {
+        return None;
+    }
+    Some(progress.clamp(0.0, 1.0))
+}
+
+/// Whether a `wgpu::SurfaceError` from `get_current_texture()` means the surface
+/// itself needs reconfiguring (spec 011 US7 FR-034, research.md R29) — `Lost`/
+/// `Outdated` do; `Timeout` (a transient one-frame hiccup) and `OutOfMemory` (a
+/// condition no reconfiguration fixes) don't. Extracted as a pure predicate, same
+/// reasoning as `clamp_reconfigure_size`/`sanitize_transition_progress` above, so
+/// `draw`'s recovery decision is unit-testable without a real GPU/Wayland surface.
+fn surface_error_needs_reconfigure(e: &wgpu::SurfaceError) -> bool {
+    matches!(e, wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated)
+}
+
+/// The earliest of whichever `candidates` are `Some`, or `Instant::now() + fallback`
+/// if all three are `None` — [`WallpaperDaemon::next_wake_instant`]'s actual selection
+/// logic (spec 011 adversarial re-review finding 2: folding
+/// `surface_recovery_retry_at` into this decision is what gives a stuck output a
+/// bounded retry instead of depending entirely on the schedule engine's own,
+/// potentially-hours-away next-transition wake). Extracted as a pure function, same
+/// reasoning as `clamp_reconfigure_size`/`sanitize_transition_progress`/
+/// `surface_error_needs_reconfigure` above, so this selection is unit-testable without
+/// a full `WallpaperDaemon`/GPU/Wayland setup.
+fn earliest_wake(candidates: [Option<Instant>; 3], fallback: Duration) -> Instant {
+    candidates.into_iter().flatten().min().unwrap_or_else(|| Instant::now() + fallback)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clamp_reconfigure_size_rejects_zero_on_either_axis() {
+        assert_eq!(clamp_reconfigure_size((0, 600)), (1, 600));
+        assert_eq!(clamp_reconfigure_size((800, 0)), (800, 1));
+        assert_eq!(clamp_reconfigure_size((0, 0)), (1, 1));
+    }
+
+    #[test]
+    fn clamp_reconfigure_size_leaves_nonzero_size_unchanged() {
+        assert_eq!(clamp_reconfigure_size((1920, 1080)), (1920, 1080));
+    }
+
+    /// Spec 011 US1 FR-003 (research.md R3): NaN and +/-infinity — the exact shapes
+    /// the audit reproduced feeding `Duration::from_secs_f64` and `Instant` arithmetic
+    /// — must not panic, and must not be silently treated as valid progress either.
+    #[test]
+    fn crossfade_progress_rejects_non_finite() {
+        assert_eq!(sanitize_transition_progress(f64::NAN), None);
+        assert_eq!(sanitize_transition_progress(f64::INFINITY), None);
+        assert_eq!(sanitize_transition_progress(f64::NEG_INFINITY), None);
+    }
+
+    #[test]
+    fn crossfade_progress_clamps_finite_out_of_range_values() {
+        assert_eq!(sanitize_transition_progress(-0.5), Some(0.0));
+        assert_eq!(sanitize_transition_progress(1.5), Some(1.0));
+        assert_eq!(sanitize_transition_progress(0.42), Some(0.42));
+    }
+
+    /// Spec 011 US7 FR-034 (research.md R29): `Lost`/`Outdated` specifically mean the
+    /// surface needs reconfiguring; `Timeout`/`OutOfMemory` don't (recovering can't fix
+    /// either — `Timeout` is a one-frame hiccup, `OutOfMemory` no config change helps).
+    #[test]
+    fn surface_error_needs_reconfigure_is_true_only_for_lost_and_outdated() {
+        assert!(surface_error_needs_reconfigure(&wgpu::SurfaceError::Lost));
+        assert!(surface_error_needs_reconfigure(&wgpu::SurfaceError::Outdated));
+        assert!(!surface_error_needs_reconfigure(&wgpu::SurfaceError::Timeout));
+        assert!(!surface_error_needs_reconfigure(&wgpu::SurfaceError::OutOfMemory));
+    }
+
+    /// Spec 011 adversarial re-review finding 2 — a pending surface-recovery retry
+    /// deadline must actually win when it's the soonest candidate, not just be present
+    /// alongside the others without affecting the result.
+    #[test]
+    fn earliest_wake_picks_the_soonest_present_candidate() {
+        let now = Instant::now();
+        let schedule = now + Duration::from_secs(3600); // e.g. next sunrise, hours away
+        let coalescer = now + Duration::from_secs(30);
+        let surface_recovery = now + Duration::from_secs(5); // soonest — must win
+
+        let result = earliest_wake([Some(schedule), Some(coalescer), Some(surface_recovery)], Duration::from_secs(60));
+        assert_eq!(result, surface_recovery, "the nearer-term surface-recovery retry must not be shadowed by a far-future schedule wake");
+    }
+
+    /// With no schedule, coalescer, or surface-recovery deadline pending at all, the
+    /// fallback ceiling still applies (unrelated to this fix, but confirms
+    /// `earliest_wake` didn't lose that existing behavior when factored out).
+    #[test]
+    fn earliest_wake_falls_back_when_nothing_is_pending() {
+        let before = Instant::now();
+        let result = earliest_wake([None, None, None], Duration::from_secs(60));
+        assert!(result >= before + Duration::from_secs(60));
+    }
+
+    fn tiny_texture(device: &wgpu::Device) -> GpuTexture {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        GpuTexture { texture, view, width: 1, height: 1 }
+    }
+
+    /// Spec 011 US7 FR-036 (research.md R31) — the audit's own reproduction: a large
+    /// pack with many distinct images previously grew this cache without bound, each
+    /// entry holding GPU memory forever. Real (tiny, 1x1) GPU textures — same "skip if
+    /// no GPU adapter" posture `tests/gpu_render.rs` already uses for GPU-dependent
+    /// tests, since `TextureCache` isn't `pub` and so can't be exercised from there.
+    #[test]
+    fn texture_cache_evicts_the_least_recently_used_entry_once_full() {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor { backends: wgpu::Backends::VULKAN | wgpu::Backends::GL, ..Default::default() });
+        let Some(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) else {
+            eprintln!("skipping: no GPU adapter available in this environment");
+            return;
+        };
+        let Ok((device, _queue)) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default(), None)) else {
+            eprintln!("skipping: GPU device request failed in this environment");
+            return;
+        };
+
+        let mut cache = TextureCache::new();
+        for i in 0..MAX_CACHED_TEXTURES_PER_OUTPUT {
+            cache.insert(ImageId::new(format!("image-{i}")), tiny_texture(&device));
+        }
+        assert_eq!(cache.len(), MAX_CACHED_TEXTURES_PER_OUTPUT);
+
+        // Touch "image-0" so it's no longer the least-recently-used entry.
+        assert!(cache.contains_key(&ImageId::new("image-0")));
+
+        // One more insert must evict exactly one entry to stay at the bound —
+        // "image-1" (the next-oldest, since "image-0" was just touched) is evicted,
+        // not "image-0".
+        cache.insert(ImageId::new("new-image"), tiny_texture(&device));
+        assert_eq!(cache.len(), MAX_CACHED_TEXTURES_PER_OUTPUT, "cache must stay bounded at the max");
+        assert!(cache.get(&ImageId::new("image-0")).is_some(), "recently-touched entry must survive eviction");
+        assert!(cache.get(&ImageId::new("image-1")).is_none(), "the actual least-recently-used entry must be evicted");
+        assert!(cache.get(&ImageId::new("new-image")).is_some());
+    }
+
+    /// Inserting an id that's already cached (a re-decode of the same image, which
+    /// `ensure_texture`'s `contains_key` guard normally prevents, but the cache type
+    /// itself shouldn't assume that) never evicts to make room for itself.
+    #[test]
+    fn texture_cache_reinserting_an_existing_id_does_not_evict() {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor { backends: wgpu::Backends::VULKAN | wgpu::Backends::GL, ..Default::default() });
+        let Some(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) else {
+            eprintln!("skipping: no GPU adapter available in this environment");
+            return;
+        };
+        let Ok((device, _queue)) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default(), None)) else {
+            eprintln!("skipping: GPU device request failed in this environment");
+            return;
+        };
+
+        let mut cache = TextureCache::new();
+        for i in 0..MAX_CACHED_TEXTURES_PER_OUTPUT {
+            cache.insert(ImageId::new(format!("image-{i}")), tiny_texture(&device));
+        }
+        cache.insert(ImageId::new("image-0"), tiny_texture(&device));
+        assert_eq!(cache.len(), MAX_CACHED_TEXTURES_PER_OUTPUT);
+        assert!(cache.get(&ImageId::new("image-1")).is_some(), "no unrelated entry should have been evicted");
+    }
+}
+
 impl WallpaperDaemon {
     /// Reconfigure output `index`'s render state for a new logical size — the shared
     /// core of both `LayerShellHandler::configure` (layer-surface-geometry-driven)
@@ -644,6 +1084,7 @@ impl WallpaperDaemon {
     /// idempotency); a failure here is contained to this one output (FR-013), never
     /// propagated to affect others.
     fn reconfigure_output(&mut self, conn: &Connection, index: usize, new_size: (u32, u32)) {
+        let new_size = clamp_reconfigure_size(new_size);
         self.outputs[index].size = Some(new_size);
 
         if let Err(e) = self.ensure_gpu_surface(conn, index) {
@@ -659,14 +1100,26 @@ impl WallpaperDaemon {
         };
 
         let caps = wgpu_surface.get_capabilities(&gpu.adapter);
-        let format = caps.formats[0];
+        // Spec 011 US8 FR-042 (research.md R36): an adapter/surface combination that
+        // reports zero supported formats or alpha modes is unusual but not something
+        // `wgpu` itself rules out — indexing `[0]` on an empty `Vec` would panic
+        // (constitution Principle VIII forbids `unwrap`/`expect`/an implicit panic
+        // here). Degrade only this one output, not the whole daemon.
+        let Some(format) = caps.formats.first().copied() else {
+            tracing::error!(output = %self.outputs[index].id, "GPU surface reported no supported formats — skipping reconfigure for this output");
+            return;
+        };
+        let Some(alpha_mode) = caps.alpha_modes.first().copied() else {
+            tracing::error!(output = %self.outputs[index].id, "GPU surface reported no supported alpha modes — skipping reconfigure for this output");
+            return;
+        };
         let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
             width: new_size.0,
             height: new_size.1,
             present_mode: wgpu::PresentMode::Fifo,
-            alpha_mode: caps.alpha_modes[0],
+            alpha_mode,
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };
@@ -682,7 +1135,10 @@ impl WallpaperDaemon {
             self.load_pack_for(index);
         }
         self.evaluate_output(index, chrono::Local::now());
-        self.draw(index);
+        // `allow_recovery: false` — see `draw_inner`'s doc comment: this is the one
+        // recovery round-trip `draw`'s `Lost`/`Outdated` arm gets, so it must not
+        // recurse back into `reconfigure_output` again if the surface is still bad.
+        self.draw_inner(index, false);
         // The output's real next-transition instant may have just changed (a newly
         // (re)configured output starts contributing to `next_wake()` for the first
         // time, or a resize can change which pack/schedule applies) — resync the

@@ -74,6 +74,16 @@ pub enum PackError {
     DuplicateInstant,
     /// Two or more images shared the same image identifier.
     DuplicateImageId,
+    /// A solar-anchored image's offset exceeded [`crate::pack::MAX_SOLAR_OFFSET_HOURS`]
+    /// (spec 011 US1 FR-004) — unbounded, this reaches `DateTime + TimeDelta`
+    /// arithmetic at query time and overflows/panics; bounding it here keeps that
+    /// unreachable.
+    SolarOffsetOutOfRange {
+        /// The solar event the out-of-range offset was attached to.
+        event: crate::anchor::SolarEventKind,
+        /// The offending offset.
+        offset: chrono::TimeDelta,
+    },
 }
 
 impl fmt::Display for PackError {
@@ -90,6 +100,14 @@ impl fmt::Display for PackError {
                 write!(f, "two or more anchors resolve to the exact same instant")
             }
             PackError::DuplicateImageId => write!(f, "two or more images share the same id"),
+            PackError::SolarOffsetOutOfRange { event, offset } => {
+                // `offset:?` (chrono's own `Debug` for `TimeDelta`), not a hand-computed
+                // `.num_hours()` — this variant exists specifically for offsets large
+                // enough that further arithmetic on them (even just formatting) should
+                // stay within chrono's own, already-overflow-safe `Debug` impl rather
+                // than this crate re-deriving a magnitude by hand.
+                write!(f, "solar offset {offset:?} on {event:?} exceeds the {}-hour limit", crate::pack::MAX_SOLAR_OFFSET_HOURS)
+            }
         }
     }
 }

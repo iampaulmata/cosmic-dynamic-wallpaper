@@ -11,6 +11,22 @@ use std::fmt;
 use serde::Serialize;
 
 /// Session-bus well-known name (contracts/wallpaperd-dbus-interface.md).
+///
+/// **Trust assumption (spec 011 US8 FR-050)**: [`DbusClient::connect`] resolves this
+/// well-known name to whatever process currently owns it on the session bus and
+/// trusts it unconditionally to be the real `wallpaperd` — there is no additional
+/// authentication of the owning process's identity beyond "it won the well-known-name
+/// race on my session bus." This is the client-side mirror of the daemon-side
+/// authorization gap `dbus_service.rs`'s `query_all` doc comment and
+/// `packaging/dbus-1/com.system76.CosmicDynamicWallpaper1.conf` describe (spec 011 US4
+/// FR-015/FR-016): the session bus already scopes every activity to one user's own
+/// session, so a same-uid impostor process claiming this name before the real
+/// `wallpaperd` starts is the only threat this assumption glosses over — not a
+/// cross-user/privilege-boundary one. Accepted for the same reason as the daemon side:
+/// nothing this interface exposes or accepts crosses a privilege boundary (no root
+/// action, no other user's data), so a stronger scheme (e.g. verifying the owning
+/// process's credentials via `org.freedesktop.DBus.GetConnectionUnixUser`/pid) was
+/// judged disproportionate rather than silently unconsidered.
 pub const BUS_NAME: &str = "com.system76.CosmicDynamicWallpaper1";
 /// Object path the interface is served at.
 pub const OBJECT_PATH: &str = "/com/system76/CosmicDynamicWallpaper1";
@@ -39,10 +55,20 @@ pub enum DbusError {
     /// No running `wallpaperd` reachable on the session bus (FR-011) — the coarser,
     /// safer default for any failure that isn't specifically an unmanaged-output error.
     DaemonUnreachable,
-    /// The daemon is reachable but doesn't currently manage the named output.
+    /// The daemon is reachable but rejected the request as `InvalidArgs` — either the
+    /// output isn't currently managed, or `output_id` itself failed validation
+    /// (`OutputId::validated`, e.g. empty or containing disallowed characters). Spec
+    /// 011 US8 FR-044 (previously this variant always rendered a fixed "does not
+    /// currently manage" message, silently discarding the daemon's actual reason —
+    /// misleading for the validation-failure case, which isn't about output
+    /// management at all).
     OutputNotFound {
-        /// The unmanaged output name that was requested.
+        /// The output id that was rejected.
         id: String,
+        /// The daemon's own `InvalidArgs` message, when the D-Bus reply carried one
+        /// (it always does today, but `zbus::Error::MethodError`'s description is
+        /// `Option<String>` at the protocol level, so this stays optional too).
+        detail: Option<String>,
     },
 }
 
@@ -50,7 +76,8 @@ impl fmt::Display for DbusError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             DbusError::DaemonUnreachable => write!(f, "wallpaperd is not running or not reachable on the session bus"),
-            DbusError::OutputNotFound { id } => write!(f, "wallpaperd does not currently manage an output named {id:?}"),
+            DbusError::OutputNotFound { id, detail: Some(detail) } => write!(f, "wallpaperd rejected output {id:?}: {detail}"),
+            DbusError::OutputNotFound { id, detail: None } => write!(f, "wallpaperd does not currently manage an output named {id:?}"),
         }
     }
 }
@@ -103,16 +130,17 @@ impl DbusClient {
 }
 
 /// Map a `zbus` call failure to a [`DbusError`]. A D-Bus method-error reply naming
-/// `InvalidArgs` (or similar) is treated as "the daemon is reachable but doesn't
-/// manage that output" ([`DbusError::OutputNotFound`], only meaningful when
-/// `output_id` is non-empty); every other failure (no session bus, no such well-known
-/// name/service, timeout, etc.) is [`DbusError::DaemonUnreachable`] — the coarser,
-/// safer default per FR-011.
+/// `InvalidArgs` (or similar) is treated as "the daemon is reachable but rejected this
+/// request" ([`DbusError::OutputNotFound`], only meaningful when `output_id` is
+/// non-empty), carrying forward the reply's own description text (FR-044) rather than
+/// discarding it; every other failure (no session bus, no such well-known name/service,
+/// timeout, etc.) is [`DbusError::DaemonUnreachable`] — the coarser, safer default per
+/// FR-011.
 fn map_error(e: &zbus::Error, output_id: &str) -> DbusError {
     if !output_id.is_empty() {
-        if let zbus::Error::MethodError(name, ..) = e {
+        if let zbus::Error::MethodError(name, detail, ..) = e {
             if name.to_string().contains("InvalidArgs") {
-                return DbusError::OutputNotFound { id: output_id.to_string() };
+                return DbusError::OutputNotFound { id: output_id.to_string(), detail: detail.clone() };
             }
         }
     }
@@ -135,6 +163,23 @@ mod tests {
         assert!(matches!(client.query_all(), Err(DbusError::DaemonUnreachable)));
         assert!(matches!(client.reevaluate_all(), Err(DbusError::DaemonUnreachable)));
         assert!(matches!(client.query_output("DP-3"), Err(DbusError::DaemonUnreachable)));
+    }
+
+    /// Spec 011 US8 FR-044: the daemon's real `InvalidArgs` description must reach
+    /// `Display` output instead of being collapsed to a single fixed "does not
+    /// currently manage" message regardless of the actual rejection reason (e.g. an
+    /// `output_id` that failed validation, not merely one that isn't managed).
+    #[test]
+    fn output_not_found_display_includes_the_daemons_detail_when_present() {
+        let with_detail = DbusError::OutputNotFound {
+            id: "DP-3;rm -rf /".to_string(),
+            detail: Some("output id contains disallowed characters".to_string()),
+        };
+        let message = with_detail.to_string();
+        assert!(message.contains("disallowed characters"), "expected the daemon's real reason in: {message}");
+
+        let without_detail = DbusError::OutputNotFound { id: "DP-9".to_string(), detail: None };
+        assert!(without_detail.to_string().contains("does not currently manage"));
     }
 
     #[test]

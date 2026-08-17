@@ -15,6 +15,18 @@ use crate::error::ManifestError;
 /// exist — callers get [`ManifestError::MissingImageFile`] for a nonexistent entry
 /// rather than this function's containment error.
 pub fn resolve_and_check(pack_dir: &Path, file: &str) -> Result<PathBuf, ManifestError> {
+    // Spec 011 US5 FR-020 (research.md R16): `pack_dir.join(file)` below silently
+    // discards `pack_dir` when `file` is absolute (`Path::join`'s documented
+    // behavior) — containment previously only held because the later
+    // `starts_with(&canonical_dir)` check happened to still catch it (for an
+    // absolute path that exists and resolves outside the pack dir). Rejecting
+    // explicitly here removes the reliance on that incidental ordering: an absolute
+    // path is never a valid manifest entry, regardless of where it happens to point
+    // or whether it happens to exist.
+    if Path::new(file).is_absolute() {
+        return Err(ManifestError::PathEscapesPackDirectory { file: file.to_string() });
+    }
+
     let candidate = pack_dir.join(file);
     if !candidate.exists() {
         return Err(ManifestError::MissingImageFile { file: file.to_string() });
@@ -66,6 +78,29 @@ mod tests {
         assert!(matches!(
             resolve_and_check(&dir, "nope.jpg"),
             Err(ManifestError::MissingImageFile { .. })
+        ));
+    }
+
+    /// Spec 011 US5 FR-020/FR-021 (research.md R16) — the audit's own reproduction
+    /// shape: `/etc/passwd`, an absolute path that genuinely exists on any Unix host.
+    /// Previously this only happened to be rejected because `pack_dir.join(file)`
+    /// discards `pack_dir` for an absolute `file`, and the later containment check
+    /// caught the resulting `/etc/passwd` as outside `pack_dir` — an explicit check
+    /// must now reject it directly, closing the gap where a future change to how pack
+    /// directories are laid out (e.g. nesting them under a shared parent) could have
+    /// silently reopened an escape for an absolute path that happens to still resolve
+    /// somewhere nominally "inside" that new layout.
+    #[test]
+    fn rejects_absolute_path() {
+        let dir = temp_dir("absolute");
+        assert!(matches!(resolve_and_check(&dir, "/etc/passwd"), Err(ManifestError::PathEscapesPackDirectory { .. })));
+
+        // Also rejected even when the absolute path doesn't exist at all — proving
+        // this is an explicit, unconditional check, not incidentally routed through
+        // `MissingImageFile` for the non-existent case.
+        assert!(matches!(
+            resolve_and_check(&dir, "/this/path/does/not/exist/at/all.jpg"),
+            Err(ManifestError::PathEscapesPackDirectory { .. })
         ));
     }
 

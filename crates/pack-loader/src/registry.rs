@@ -117,6 +117,30 @@ pub struct Registry {
     state: RegistryConfig,
     removed_config: Config,
     removed_state: RemovedStarterPacksConfig,
+    /// Cross-process advisory-lock file path guarding the read-modify-write cycle in
+    /// [`Registry::register_with_origin`]/[`Registry::remove`]/[`Registry::reload_all`]
+    /// (spec 011 US6 FR-022, research.md R17).
+    lock_path: std::path::PathBuf,
+}
+
+/// Resolves the directory a registry lock file should live in — alongside the
+/// `cosmic-config` store it guards. `custom_path` mirrors `Config::with_custom_path`'s
+/// own root (test-only, [`Registry::open_at`]); `None` reconstructs `Config::new`'s
+/// real, production directory convention (`dirs::config_dir()/cosmic/{app_id}/
+/// v{version}/`) the same way research.md R25 documents for the permission-tightening
+/// fix — `cosmic_config::Config` exposes no path accessor of its own, so this is the
+/// one place in this crate that has to reconstruct that internal-but-stable
+/// convention rather than call a public accessor.
+fn registry_lock_path(custom_path: Option<&std::path::Path>) -> Result<std::path::PathBuf, RegistryError> {
+    let dir = match custom_path {
+        Some(p) => p.to_path_buf(),
+        None => dirs::config_dir()
+            .ok_or_else(|| RegistryError::LockFailed { message: "no resolvable config directory".to_string() })?
+            .join("cosmic")
+            .join(REGISTRY_CONFIG_ID)
+            .join(format!("v{}", RegistryConfig::VERSION)),
+    };
+    Ok(dir.join(".registry.lock"))
 }
 
 impl Registry {
@@ -140,7 +164,8 @@ impl Registry {
         if repair_relocated_starter_pack_removed(&mut removed_state.removed) {
             removed_state.write_entry(&removed_config).map_err(|e| RegistryError::Storage { message: e.to_string() })?;
         }
-        Ok(Self { config, state, removed_config, removed_state })
+        let lock_path = registry_lock_path(None)?;
+        Ok(Self { config, state, removed_config, removed_state, lock_path })
     }
 
     /// Open a registry rooted at a custom path — used by tests (`tempfile`-backed,
@@ -157,13 +182,13 @@ impl Registry {
             custom_path.to_path_buf(),
         )
         .map_err(|e| RegistryError::Storage { message: e.to_string() })?;
-        Self::from_configs(config, removed_config)
+        Self::from_configs(config, removed_config, registry_lock_path(Some(custom_path))?)
     }
 
-    fn from_configs(config: Config, removed_config: Config) -> Result<Self, RegistryError> {
+    fn from_configs(config: Config, removed_config: Config, lock_path: std::path::PathBuf) -> Result<Self, RegistryError> {
         let state = RegistryConfig::get_entry(&config).unwrap_or_else(|(_errors, default)| default);
         let removed_state = RemovedStarterPacksConfig::get_entry(&removed_config).unwrap_or_else(|(_errors, default)| default);
-        Ok(Self { config, state, removed_config, removed_state })
+        Ok(Self { config, state, removed_config, removed_state, lock_path })
     }
 
     /// Persist a new known pack location (FR-010), `User`-origin (spec 7 FR-011 — the
@@ -181,11 +206,12 @@ impl Registry {
     /// defaults to `User`, and nothing in this crate's own public CLI-facing API lets a
     /// caller claim `Package` origin for themselves).
     pub fn register_with_origin(&mut self, source: PackSource, origin: PackOrigin) -> Result<(), RegistryError> {
-        if self.state.entries.iter().any(|e| e.source == source) {
-            return Ok(());
-        }
-        self.state.entries.push(PackRegistryEntry { source, status: RegistryStatus::Known, origin });
-        self.persist()
+        self.with_locked_state(|entries| {
+            if entries.iter().any(|e| e.source == source) {
+                return;
+            }
+            entries.push(PackRegistryEntry { source, status: RegistryStatus::Known, origin });
+        })
     }
 
     /// Delete a registry entry outright (FR-012) — distinct from [`Registry::reload_all`]'s
@@ -196,17 +222,101 @@ impl Registry {
     /// re-registration attempt (`wallpaperd`'s own first-run check) doesn't silently
     /// undo it.
     pub fn remove(&mut self, source: &PackSource) -> Result<(), RegistryError> {
-        let removed_origin = self.state.entries.iter().find(|e| &e.source == source).map(|e| e.origin);
-        self.state.entries.retain(|e| &e.source != source);
-        self.persist()?;
+        let removed_origin = self.with_locked_state(|entries| {
+            let removed_origin = entries.iter().find(|e| &e.source == source).map(|e| e.origin);
+            entries.retain(|e| &e.source != source);
+            removed_origin
+        })?;
 
-        if removed_origin == Some(PackOrigin::Package) && !self.removed_state.removed.contains(source) {
-            self.removed_state.removed.push(source.clone());
-            self.removed_state
-                .write_entry(&self.removed_config)
-                .map_err(|e| RegistryError::Storage { message: e.to_string() })?;
+        if removed_origin == Some(PackOrigin::Package) {
+            // Spec 011 adversarial re-review finding 3: this write used to go straight
+            // through `self.removed_state` (an in-memory snapshot, potentially stale
+            // relative to another process's concurrent write) with no lock at all —
+            // the exact lost-update race `with_locked_state` above exists to close for
+            // the main `entries` list, just left open for this second store. Routed
+            // through the same fd-lock/fresh-read pattern now, via
+            // `with_locked_removed_state`.
+            self.with_locked_removed_state(|removed| {
+                if !removed.contains(source) {
+                    removed.push(source.clone());
+                }
+            })?;
         }
         Ok(())
+    }
+
+    /// [`Self::with_locked_state`], applied to the separate removed-starter-packs
+    /// store instead of the main entries list — see that method's doc comment for the
+    /// full rationale (spec 011 US6 FR-022, research.md R17; extended to this second
+    /// store by adversarial re-review finding 3).
+    fn with_locked_removed_state<T>(&mut self, mutate: impl FnOnce(&mut Vec<PackSource>) -> T) -> Result<T, RegistryError> {
+        let lock_file = self.open_lock_file()?;
+        let mut file_lock = fd_lock::RwLock::new(lock_file);
+        let _guard = file_lock.write().map_err(|e| RegistryError::LockFailed { message: e.to_string() })?;
+
+        let mut fresh = RemovedStarterPacksConfig::get_entry(&self.removed_config).unwrap_or_else(|(_errors, default)| default);
+        let result = mutate(&mut fresh.removed);
+        fresh.write_entry(&self.removed_config).map_err(|e| RegistryError::Storage { message: e.to_string() })?;
+        self.removed_state = fresh;
+        Ok(result)
+    }
+
+    /// Open (creating if necessary) [`Self::lock_path`] — the shared cross-process
+    /// advisory-lock file guarding a read-modify-write cycle against either of this
+    /// crate's two `cosmic-config` stores. Split out of
+    /// [`Self::with_locked_state`]/[`Self::with_locked_removed_state`] purely to avoid
+    /// duplicating this open-the-file boilerplate between them (adversarial re-review
+    /// finding 3). Returns the plain `File`, not an already-locked guard — `fd_lock`'s
+    /// `RwLock`/`RwLockWriteGuard` are tied together by a borrow, so the `RwLock`
+    /// itself has to be constructed in each caller's own stack frame for the guard to
+    /// have somewhere to live; each caller still does that (two lines: `let mut
+    /// file_lock = fd_lock::RwLock::new(...); let _guard = file_lock.write()?;`)
+    /// immediately after calling this.
+    fn open_lock_file(&self) -> Result<std::fs::File, RegistryError> {
+        if let Some(parent) = self.lock_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| RegistryError::LockFailed { message: e.to_string() })?;
+        }
+        std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&self.lock_path)
+            .map_err(|e| RegistryError::LockFailed { message: e.to_string() })
+    }
+
+    /// Acquire the cross-process lock, then run `mutate` against a *freshly re-read*
+    /// snapshot of `entries` — not `self.state.entries`, which may already be stale
+    /// relative to another process's concurrent write (spec 011 US6 FR-022,
+    /// research.md R17). This is the actual fix for the race the audit reproduced:
+    /// `wallpaperctl register` (a fresh process) and `wallpaperd`'s own long-lived
+    /// in-process `Registry` each previously loaded a snapshot once and
+    /// unconditionally overwrote the whole entries list on `persist()` — whichever
+    /// wrote last silently discarded the other's change. Re-reading fresh *under the
+    /// lock*, immediately before mutating and writing back, closes that lost-update
+    /// window: by the time `mutate` runs, no other process can be mid-write, and this
+    /// call sees whatever the last writer (this process or another) actually
+    /// committed. `self.state` is updated to match what was written, so this
+    /// instance's own subsequent reads (e.g. `known_packs`) stay consistent too.
+    ///
+    /// Guards the main `entries` list specifically — `register_with_origin`'s
+    /// mutation, and the `entries`-retaining half of `remove`'s. `remove`'s *other*
+    /// mutation, of the separate removed-starter-packs store, is guarded the same way
+    /// but through [`Self::with_locked_removed_state`] instead (adversarial re-review
+    /// finding 3 — that store used to be written unlocked). [`Registry::reload_all`]'s
+    /// own `persist()` call remains unlocked/best-effort (its own doc comment already
+    /// frames it that way): the `status` field it refreshes is cheaply re-derivable on
+    /// the very next reload, so a lost update there is much lower stakes than losing a
+    /// `register`/`remove` outright.
+    fn with_locked_state<T>(&mut self, mutate: impl FnOnce(&mut Vec<PackRegistryEntry>) -> T) -> Result<T, RegistryError> {
+        let lock_file = self.open_lock_file()?;
+        let mut file_lock = fd_lock::RwLock::new(lock_file);
+        let _guard = file_lock.write().map_err(|e| RegistryError::LockFailed { message: e.to_string() })?;
+
+        let mut fresh = RegistryConfig::get_entry(&self.config).unwrap_or_else(|(_errors, default)| default);
+        let result = mutate(&mut fresh.entries);
+        fresh.write_entry(&self.config).map_err(|e| RegistryError::Storage { message: e.to_string() })?;
+        self.state = fresh;
+        Ok(result)
     }
 
     /// Whether `source` was previously registered as a starter pack and explicitly
@@ -361,6 +471,39 @@ mod tests {
         // Reopen fresh, same custom path — simulates a daemon restart (US4 scenario 1).
         let reopened = Registry::open_at(dir.path()).unwrap();
         assert!(reopened.known_packs().iter().any(|e| e.source == src));
+    }
+
+    /// Spec 011 US6 FR-022 (research.md R17) — the audit's own reproduction shape:
+    /// `wallpaperctl register` (a fresh process) and `wallpaperd`'s own long-lived
+    /// registry, both opened from the same on-disk store *before* either writes,
+    /// then each registering a different pack. Before this fix, whichever `persist()`
+    /// landed last would silently discard the other's entry (both loaded their
+    /// snapshot once, at `open_at` time, and wrote it back unconditionally). After
+    /// the fix, `register`'s locked read-modify-write re-reads fresh from disk under
+    /// the lock, so the second write can't clobber the first.
+    #[test]
+    fn concurrent_persist_serializes() {
+        let dir = tempfile::tempdir().unwrap();
+        // Two independent `Registry` handles on the same on-disk store, opened before
+        // either has written anything — exactly the "two processes, same store"
+        // shape a daemon-plus-CLI-invocation race has.
+        let mut registry_a = Registry::open_at(dir.path()).unwrap();
+        let mut registry_b = Registry::open_at(dir.path()).unwrap();
+
+        let file_a = dir.path().join("a.jpg");
+        let file_b = dir.path().join("b.jpg");
+        std::fs::write(&file_a, b"a").unwrap();
+        std::fs::write(&file_b, b"b").unwrap();
+
+        registry_a.register(source(&file_a)).unwrap();
+        registry_b.register(source(&file_b)).unwrap();
+
+        // Neither write was lost — re-opening a third handle sees both.
+        let reopened = Registry::open_at(dir.path()).unwrap();
+        let known = reopened.known_packs();
+        assert_eq!(known.len(), 2, "expected both concurrent registrations to survive, got {known:?}");
+        assert!(known.iter().any(|e| e.source == source(&file_a)));
+        assert!(known.iter().any(|e| e.source == source(&file_b)));
     }
 
     #[test]

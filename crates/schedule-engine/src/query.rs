@@ -28,7 +28,13 @@ use crate::Location;
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScheduleQueryResult {
     /// The image belonging to the most-recently-passed anchor. Always present, even
-    /// mid-transition (it's the outgoing image in that case).
+    /// mid-transition — **do not read this as "the currently active image"**: while
+    /// `transition` is `Some`, this is the *outgoing* image (the one fading out), not
+    /// what's on screen right now (spec 011 US8 FR-047 — the name itself invites that
+    /// misreading, since it doesn't distinguish "before the most recent anchor" from
+    /// "before this transition finishes"). Outside a transition (`transition` is
+    /// `None`), it genuinely is the currently active image — the ambiguity only bites
+    /// during the crossfade window itself.
     pub active_before: ImageId,
     /// `Some` only when the query instant falls inside a crossfade window.
     pub transition: Option<TransitionState>,
@@ -55,11 +61,32 @@ pub struct TransitionState {
     pub progress: f64,
 }
 
-/// How many days to search outward, at most, before giving up and falling back to a
-/// static result (see `resolve`'s doc). Generous enough to cross any realistic
-/// multi-month polar night while still terminating in bounded time (constitution
-/// Principle VIII: no unbounded loops).
+/// The doubling threshold `resolve`'s radius-doubling search loop checks *before*
+/// doubling again (see that loop's `if radius >= MAX_SEARCH_RADIUS_DAYS` / `radius *=
+/// 2` ordering) — generous enough to cross any realistic multi-month polar night while
+/// still terminating in bounded time (constitution Principle VIII: no unbounded
+/// loops). **Corrected during implementation** (spec 011 US7 FR-039, research.md
+/// R33): despite the name, this is *not* the true worst-case radius the search
+/// actually explores — because the loop checks the threshold *before* doubling, the
+/// last `build_timeline` call before giving up runs at `radius = 512`
+/// (`1 -> 2 -> 4 -> ... -> 256 -> 512`, since `256 < 370` still doubles once more
+/// before the `512 >= 370` check finally stops it), not `370`. This is a
+/// documentation-accuracy fix only — the check-then-double ordering itself is
+/// unchanged (deliberately: see research.md R33's Alternatives), and [`ValidatedPack::
+/// query`]'s pole-latitude fast path ([`POLE_LATITUDE_THRESHOLD`]) is what actually
+/// eliminates the case that used to hit this true worst case on every call.
 const MAX_SEARCH_RADIUS_DAYS: i64 = 370;
+
+/// A latitude this close to a pole (either) that no solar event (sunrise/sunset/etc.)
+/// ever resolves for any date (spec 011 US7 FR-038, research.md R33) — the audit's own
+/// reproduction: a query at a pole-latitude location previously ran `resolve`'s full
+/// radius-doubling search out to its true worst case (see [`MAX_SEARCH_RADIUS_DAYS`]'s
+/// doc comment) on *every single call*, for a location that can never succeed.
+/// `89.9999` rather than exactly `90.0`/`-90.0` accounts for floating-point
+/// representation — no real solar event resolves at exactly the pole either, but a
+/// location a hair short of it is still practically the pole and deserves the same
+/// fast path.
+pub const POLE_LATITUDE_THRESHOLD: f64 = 89.9999;
 
 /// Resolve `(date, image_index) -> instant`, or `None` if that image's anchor doesn't
 /// occur on that date (FR-007 polar gaps; DST gaps for clock anchors).
@@ -242,6 +269,15 @@ impl ValidatedPack {
                         "ValidatedPack::query: a Location is required for solar-anchored packs"
                     ),
                 };
+                // Spec 011 US7 FR-038 (research.md R33): a pole-latitude location can
+                // never resolve a solar event on any date — skip straight to the same
+                // "give up" fallback `resolve`'s own MAX_SEARCH_RADIUS_DAYS branch
+                // would eventually reach anyway, rather than running the full
+                // radius-doubling search to its true worst-case extent on every call
+                // for a location that can never succeed.
+                if location.latitude().abs() >= POLE_LATITUDE_THRESHOLD {
+                    return fallback_result(self.images(), &[], at);
+                }
                 let instant_fn = solar_instant_fn(self.images(), location);
                 resolve(self.images(), at, crossfade_duration, &instant_fn)
             }
@@ -334,6 +370,46 @@ mod tests {
         ];
         let pack = WallpaperPack::validate(images).unwrap();
         let _ = pack.query(None, chrono::Local::now(), TimeDelta::minutes(5));
+    }
+
+    /// Spec 011 US7 FR-038 (research.md R33) — the audit's own reproduction: a
+    /// pole-latitude query previously ran the full radius-doubling search (real
+    /// per-date solar-position calculations that never resolve) on every call, for a
+    /// location that can never succeed. Verified two ways: first, that the fast path
+    /// produces the same degenerate-fallback shape the full search would eventually
+    /// reach anyway; second, via a *relative* timing comparison against the real full
+    /// search measured back-to-back on the same run — immune to absolute-timing
+    /// flakiness on a slow/loaded CI machine (unlike a fixed millisecond threshold),
+    /// while still failing against the pre-fix code (which *is* the full search, so
+    /// the ratio would be ~1x instead of orders of magnitude).
+    #[test]
+    fn pole_latitude_returns_none_fast() {
+        let images = vec![
+            PackImage::new("a", TimeAnchor::Solar { event: SolarEventKind::Sunrise, offset: None }),
+            PackImage::new("b", TimeAnchor::Solar { event: SolarEventKind::Sunset, offset: None }),
+        ];
+        let pack = WallpaperPack::validate(images).unwrap();
+        let pole = crate::Location::new(89.99995, 0.0).unwrap();
+        let at = chrono::Local::now();
+
+        let start = std::time::Instant::now();
+        let result = pack.query(Some(&pole), at, TimeDelta::minutes(5));
+        let fast_path_elapsed = start.elapsed();
+        assert_eq!(result.active_before.as_str(), "a", "falls back to the first image, per fallback_result's own contract");
+        assert!(result.transition.is_none());
+
+        // The real full search, reproduced directly (bypassing `query`'s fast path) —
+        // a pole location never resolves a solar event on any date, so this measures
+        // exactly the cost the fast path above avoids paying.
+        let instant_fn = solar_instant_fn(pack.images(), &pole);
+        let start = std::time::Instant::now();
+        let _ = resolve(pack.images(), at, TimeDelta::minutes(5), &instant_fn);
+        let full_search_elapsed = start.elapsed();
+
+        assert!(
+            fast_path_elapsed.saturating_mul(5) < full_search_elapsed,
+            "fast path ({fast_path_elapsed:?}) should be far cheaper than the full radius-doubling search ({full_search_elapsed:?})"
+        );
     }
 
     #[test]
