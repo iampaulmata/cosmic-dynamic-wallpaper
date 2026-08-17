@@ -39,7 +39,7 @@ jobs:
       # .pc file even though this daemon never processes keyboard input (see
       # crates/renderer/README.md's "Building on a real system" section).
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev pkg-config
       - name: cargo test
         run: cargo test --package renderer --all-targets
 
@@ -52,7 +52,7 @@ jobs:
         with:
           components: clippy
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev pkg-config
       - name: cargo clippy
         run: cargo clippy --package renderer --all-targets -- -D warnings
 
@@ -66,6 +66,6 @@ jobs:
           components: llvm-tools-preview
       - uses: taiki-e/install-action@cargo-llvm-cov
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev pkg-config
       - name: cargo llvm-cov
         run: cargo llvm-cov --package renderer --fail-under-lines 75
