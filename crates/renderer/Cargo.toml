@@ -110,6 +110,13 @@ assets = [
     # README describing that workflow.
     ["target/release/cosmic-wallpaper-settings", "usr/bin/", "755"],
     ["../../packaging/desktop/com.system76.CosmicDynamicWallpaperSettings.desktop", "usr/share/applications/com.system76.CosmicDynamicWallpaperSettings.desktop", "644"],
+    # App icon (hicolor theme, looked up by name via the .desktop file's Icon= key
+    # below) — one entry per size, each installed under its matching hicolor
+    # <N>x<N>/apps/ directory.
+    ["../../packaging/icons/icon-16.png", "usr/share/icons/hicolor/16x16/apps/com.system76.CosmicDynamicWallpaperSettings.png", "644"],
+    ["../../packaging/icons/icon-32.png", "usr/share/icons/hicolor/32x32/apps/com.system76.CosmicDynamicWallpaperSettings.png", "644"],
+    ["../../packaging/icons/icon-64.png", "usr/share/icons/hicolor/64x64/apps/com.system76.CosmicDynamicWallpaperSettings.png", "644"],
+    ["../../packaging/icons/icon-128.png", "usr/share/icons/hicolor/128x128/apps/com.system76.CosmicDynamicWallpaperSettings.png", "644"],
     ["../../packaging/systemd/cosmic-wallpaperd.service", "usr/lib/systemd/user/cosmic-wallpaperd.service", "644"],
     # Session-bus policy for the D-Bus interface (spec 011 US4 FR-015, research.md
     # R11) — see that file's own doc comment for what it does and doesn't add.

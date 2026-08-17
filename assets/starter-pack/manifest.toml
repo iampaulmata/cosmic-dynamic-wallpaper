@@ -22,7 +22,7 @@ anchor = "sunrise"
 
 [[images]]
 file = "morning.png"
-anchor = "solar_noon"
+anchor = "solar_noon-2h"
 
 [[images]]
 file = "afternoon.png"
