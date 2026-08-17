@@ -1,6 +1,6 @@
 [package]
 name = "schedule-engine"
-version = "0.2.0"
+version = "0.2.2"
 edition.workspace = true
 license.workspace = true
 description = "Pure, deterministic solar/clock scheduling logic for the Cosmic Dynamic Wallpaper daemon"
