@@ -53,9 +53,9 @@ impl State {
 
 fn mode_label(mode: LocationMode) -> &'static str {
     match mode {
-        LocationMode::Manual => "Manual",
-        LocationMode::Automatic => "Automatic (portal)",
         LocationMode::IpGeolocation => "IP-geolocation",
+        LocationMode::Automatic => "Automatic (portal)",
+        LocationMode::Manual => "Manual",
     }
 }
 
@@ -114,7 +114,7 @@ fn portal_status_label(status: &ResolutionStatus) -> String {
 
 pub fn view(state: &State) -> Element<'_, Message> {
     let mut mode_section = widget::settings::section().title("Location mode");
-    for mode in [LocationMode::Manual, LocationMode::Automatic, LocationMode::IpGeolocation] {
+    for mode in [LocationMode::IpGeolocation, LocationMode::Automatic, LocationMode::Manual] {
         let radio = widget::radio("", mode, Some(state.entry.mode), Message::SelectMode);
         if mode == LocationMode::IpGeolocation {
             // FR-007: discoverable by hover, before the option is selected.
