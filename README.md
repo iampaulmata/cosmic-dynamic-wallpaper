@@ -1,5 +1,9 @@
 # Cosmic Dynamic Wallpaper
 
+<p align="center">
+  <img src="docs/images/cdw-icon.png" alt="Cosmic Dynamic Wallpaper icon" width="128">
+</p>
+
 **A dynamic wallpaper changer for the COSMIC desktop environment.** Automatically change your COSMIC Desktop wallpaper throughout the day using real solar events such as sunrise, sunset, civil twilight, astronomical twilight, and solar noon — or create your own custom wallpaper schedule. Smooth GPU-powered crossfade transitions make each wallpaper change seamless.
 
 [![COSMIC Desktop](https://img.shields.io/badge/COSMIC%20Desktop-native-48B9C7)](https://github.com/pop-os/cosmic-epoch)
