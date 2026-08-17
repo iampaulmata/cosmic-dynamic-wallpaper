@@ -16,6 +16,14 @@ pub enum ManifestError {
         /// The manifest path that was expected but not found.
         path: PathBuf,
     },
+    /// The manifest file exceeded [`crate::load::MAX_MANIFEST_BYTES`] (spec 011 US3
+    /// FR-011) — rejected before being read into memory at all.
+    ManifestTooLarge {
+        /// The oversized manifest's path.
+        path: PathBuf,
+        /// Its actual size in bytes.
+        size: u64,
+    },
     /// The manifest failed to parse as TOML, or didn't match the expected schema shape.
     ParseFailure {
         /// The manifest file that failed to parse.
@@ -87,6 +95,9 @@ impl fmt::Display for ManifestError {
             ManifestError::ManifestNotFound { path } => {
                 write!(f, "no manifest file found at {}", path.display())
             }
+            ManifestError::ManifestTooLarge { path, size } => {
+                write!(f, "manifest {} is {size} bytes, larger than the {}-byte limit", path.display(), crate::load::MAX_MANIFEST_BYTES)
+            }
             ManifestError::ParseFailure { path, message } => {
                 write!(f, "failed to parse manifest {}: {message}", path.display())
             }
@@ -151,6 +162,13 @@ pub enum RegistryError {
         /// The unregistered source that was referenced.
         source: String,
     },
+    /// The cross-process advisory lock guarding a registry read-modify-write
+    /// (spec 011 US6 FR-022, research.md R17) couldn't be acquired or its directory
+    /// couldn't be resolved.
+    LockFailed {
+        /// Why the lock couldn't be acquired.
+        message: String,
+    },
 }
 
 impl fmt::Display for RegistryError {
@@ -158,6 +176,7 @@ impl fmt::Display for RegistryError {
         match self {
             RegistryError::Storage { message } => write!(f, "pack registry storage error: {message}"),
             RegistryError::NotFound { source } => write!(f, "no registered pack at {source}"),
+            RegistryError::LockFailed { message } => write!(f, "couldn't lock the pack registry for writing: {message}"),
         }
     }
 }

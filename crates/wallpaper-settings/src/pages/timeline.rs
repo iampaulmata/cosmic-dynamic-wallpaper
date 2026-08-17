@@ -191,7 +191,10 @@ mod tests {
         // Timeline queries all outputs (QueryAll), which never returns
         // OutputNotFound — but this page's mapping is deliberately total over every
         // DbusError variant, not just the one QueryAll can actually produce.
-        assert_eq!(from_query_result(Err(DbusError::OutputNotFound { id: "DP-3".to_string() })), TimelineState::Unreachable);
+        assert_eq!(
+            from_query_result(Err(DbusError::OutputNotFound { id: "DP-3".to_string(), detail: None })),
+            TimelineState::Unreachable
+        );
     }
 
     #[test]

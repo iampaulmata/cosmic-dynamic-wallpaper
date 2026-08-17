@@ -111,6 +111,9 @@ assets = [
     ["target/release/cosmic-wallpaper-settings", "usr/bin/", "755"],
     ["../../packaging/desktop/com.system76.CosmicDynamicWallpaperSettings.desktop", "usr/share/applications/com.system76.CosmicDynamicWallpaperSettings.desktop", "644"],
     ["../../packaging/systemd/cosmic-wallpaperd.service", "usr/lib/systemd/user/cosmic-wallpaperd.service", "644"],
+    # Session-bus policy for the D-Bus interface (spec 011 US4 FR-015, research.md
+    # R11) — see that file's own doc comment for what it does and doesn't add.
+    ["../../packaging/dbus-1/com.system76.CosmicDynamicWallpaper1.conf", "usr/share/dbus-1/session.d/com.system76.CosmicDynamicWallpaper1.conf", "644"],
     # Bundled starter pack (spec 7 US2, FR-008) — static, checked-in assets (T043,
     # tools/generate-starter-pack). `cosmic-wallpaperd`'s own first-run self-registration
     # (crates/renderer/src/starter_pack.rs) looks for this exact path

@@ -104,24 +104,46 @@ pub struct State {
     /// The most recent add attempt's failure, if any (FR-003). Cleared on the next add
     /// attempt or a successful one.
     pub add_error: Option<String>,
+    /// `true` while a file-chooser dialog spawned by "Add pack folder…"/"Add image
+    /// file…" is in flight — spec 011 US8 FR-052: guards against a rapid double-click
+    /// opening two concurrent dialogs (the desktop portal's file chooser has no
+    /// built-in single-instance guard of its own). Cleared on `AddResult`/
+    /// `AddCancelled`, whichever comes back first.
+    pub dialog_in_flight: bool,
 }
 
 impl State {
     pub fn load(registry: &mut Registry) -> Self {
-        Self { rows: rows_from_registry(&registry.known_packs()), pending_removal: None, add_error: None }
+        Self { rows: rows_from_registry(&registry.known_packs()), pending_removal: None, add_error: None, dialog_in_flight: false }
     }
 }
 
-/// `AddFolderRequested`/`AddFileRequested`: a fresh attempt clears any previous error
-/// (data-model.md).
-pub fn request_add(state: &mut State) {
+/// `AddFolderRequested`/`AddFileRequested`: returns `true` (clearing any previous
+/// error and setting the in-flight guard) only if no file-chooser dialog is already in
+/// flight; `false` means a dialog is already open and the caller must not spawn a
+/// second one (spec 011 US8 FR-052).
+#[must_use]
+pub fn request_add(state: &mut State) -> bool {
+    if state.dialog_in_flight {
+        return false;
+    }
+    state.dialog_in_flight = true;
     state.add_error = None;
+    true
+}
+
+/// `AddCancelled`: the file-chooser dialog was cancelled — clears the in-flight guard
+/// (FR-052) so the next click can open a fresh dialog.
+pub fn cancel_add(state: &mut State) {
+    state.dialog_in_flight = false;
 }
 
 /// `AddResult`: resolves and registers on success (identical call `wallpaperctl
 /// register` makes — FR-003), records a specific error otherwise, never partially
-/// registers (data-model.md).
+/// registers (data-model.md). Always clears the in-flight guard (FR-052) — the dialog
+/// this result came from is no longer open regardless of outcome.
 pub fn apply_add_result(state: &mut State, registry: &mut Registry, result: Result<PathBuf, String>) {
+    state.dialog_in_flight = false;
     let outcome = result.and_then(|path| {
         PackSource::resolve(&path)
             .map_err(|e| e.to_string())
@@ -156,10 +178,14 @@ pub fn cancel_removal(state: &mut State) {
 }
 
 pub fn view(state: &State) -> Element<'_, Message> {
+    // Spec 011 US8 FR-052: disabled (not just guarded in `update`) while a dialog is
+    // already in flight, so a rapid double-click can't even queue a second press.
+    let add_folder_message = if state.dialog_in_flight { None } else { Some(Message::AddFolderRequested) };
+    let add_file_message = if state.dialog_in_flight { None } else { Some(Message::AddFileRequested) };
     let add_row = widget::row::with_capacity(3)
         .spacing(cosmic::theme::spacing().space_xs)
-        .push(widget::button::standard("Add pack folder…").on_press(Message::AddFolderRequested))
-        .push(widget::button::standard("Add image file…").on_press(Message::AddFileRequested))
+        .push(widget::button::standard("Add pack folder…").on_press_maybe(add_folder_message))
+        .push(widget::button::standard("Add image file…").on_press_maybe(add_file_message))
         .push(widget::button::standard("Refresh").on_press(Message::Refresh));
 
     let mut top = widget::column::with_capacity(2).push(add_row);
@@ -264,12 +290,53 @@ mod tests {
         assert!(rows_from_registry(&[]).is_empty());
     }
 
+    /// Spec 011 US8 FR-052: a second `request_add` call while a dialog is already in
+    /// flight must be refused (`false`), not silently allowed to open a second dialog
+    /// — the audit's own reproduction was a rapid double-click on "Add pack folder…".
+    #[test]
+    fn request_add_refuses_a_second_call_while_a_dialog_is_in_flight() {
+        let mut state = State { rows: vec![], pending_removal: None, add_error: None, dialog_in_flight: false };
+
+        assert!(request_add(&mut state), "first call must be allowed to open a dialog");
+        assert!(state.dialog_in_flight);
+
+        assert!(!request_add(&mut state), "a dialog is already in flight — must refuse a second one");
+        assert!(state.dialog_in_flight, "still in flight — the refused call must not have cleared it");
+    }
+
+    /// `AddCancelled` clears the guard so a subsequent click can open a fresh dialog.
+    #[test]
+    fn cancel_add_clears_the_in_flight_guard() {
+        let mut state = State { rows: vec![], pending_removal: None, add_error: None, dialog_in_flight: true };
+
+        cancel_add(&mut state);
+        assert!(!state.dialog_in_flight);
+        assert!(request_add(&mut state), "guard cleared — a new dialog request must be allowed");
+    }
+
+    /// `AddResult` clears the guard regardless of success or failure — the dialog that
+    /// produced this result is no longer open either way.
+    #[test]
+    fn apply_add_result_clears_the_in_flight_guard_on_both_success_and_failure() {
+        let (mut registry, dir) = temp_registry();
+        let mut state = State { rows: vec![], pending_removal: None, add_error: None, dialog_in_flight: true };
+        let file = dir.path().join("sunrise.png");
+        image::RgbImage::new(2, 2).save(&file).unwrap();
+
+        apply_add_result(&mut state, &mut registry, Ok(file));
+        assert!(!state.dialog_in_flight, "a successful result must clear the guard");
+
+        state.dialog_in_flight = true;
+        apply_add_result(&mut state, &mut registry, Err("boom".to_string()));
+        assert!(!state.dialog_in_flight, "a failed result must also clear the guard");
+    }
+
     /// T003: a successful add registers the pack and refreshes `rows`; re-adding the
     /// same path is idempotent (spec.md Acceptance Scenarios 1, 4).
     #[test]
     fn add_result_ok_registers_and_refreshes_rows() {
         let (mut registry, dir) = temp_registry();
-        let mut state = State { rows: vec![], pending_removal: None, add_error: None };
+        let mut state = State { rows: vec![], pending_removal: None, add_error: None, dialog_in_flight: false };
         let file = dir.path().join("sunrise.png");
         image::RgbImage::new(2, 2).save(&file).unwrap();
 
@@ -287,7 +354,7 @@ mod tests {
     #[test]
     fn add_result_err_leaves_rows_unchanged_and_sets_add_error() {
         let (mut registry, _dir) = temp_registry();
-        let mut state = State { rows: vec![], pending_removal: None, add_error: None };
+        let mut state = State { rows: vec![], pending_removal: None, add_error: None, dialog_in_flight: false };
 
         apply_add_result(&mut state, &mut registry, Err("malformed manifest".to_string()));
         assert!(state.rows.is_empty());
@@ -299,7 +366,7 @@ mod tests {
     #[test]
     fn add_result_ok_with_an_unresolvable_path_sets_add_error() {
         let (mut registry, dir) = temp_registry();
-        let mut state = State { rows: vec![], pending_removal: None, add_error: None };
+        let mut state = State { rows: vec![], pending_removal: None, add_error: None, dialog_in_flight: false };
 
         apply_add_result(&mut state, &mut registry, Ok(dir.path().join("never-created.png")));
         assert!(state.rows.is_empty());
@@ -334,7 +401,7 @@ mod tests {
     #[test]
     fn confirm_removal_with_nothing_pending_is_a_harmless_noop() {
         let (mut registry, _dir) = temp_registry();
-        let mut state = State { rows: vec![], pending_removal: None, add_error: None };
+        let mut state = State { rows: vec![], pending_removal: None, add_error: None, dialog_in_flight: false };
 
         confirm_removal(&mut state, &mut registry);
         assert_eq!(state.pending_removal, None);

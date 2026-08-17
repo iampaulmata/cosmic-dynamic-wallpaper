@@ -45,7 +45,10 @@ function building the real widgets:
   picker (`cosmic::dialog::file_chooser`); removing requires confirming in a dialog
   (`Application::dialog()`). Supersedes spec 7's original "browse registered packs,
   not register new ones" scope note — `wallpaperctl register`/`remove` remain fully
-  supported alongside the GUI, neither replaces the other.
+  supported alongside the GUI, neither replaces the other. A rapid double-click on
+  "Add pack folder…"/"Add image file…" can't open two concurrent file-chooser dialogs
+  — an in-flight guard (both disabling the button and refusing a second `update` call)
+  makes the second click a no-op instead (spec 011 US8 FR-052).
 - **Assignment** (FR-003, FR-010–FR-011, FR-013–FR-017, spec 008) — a "same pack
   everywhere" toggle (on by default) plus, when off, an independent per-display
   dropdown, writing the identical `wallpaper_ipc::RendererConfig` shape
@@ -70,6 +73,19 @@ function building the real widgets:
   spec's own Foundational phase actually created (plan.md Constitution Check finding
   3 — it didn't exist before spec 7 despite an old doc comment claiming otherwise).
 
+### Pack builder wizard (spec 010-custom-pack-builder)
+
+Not a sidebar page — a modal wizard flow (`src/pages/pack_builder.rs`) launched from
+the Packs page's "Add pack folder…" when the chosen folder has no `manifest.toml` of
+its own yet. Walks the user through naming each image and picking its time anchor,
+self-validates the generated draft against `pack_loader::load_pack` before offering to
+place it (catching a bad manifest before it's ever written), and only writes
+`manifest.toml` into the source folder — or copies the whole pack into the registry's
+managed pack directory first, on a name collision — once the user actually confirms
+Move/Keep, not at generation time (spec 011 US6 FR-027). Collision-rename input is
+validated against path traversal, an absolute path, and an empty string before it's
+ever used to construct a destination path (spec 011 US2 FR-006/FR-007).
+
 FR-007 (GUI/CLI interchangeability) is enforced structurally: every page links
 `wallpaper_ipc`'s shared types directly, the same crate `wallpaperctl` depends on — not
 by convention, and not by an independent second definition (plan.md Constitution Check
@@ -90,8 +106,11 @@ finding 1, the same bug class `wallpaper-ipc`'s own extraction already fixed onc
 cargo test --package wallpaper-settings
 ```
 
-29 tests — each page's pure view-state/mapping logic, plus `pack_display`'s name/
-thumbnail resolution, independent of `libcosmic` rendering. The actual rendered
+84 tests (spec 011 US8 FR-051 — previously documented as 29, stale since spec
+010-custom-pack-builder's `pack_builder` wizard landed) — each page's pure
+view-state/mapping logic, including the pack builder wizard's validation/self-check/
+placement-flow coverage, plus `pack_display`'s name/thumbnail resolution, independent
+of `libcosmic` rendering. The actual rendered
 window (dialogs, tooltips, dropdowns, scrolling) is manual QA against a real COSMIC
 session — see `specs/007-v1-completion/quickstart.md`'s "Manual smoke check 1" and
 `specs/008-gui-usability-improvements/quickstart.md`'s six smoke checks, same posture

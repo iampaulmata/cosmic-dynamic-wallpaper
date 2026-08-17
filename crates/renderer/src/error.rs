@@ -43,6 +43,18 @@ pub enum RendererError {
         /// Why it failed.
         reason: String,
     },
+    /// An image's declared (header-only, undecoded) dimensions exceed the GPU's
+    /// `max_texture_dimension_2d` or the crate's own decoded-byte ceiling (spec 011
+    /// US3 FR-012) — rejected before the expensive full decode this crate's own module
+    /// doc distinguishes from spec 2's cheap header-only readability check.
+    TextureTooLarge {
+        /// The oversized image file.
+        path: PathBuf,
+        /// Its declared width in pixels.
+        width: u32,
+        /// Its declared height in pixels.
+        height: u32,
+    },
     /// A `cosmic-config` read/write failed (`RendererConfig` or `LocationConfigEntry`).
     ConfigError {
         /// The underlying storage error's message.
@@ -76,6 +88,12 @@ pub enum RendererError {
         /// The output whose assigned pack needs a location that isn't set.
         output: OutputId,
     },
+    /// A GPU adapter or device request took longer than
+    /// [`crate::gpu::GPU_REQUEST_TIMEOUT`] (spec 011 US7 FR-033, research.md R28) — a
+    /// hung/misbehaving driver previously could stall `wallpaperd`'s entire startup
+    /// indefinitely (constitution Principle VIII: no unbounded wait on an external
+    /// resource).
+    GpuRequestTimedOut,
 }
 
 impl fmt::Display for RendererError {
@@ -90,6 +108,9 @@ impl fmt::Display for RendererError {
             RendererError::TextureUploadFailed { path, reason } => {
                 write!(f, "failed to upload texture for {}: {reason}", path.display())
             }
+            RendererError::TextureTooLarge { path, width, height } => {
+                write!(f, "image {} is {width}x{height}, too large to upload (dimension or decoded-size limit)", path.display())
+            }
             RendererError::ConfigError { reason } => write!(f, "configuration storage error: {reason}"),
             RendererError::OutputProtocolError { reason } => {
                 write!(f, "compositor is missing a required protocol: {reason}")
@@ -99,6 +120,9 @@ impl fmt::Display for RendererError {
             }
             RendererError::LocationRequired { output } => {
                 write!(f, "output {output} has a solar-anchored pack assigned but no location is set")
+            }
+            RendererError::GpuRequestTimedOut => {
+                write!(f, "GPU adapter/device request timed out after {:?}", crate::gpu::GPU_REQUEST_TIMEOUT)
             }
         }
     }
@@ -122,5 +146,6 @@ mod tests {
         assert!(RendererError::OutputNotManaged { id: id.clone() }.to_string().contains("DP-3"));
         assert!(RendererError::LocationRequired { output: id }.to_string().contains("DP-3"));
         assert!(RendererError::ConfigError { reason: "disk full".into() }.to_string().contains("disk full"));
+        assert!(RendererError::GpuRequestTimedOut.to_string().contains("timed out"));
     }
 }
