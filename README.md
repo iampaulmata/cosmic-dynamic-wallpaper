@@ -487,9 +487,3 @@ The project is not yet open for contributions.
 ## License
 
 Cosmic Dynamic Wallpaper is licensed under the **GPL-3.0-only** license.
-
----
-
-## Keywords
-
-COSMIC Desktop · COSMIC desktop environment · COSMIC wallpaper · COSMIC wallpaper changer · COSMIC dynamic wallpaper · COSMIC desktop wallpaper changer · COSMIC wallpaper slideshow · COSMIC wallpaper rotation · COSMIC time-of-day wallpaper · COSMIC animated wallpaper · COSMIC dynamic desktop · Pop!_OS wallpaper changer · Linux wallpaper changer · Linux dynamic wallpaper · Wayland wallpaper changer · sunrise wallpaper · sunset wallpaper · astronomical wallpaper · solar wallpaper · time-based wallpaper · dynamic desktop wallpaper · wallpaper scheduler · wallpaper automation
