@@ -1,14 +1,12 @@
-//! Error types for manifest parsing/loading and (later, User Story 4) registry
-//! persistence.
+//! Error types for manifest parsing/loading and registry persistence.
 //!
-//! Every fallible path in this crate returns one of these rather than panicking
-//! (constitution Principle VIII) — see `data-model.md`'s "Error types" section.
+//! Every fallible path in this crate returns one of these rather than panicking.
 
 use std::fmt;
 use std::path::PathBuf;
 
 /// Errors loading a pack — parsing its manifest, resolving its images, or handing its
-/// anchors to spec 1's validation (FR-006, FR-006a).
+/// anchors to the scheduling engine's validation.
 #[derive(Debug)]
 pub enum ManifestError {
     /// The manifest file couldn't be found where expected.
@@ -16,8 +14,8 @@ pub enum ManifestError {
         /// The manifest path that was expected but not found.
         path: PathBuf,
     },
-    /// The manifest file exceeded [`crate::load::MAX_MANIFEST_BYTES`] (spec 011 US3
-    /// FR-011) — rejected before being read into memory at all.
+    /// The manifest file exceeded [`crate::load::MAX_MANIFEST_BYTES`] — rejected
+    /// before being read into memory at all.
     ManifestTooLarge {
         /// The oversized manifest's path.
         path: PathBuf,
@@ -50,7 +48,7 @@ pub enum ManifestError {
         /// The missing file's declared name.
         file: String,
     },
-    /// An image entry's resolved path falls outside the pack directory (FR-006a).
+    /// An image entry's resolved path falls outside the pack directory.
     PathEscapesPackDirectory {
         /// The offending entry's declared name.
         file: String,
@@ -77,8 +75,8 @@ pub enum ManifestError {
         /// The offending path (as far as it could be represented).
         path: PathBuf,
     },
-    /// Spec 1's own pack-validation rejected the resolved anchor list (FR-003) — mixed
-    /// anchor types, too many anchors, or a duplicate-instant tie.
+    /// The scheduling engine's own pack-validation rejected the resolved anchor list —
+    /// mixed anchor types, too many anchors, or a duplicate-instant tie.
     InvalidPack(schedule_engine::PackError),
     /// An underlying filesystem operation failed (permission denied, I/O error, etc.).
     Io {
@@ -148,8 +146,8 @@ impl From<schedule_engine::PackError> for ManifestError {
     }
 }
 
-/// Errors from pack registry persistence (User Story 4, FR-010–FR-012). Wraps
-/// underlying storage failures; never panics (constitution Principle VIII).
+/// Errors from pack registry persistence. Wraps underlying storage failures; never
+/// panics.
 #[derive(Debug)]
 pub enum RegistryError {
     /// The underlying persistence layer failed to read or write.
@@ -163,8 +161,7 @@ pub enum RegistryError {
         source: String,
     },
     /// The cross-process advisory lock guarding a registry read-modify-write
-    /// (spec 011 US6 FR-022, research.md R17) couldn't be acquired or its directory
-    /// couldn't be resolved.
+    /// couldn't be acquired or its directory couldn't be resolved.
     LockFailed {
         /// Why the lock couldn't be acquired.
         message: String,

@@ -1,12 +1,11 @@
 //! [`PackManifest`], [`ManifestImage`], [`ScalingMode`], and [`Color`] — the manifest
-//! schema pack authors write (contracts/pack-loader-api.md), plus parsing/validation
-//! from the raw on-disk TOML shape (FR-001, FR-002, FR-005, FR-006, FR-007).
+//! schema pack authors write, plus parsing/validation from the raw on-disk TOML shape.
 //!
 //! Anchor strings (`anchor = "sunrise"`, `"civil_dawn-30m"`, `"12:00"`) are parsed here
-//! into spec 1's own [`schedule_engine::TimeAnchor`] — the anchor *type* is reused
-//! verbatim from spec 1 (data-model.md), but its compact on-disk string grammar is this
-//! crate's own concern, since spec 1's `TimeAnchor` has no `Deserialize` impl of its own
-//! (it's a pure-logic type with no I/O, per spec 1's own scope).
+//! into the scheduling engine's own [`schedule_engine::TimeAnchor`] — the anchor *type*
+//! is reused verbatim from that crate, but its compact on-disk string grammar is this
+//! crate's own concern, since `TimeAnchor` has no `Deserialize` impl of its own (it's a
+//! pure-logic type with no I/O).
 
 use serde::{Deserialize, Serialize};
 
@@ -15,10 +14,10 @@ use schedule_engine::{SolarEventKind, TimeAnchor};
 
 use crate::error::ManifestError;
 
-/// The highest `schema_version` this loader understands (FR-007, research.md R5).
+/// The highest `schema_version` this loader understands.
 pub const MAX_SUPPORTED_SCHEMA_VERSION: u32 = 1;
 
-/// Scaling/fit mode (FR-005) — matches `cosmic-bg`'s existing vocabulary.
+/// Scaling/fit mode — matches `cosmic-bg`'s existing vocabulary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScalingMode {
     /// Scale to fill the output, cropping any excess (aspect ratio preserved).
@@ -44,8 +43,8 @@ impl ScalingMode {
     }
 }
 
-/// An RGBA fallback fill color for letterboxed edges (FR-005), parsed from a `#RRGGBB`
-/// or `#RRGGBBAA` hex string.
+/// An RGBA fallback fill color for letterboxed edges, parsed from a `#RRGGBB` or
+/// `#RRGGBBAA` hex string.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Color {
     /// Red channel, 0-255.
@@ -65,8 +64,8 @@ impl Color {
         let bytes = |s: &str| u8::from_str_radix(s, 16).ok();
         let invalid = || ManifestError::InvalidColor { value: value.to_string() };
 
-        // Spec 011 US1 FR-001 (research.md R1): `hex.len()` below counts *bytes*, and
-        // the slices further down (`hex[0..2]` etc.) are byte-offset slices — safe only
+        // `hex.len()` below counts *bytes*, and the slices further down (`hex[0..2]`
+        // etc.) are byte-offset slices — safe only
         // when every byte offset is also a char boundary, which ASCII guarantees and
         // non-ASCII input does not (e.g. "#€AAA" is 6 bytes but "€" alone spans bytes
         // 0..3, so `hex[0..2]` would panic with "byte index 2 is not a char boundary").
@@ -102,15 +101,16 @@ impl Color {
 pub struct ManifestImage {
     /// Path to the image file, relative to the pack directory.
     pub file: String,
-    /// When this image becomes active (spec 1's `TimeAnchor`, reused verbatim).
+    /// When this image becomes active (the scheduling engine's `TimeAnchor`, reused
+    /// verbatim).
     pub anchor: TimeAnchor,
     /// Per-image scaling override, if declared (falls back to the pack's
     /// `default_scaling` otherwise).
     pub scaling: Option<ScalingMode>,
 }
 
-/// A fully parsed, validated manifest (data-model.md `PackManifest`) — everything
-/// except image-path resolution/containment/readability, which `load.rs` applies next
+/// A fully parsed, validated manifest — everything except image-path resolution/
+/// containment/readability, which `load.rs` applies next
 /// (those checks need the pack directory, which this module doesn't know about).
 #[derive(Debug, Clone)]
 pub struct PackManifest {
@@ -130,9 +130,9 @@ pub struct PackManifest {
     pub images: Vec<ManifestImage>,
 }
 
-/// The write-side counterpart to [`PackManifest`] (spec 010 data-model.md
-/// `ManifestDraft`) — what a caller (the pack-builder GUI wizard) hands to [`render`] to
-/// produce `manifest.toml` text, rather than what [`parse`] produces from reading one.
+/// The write-side counterpart to [`PackManifest`] — what a caller (the pack-builder GUI
+/// wizard) hands to [`render`] to produce `manifest.toml` text, rather than what
+/// [`parse`] produces from reading one.
 #[derive(Debug, Clone)]
 pub struct ManifestDraft {
     /// Pack display name.
@@ -149,12 +149,10 @@ pub struct ManifestDraft {
 }
 
 /// A single image entry in a [`ManifestDraft`]. A wizard-generated *new* pack never
-/// sets `scaling` (spec 010 research.md R10 — always `None`, inheriting the pack's
-/// `default_scaling`); spec 012's edit flow is the first caller that ever sets it,
-/// specifically to carry an existing per-image override forward unchanged when only
-/// the schedule/author/name is what the user actually edited (spec 012 FR-009,
-/// research.md R5 — corrected from that research note's original assumption that no
-/// field would be needed here at all).
+/// sets `scaling` — always `None`, inheriting the pack's `default_scaling`. The edit
+/// flow is the first caller that ever sets it, specifically to carry an existing
+/// per-image override forward unchanged when only the schedule/author/name is what
+/// the user actually edited.
 #[derive(Debug, Clone)]
 pub struct ManifestDraftImage {
     /// File name, relative to the pack directory.
@@ -168,8 +166,7 @@ pub struct ManifestDraftImage {
 }
 
 /// The raw `#[derive(Deserialize)]` shape read directly from TOML, before any semantic
-/// validation (data-model.md's distinction between the on-disk shape and the validated
-/// `PackManifest`).
+/// validation into the validated `PackManifest`.
 #[derive(Debug, Deserialize)]
 struct RawManifest {
     schema_version: u32,
@@ -190,8 +187,8 @@ struct RawManifestImage {
     scaling: Option<String>,
 }
 
-/// Parse and validate manifest TOML text into a [`PackManifest`] (FR-002, FR-006,
-/// FR-007). `path` is used only to name the file in error messages.
+/// Parse and validate manifest TOML text into a [`PackManifest`]. `path` is used only
+/// to name the file in error messages.
 pub fn parse(text: &str, path: &std::path::Path) -> Result<PackManifest, ManifestError> {
     let raw: RawManifest = toml::from_str(text)
         .map_err(|e| ManifestError::ParseFailure { path: path.to_path_buf(), message: e.to_string() })?;
@@ -202,9 +199,9 @@ pub fn parse(text: &str, path: &std::path::Path) -> Result<PackManifest, Manifes
             max_supported: MAX_SUPPORTED_SCHEMA_VERSION,
         });
     }
-    // No older schema version exists yet to migrate from (this is version 1) —
-    // research.md R5's migration `match` has a single documented arm today and grows
-    // as new versions are introduced.
+    // No older schema version exists yet to migrate from (this is version 1) — the
+    // migration `match` has a single documented arm today and grows as new versions
+    // are introduced.
 
     let default_scaling = ScalingMode::parse(&raw.default_scaling)?;
     let fallback_color = Color::parse(&raw.fallback_color)?;
@@ -230,7 +227,7 @@ pub fn parse(text: &str, path: &std::path::Path) -> Result<PackManifest, Manifes
     })
 }
 
-/// Parse a compact anchor string into spec 1's [`TimeAnchor`].
+/// Parse a compact anchor string into the scheduling engine's [`TimeAnchor`].
 ///
 /// Grammar:
 /// - `HH:MM` (contains `:`) → [`TimeAnchor::Clock`].
@@ -299,12 +296,11 @@ struct RawManifestImageOut {
     scaling: Option<String>,
 }
 
-/// Render a [`ManifestDraft`] into `manifest.toml` text (spec 010 contracts/
-/// pack-loader-manifest-writer.md) — the write-side counterpart to [`parse`]. Always
-/// writes `schema_version = 1`. Every string value is routed through `toml`'s own
-/// `Serialize` machinery rather than hand-built interpolation, so a `name`/`author`/
-/// `file` containing a `"` or non-ASCII text round-trips correctly (spec 010 Edge
-/// Cases) instead of producing broken TOML.
+/// Render a [`ManifestDraft`] into `manifest.toml` text — the write-side counterpart
+/// to [`parse`]. Always writes `schema_version = 1`. Every string value is routed
+/// through `toml`'s own `Serialize` machinery rather than hand-built interpolation, so
+/// a `name`/`author`/`file` containing a `"` or non-ASCII text round-trips correctly
+/// instead of producing broken TOML.
 pub fn render(draft: &ManifestDraft) -> String {
     let raw = RawManifestOut {
         schema_version: 1,
@@ -325,9 +321,9 @@ pub fn render(draft: &ManifestDraft) -> String {
     // `RawManifestOut`'s fields are all plain, always-serializable types (String/u32/a
     // Vec of a plain-string struct) — there is no input shape that can make this fail,
     // so an error here would be a bug in this function, not a caller mistake. Matching
-    // this crate's own `unwrap_used`/`expect_used = "deny"` lint (constitution
-    // Principle VIII), an empty string is a harmless, honest fallback for a case that
-    // should be unreachable in practice, rather than a panic.
+    // this crate's own `unwrap_used`/`expect_used = "deny"` lint, an empty string is a
+    // harmless, honest fallback for a case that should be unreachable in practice,
+    // rather than a panic.
     toml::to_string(&raw).unwrap_or_default()
 }
 
@@ -351,8 +347,7 @@ fn format_color(color: Color) -> String {
     }
 }
 
-/// The exact inverse of [`parse_anchor`] (spec 010 contracts/
-/// pack-loader-manifest-writer.md): [`TimeAnchor::Clock`] → `"HH:MM"` (never the
+/// The exact inverse of [`parse_anchor`]: [`TimeAnchor::Clock`] → `"HH:MM"` (never the
 /// also-accepted `HH:MM:SS` form — a wizard-authored clock anchor is always whole
 /// minutes); [`TimeAnchor::Solar`] → the bare event name, or `"<event><sign><duration>"`
 /// when an offset is set. Round-trip contract, asserted directly by this module's own
@@ -467,10 +462,10 @@ mod tests {
         assert!(Color::parse("#ZZZZZZ").is_err());
     }
 
-    /// Spec 011 US1 FR-001 (research.md R1) — a hex-color string containing a
-    /// non-ASCII byte must return `Err`, never panic on a non-char-boundary byte
-    /// slice. "€" is 3 bytes (0xE2 0x82 0xAC), so "#€AAA" is 6 bytes total and used to
-    /// reach the 6-hex-digit branch before this fix, panicking on `hex[0..2]`.
+    /// A hex-color string containing a non-ASCII byte must return `Err`, never panic
+    /// on a non-char-boundary byte slice. "€" is 3 bytes (0xE2 0x82 0xAC), so "#€AAA"
+    /// is 6 bytes total, reaching the 6-hex-digit branch — without the ASCII check
+    /// above, `hex[0..2]` would panic on it.
     #[test]
     fn color_parse_rejects_non_ascii_hex() {
         assert!(Color::parse("#€AAA").is_err());
@@ -522,10 +517,10 @@ fallback_color = "#000000"
         assert!(matches!(result, Err(ManifestError::ParseFailure { .. })));
     }
 
-    // --- spec 010 (Custom Pack Builder) write-side tests ---
+    // --- Custom Pack Builder write-side tests ---
 
-    /// T004: `format_anchor` is the exact inverse of `parse_anchor` for every anchor
-    /// shape this crate's callers can construct.
+    /// `format_anchor` is the exact inverse of `parse_anchor` for every anchor shape
+    /// this crate's callers can construct.
     #[test]
     fn format_anchor_round_trips_clock_and_solar_anchors() {
         let cases = [
@@ -552,9 +547,9 @@ fallback_color = "#000000"
         Color { r: 0, g: 0, b: 0, a: 255 }
     }
 
-    /// T005: an author name containing a `"` and non-ASCII text round-trips through
-    /// `render` → `parse` byte-identical (spec 010 Edge Cases) — the reason `render`
-    /// routes through `toml`'s serializer instead of hand-built string interpolation.
+    /// An author name containing a `"` and non-ASCII text round-trips through
+    /// `render` → `parse` byte-identical — the reason `render` routes through `toml`'s
+    /// serializer instead of hand-built string interpolation.
     #[test]
     fn render_escapes_quotes_and_unicode_in_author_and_name() {
         let draft = ManifestDraft {
@@ -601,7 +596,7 @@ fallback_color = "#000000"
 
     /// `render`'s output is immediately valid, parseable TOML matching every field of
     /// the draft it was built from — the postcondition the pack-builder wizard's own
-    /// self-validation (`pack_loader::load_pack`) relies on (FR-012).
+    /// self-validation (`pack_loader::load_pack`) relies on.
     #[test]
     fn render_produces_a_fully_valid_manifest() {
         let draft = ManifestDraft {
@@ -639,10 +634,10 @@ fallback_color = "#000000"
         );
     }
 
-    /// Spec 012 FR-009/research.md R5: a `ManifestDraftImage.scaling` override
-    /// round-trips through `render`/`parse` unchanged, and `None` still omits the
-    /// `scaling` key entirely rather than writing an empty/default one — the edit
-    /// flow's own preserved-field carry-forward depends on both halves of this.
+    /// A `ManifestDraftImage.scaling` override round-trips through `render`/`parse`
+    /// unchanged, and `None` still omits the `scaling` key entirely rather than
+    /// writing an empty/default one — the edit flow's own preserved-field
+    /// carry-forward depends on both halves of this.
     #[test]
     fn render_round_trips_a_per_image_scaling_override_and_omits_it_when_none() {
         let draft = ManifestDraft {

@@ -1,7 +1,6 @@
-//! Header-only image readability validation (FR-006, research.md R2): confirms a file
-//! is a decodable image of a real format and reads its header, without decoding full
-//! pixel data — that cost belongs to the renderer (spec 3), which only decodes images
-//! actually being displayed.
+//! Header-only image readability validation: confirms a file is a decodable image of a
+//! real format and reads its header, without decoding full pixel data — that cost
+//! belongs to the renderer, which only decodes images actually being displayed.
 
 use std::path::Path;
 

@@ -1,8 +1,7 @@
-//! [`Registry`] — the persisted set of known pack locations (FR-010–FR-012, User Story
-//! 4), backed by `cosmic-config`'s `CosmicConfigEntry` pattern (research.md R4). Spec 7
-//! extends each entry with [`PackOrigin`] (FR-008/FR-010/FR-011) and adds a second,
-//! separate [`RemovedStarterPacks`] entry — see [`PackOrigin`]'s own doc for why the
-//! two aren't folded into one schema.
+//! [`Registry`] — the persisted set of known pack locations, backed by
+//! `cosmic-config`'s `CosmicConfigEntry` pattern. Each entry carries a [`PackOrigin`],
+//! and there's a second, separate [`RemovedStarterPacks`] entry — see [`PackOrigin`]'s
+//! own doc for why the two aren't folded into one schema.
 
 use cosmic_config::cosmic_config_derive::CosmicConfigEntry;
 use cosmic_config::{Config, CosmicConfigEntry};
@@ -16,21 +15,20 @@ use crate::pack_source::PackSource;
 pub const REGISTRY_CONFIG_ID: &str = "com.system76.CosmicDynamicWallpaper.Registry";
 
 /// The `cosmic-config` application id [`RemovedStarterPacks`] is stored under — its own
-/// small, separate entry (spec 7 data-model.md, contracts/pack-registry-origin.md).
+/// small, separate entry.
 pub const REMOVED_STARTER_PACKS_CONFIG_ID: &str = "com.system76.CosmicDynamicWallpaper.RemovedStarterPacks";
 
-/// The pre-rename application ids (spec 009-project-rename, FR-004a) —
-/// [`Registry::open`] migrates from these once so an existing installation's known
-/// packs and removed-starter-packs record survive the rename, never written to again
-/// afterward. See `contracts/config-migration.md` for the full behavior contract.
+/// The pre-rename application ids — [`Registry::open`] migrates from these once so an
+/// existing installation's known packs and removed-starter-packs record survive the
+/// rename, never written to again afterward.
 const OLD_REGISTRY_CONFIG_ID: &str = "com.system76.CosmicWallpaper.Registry";
 const OLD_REMOVED_STARTER_PACKS_CONFIG_ID: &str = "com.system76.CosmicWallpaper.RemovedStarterPacks";
 
-/// **Real bug found post-implementation** (spec 009-project-rename): the application-id
-/// migration above is deliberately content-preserving, not content-transforming — exactly
-/// right for a user's own registered pack paths, which this rename never touches. But
-/// the *bundled starter pack itself* is a system-installed path that this same rename
-/// relocated (`crates/renderer/src/starter_pack.rs`'s `STARTER_PACK_SYSTEM_PATH`), so a
+/// The application-id migration above is deliberately content-preserving, not
+/// content-transforming — exactly right for a user's own registered pack paths, which
+/// this rename never touches. But the *bundled starter pack itself* is a
+/// system-installed path that this same rename relocated
+/// (`crates/renderer/src/starter_pack.rs`'s `STARTER_PACK_SYSTEM_PATH`), so a
 /// verbatim copy leaves an existing installation's starter-pack registry entry (and any
 /// removed-starter-pack record) pointing at a path that no longer exists once the old
 /// `.deb` is gone. [`Registry::open`] repairs this by rewriting an exact match of the
@@ -41,16 +39,14 @@ const OLD_REMOVED_STARTER_PACKS_CONFIG_ID: &str = "com.system76.CosmicWallpaper.
 const OLD_STARTER_PACK_SYSTEM_PATH: &str = "/usr/share/dynamic-wallpaper/starter-pack";
 const NEW_STARTER_PACK_SYSTEM_PATH: &str = "/usr/share/cosmic-dynamic-wallpaper/starter-pack";
 
-/// Who registered a [`PackRegistryEntry`] (spec 7 data-model.md, contracts/
-/// pack-registry-origin.md). Default `User` — full backward compatibility with every
-/// registry entry that existed before this field, read forward with no behavior change
-/// (same no-hand-written-migration pattern spec 6 research.md R7 already verified: a
-/// new field with a safe default, carried automatically by `cosmic-config`'s per-key
-/// fallback).
+/// Who registered a [`PackRegistryEntry`]. Default `User` — full backward
+/// compatibility with every registry entry that existed before this field, read
+/// forward with no behavior change: a new field with a safe default, carried
+/// automatically by `cosmic-config`'s per-key fallback.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PackOrigin {
     /// Registered by a person via `wallpaperctl register` or the GUI's equivalent —
-    /// never overridden by a starter pack's own default assignment (FR-011).
+    /// never overridden by a starter pack's own default assignment.
     #[default]
     User,
     /// Registered by this project itself (the bundled starter pack's own first-run
@@ -60,54 +56,53 @@ pub enum PackOrigin {
     Package,
 }
 
-/// Whether a known pack's source is currently reachable (FR-011) — see
-/// [`PackRegistryEntry`]'s state notes (data-model.md).
+/// Whether a known pack's source is currently reachable — see [`PackRegistryEntry`]'s
+/// state notes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RegistryStatus {
     /// The pack was reachable and loaded successfully last time it was checked.
     Known,
     /// The pack's source was missing, moved, or unreadable last time it was checked.
     /// The entry is *retained*, just flagged — distinct from [`Registry::remove`],
-    /// which deletes the entry outright (FR-012).
+    /// which deletes the entry outright.
     Unavailable,
 }
 
-/// A persisted record of a known pack's source location and reachability
-/// (data-model.md `PackRegistryEntry`), independent of whether it's currently loaded.
+/// A persisted record of a known pack's source location and reachability, independent
+/// of whether it's currently loaded.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PackRegistryEntry {
-    /// The pack's identity key (FR-009).
+    /// The pack's identity key.
     pub source: PackSource,
     /// Whether this source was reachable last time it was checked.
     pub status: RegistryStatus,
-    /// Who registered this entry (spec 7 FR-008/FR-010/FR-011). `#[serde(default)]`
-    /// (not a `cosmic-config` schema-version bump — this field lives inside a `Vec`
-    /// element, not at the top-level entry, so it's plain serde's own missing-field
-    /// tolerance, not `cosmic-config`'s per-key version fallback) — an entry written
-    /// before this field existed simply has no `origin` key in its RON and defaults to
-    /// `User`, exactly matching what it always meant.
+    /// Who registered this entry. `#[serde(default)]` — not a `cosmic-config`
+    /// schema-version bump, since this field lives inside a `Vec` element, not at the
+    /// top-level entry, so it's plain serde's own missing-field tolerance, not
+    /// `cosmic-config`'s per-key version fallback — an entry written before this field
+    /// existed simply has no `origin` key in its RON and defaults to `User`, exactly
+    /// matching what it always meant.
     #[serde(default)]
     pub origin: PackOrigin,
-    /// Spec 012 FR-016/FR-018: a user-set label overriding this pack's default
-    /// display name, never written back to the underlying file/folder (FR-016).
-    /// `None` = no override; falls back to the usual manifest-name/file-stem
-    /// resolution (`pack_display::resolve_pack_display_name`). Only ever set by this
-    /// crate's callers for a `PackSource::StaticFile` entry in practice — a
-    /// `Directory` entry's display name lives in its own manifest `name` field
-    /// instead (research.md R1) — but kept on the shared struct rather than a
-    /// `StaticFile`-only side table, since `PackSource` isn't the enum boundary this
-    /// struct is built around and duplicating the whole entry type for one optional
-    /// field isn't warranted. `#[serde(default)]` (research.md R2 — the same
-    /// no-version-bump shape `origin` above already established: a `Vec`-element
-    /// field, not a top-level `cosmic-config` key, so plain serde's missing-field
-    /// tolerance is what makes an entry written before this field existed still load
-    /// correctly, as `None`).
+    /// A user-set label overriding this pack's default display name, never written
+    /// back to the underlying file/folder. `None` = no override; falls back to the
+    /// usual manifest-name/file-stem resolution
+    /// (`pack_display::resolve_pack_display_name`). Only ever set by this crate's
+    /// callers for a `PackSource::StaticFile` entry in practice — a `Directory`
+    /// entry's display name lives in its own manifest `name` field instead — but kept
+    /// on the shared struct rather than a `StaticFile`-only side table, since
+    /// `PackSource` isn't the enum boundary this struct is built around and
+    /// duplicating the whole entry type for one optional field isn't warranted.
+    /// `#[serde(default)]` — the same no-version-bump shape `origin` above already
+    /// establishes: a `Vec`-element field, not a top-level `cosmic-config` key, so
+    /// plain serde's missing-field tolerance is what makes an entry written before
+    /// this field existed still load correctly, as `None`.
     #[serde(default)]
     pub display_name: Option<String>,
 }
 
-/// The on-disk shape `cosmic-config` persists (FR-010). Not part of this crate's public
-/// API — [`Registry`] is the interface callers use.
+/// The on-disk shape `cosmic-config` persists. Not part of this crate's public API —
+/// [`Registry`] is the interface callers use.
 #[derive(Debug, Clone, Default, CosmicConfigEntry, PartialEq)]
 #[version = 1]
 struct RegistryConfig {
@@ -115,27 +110,24 @@ struct RegistryConfig {
 }
 
 /// A separate, minimal `cosmic-config` entry recording which starter-pack sources a
-/// user has explicitly removed (spec 7 data-model.md, contracts/
-/// pack-registry-origin.md) — deliberately not folded into [`RegistryConfig`] itself,
-/// since a removed pack's registry entry no longer exists at all once it's gone;
-/// there's nothing left to attach an `origin` to.
+/// user has explicitly removed — deliberately not folded into [`RegistryConfig`]
+/// itself, since a removed pack's registry entry no longer exists at all once it's
+/// gone; there's nothing left to attach an `origin` to.
 #[derive(Debug, Clone, Default, CosmicConfigEntry, PartialEq)]
 #[version = 1]
 struct RemovedStarterPacksConfig {
     removed: Vec<PackSource>,
 }
 
-/// The persisted set of known packs (FR-010–FR-012), plus the separate removed-
-/// starter-packs record (spec 7). Wraps two `cosmic-config::Config` handles plus their
-/// current in-memory snapshots.
+/// The persisted set of known packs, plus the separate removed-starter-packs record.
+/// Wraps two `cosmic-config::Config` handles plus their current in-memory snapshots.
 pub struct Registry {
     config: Config,
     state: RegistryConfig,
     removed_config: Config,
     removed_state: RemovedStarterPacksConfig,
     /// Cross-process advisory-lock file path guarding the read-modify-write cycle in
-    /// [`Registry::register_with_origin`]/[`Registry::remove`]/[`Registry::reload_all`]
-    /// (spec 011 US6 FR-022, research.md R17).
+    /// [`Registry::register_with_origin`]/[`Registry::remove`]/[`Registry::reload_all`].
     lock_path: std::path::PathBuf,
 }
 
@@ -143,10 +135,9 @@ pub struct Registry {
 /// `cosmic-config` store it guards. `custom_path` mirrors `Config::with_custom_path`'s
 /// own root (test-only, [`Registry::open_at`]); `None` reconstructs `Config::new`'s
 /// real, production directory convention (`dirs::config_dir()/cosmic/{app_id}/
-/// v{version}/`) the same way research.md R25 documents for the permission-tightening
-/// fix — `cosmic_config::Config` exposes no path accessor of its own, so this is the
-/// one place in this crate that has to reconstruct that internal-but-stable
-/// convention rather than call a public accessor.
+/// v{version}/`) — `cosmic_config::Config` exposes no path accessor of its own, so
+/// this is the one place in this crate that has to reconstruct that
+/// internal-but-stable convention rather than call a public accessor.
 fn registry_lock_path(custom_path: Option<&std::path::Path>) -> Result<std::path::PathBuf, RegistryError> {
     let dir = match custom_path {
         Some(p) => p.to_path_buf(),
@@ -161,8 +152,8 @@ fn registry_lock_path(custom_path: Option<&std::path::Path>) -> Result<std::path
 
 impl Registry {
     /// Open (creating if necessary) the real, user-global registry under the standard
-    /// `cosmic-config` XDG location — migrating forward from the pre-rename
-    /// application ids (FR-004a) if nothing has been written under the new ones yet.
+    /// `cosmic-config` XDG location — migrating forward from the pre-rename application
+    /// ids if nothing has been written under the new ones yet.
     pub fn open() -> Result<Self, RegistryError> {
         let config = Config::new(REGISTRY_CONFIG_ID, RegistryConfig::VERSION)
             .map_err(|e| RegistryError::Storage { message: e.to_string() })?;
@@ -170,10 +161,9 @@ impl Registry {
             .map_err(|e| RegistryError::Storage { message: e.to_string() })?;
         let mut state = migrate_registry_config(&config);
         let mut removed_state = migrate_removed_starter_packs_config(&removed_config);
-        // Real bug found post-implementation (spec 009-project-rename): repair any
-        // entry left pointing at the pre-rename starter-pack system path — see
-        // `OLD_STARTER_PACK_SYSTEM_PATH`'s doc comment for why the migration above
-        // can't already handle this on its own.
+        // Repair any entry left pointing at the pre-rename starter-pack system path —
+        // see `OLD_STARTER_PACK_SYSTEM_PATH`'s doc comment for why the migration
+        // above can't already handle this on its own.
         if repair_relocated_starter_pack_entries(&mut state.entries) {
             state.write_entry(&config).map_err(|e| RegistryError::Storage { message: e.to_string() })?;
         }
@@ -184,9 +174,8 @@ impl Registry {
         Ok(Self { config, state, removed_config, removed_state, lock_path })
     }
 
-    /// Open a registry rooted at a custom path — used by tests (`tempfile`-backed,
-    /// research.md R6) so registry persistence tests never touch the real user config
-    /// directory.
+    /// Open a registry rooted at a custom path — used by tests (`tempfile`-backed) so
+    /// registry persistence tests never touch the real user config directory.
     #[doc(hidden)]
     pub fn open_at(custom_path: &std::path::Path) -> Result<Self, RegistryError> {
         let config =
@@ -207,20 +196,18 @@ impl Registry {
         Ok(Self { config, state, removed_config, removed_state, lock_path })
     }
 
-    /// Persist a new known pack location (FR-010), `User`-origin (spec 7 FR-011 — the
-    /// only way a person or the GUI can register a pack). Idempotent (FR-002 via spec
-    /// 2's own identity-by-source rule) — registering an already-known source is a
-    /// no-op, not a duplicate or an error.
+    /// Persist a new known pack location, `User`-origin — the only way a person or the
+    /// GUI can register a pack. Idempotent (registering an already-known source is a
+    /// no-op, not a duplicate or an error).
     pub fn register(&mut self, source: PackSource) -> Result<(), RegistryError> {
         self.register_with_origin(source, PackOrigin::User)
     }
 
     /// [`Registry::register`], but with an explicit [`PackOrigin`] — used only by
-    /// `wallpaperd`'s own starter-pack self-registration (spec 7 FR-008); every other
-    /// caller (`wallpaperctl register`, the GUI) goes through [`Registry::register`]
-    /// and is always `User`-origin (contracts/pack-registry-origin.md — `origin`
-    /// defaults to `User`, and nothing in this crate's own public CLI-facing API lets a
-    /// caller claim `Package` origin for themselves).
+    /// `wallpaperd`'s own starter-pack self-registration; every other caller
+    /// (`wallpaperctl register`, the GUI) goes through [`Registry::register`] and is
+    /// always `User`-origin. `origin` defaults to `User`, and nothing in this crate's
+    /// own public CLI-facing API lets a caller claim `Package` origin for themselves.
     pub fn register_with_origin(&mut self, source: PackSource, origin: PackOrigin) -> Result<(), RegistryError> {
         self.with_locked_state(|entries| {
             if entries.iter().any(|e| e.source == source) {
@@ -230,18 +217,17 @@ impl Registry {
         })
     }
 
-    /// Spec 012 FR-016/FR-017: sets (or clears, with `None`) `source`'s display-name
-    /// override. A no-op `Ok(())` if `source` isn't currently registered, matching
-    /// [`Registry::register`]/[`Registry::remove`]'s own idempotent posture — there's
-    /// no entry to attach a name to, and silently creating one here would be a
-    /// surprising side effect for a "set the name" call to have. Routed through the
-    /// same [`Self::with_locked_state`] read-modify-write pattern every other mutation
-    /// of `entries` uses (spec 011 US6 FR-022, research.md R17) — a smaller mutation
-    /// than `register`/`remove` doesn't make it exempt from the same lost-update race
-    /// those exist to close. Callers are expected to have already normalized a blank/
-    /// whitespace-only name to `None` (FR-017) — this method itself doesn't inspect
-    /// the string, the same division of responsibility [`PackSource::resolve`] already
-    /// has for path validation ahead of `register`.
+    /// Sets (or clears, with `None`) `source`'s display-name override. A no-op `Ok(())`
+    /// if `source` isn't currently registered, matching [`Registry::register`]/
+    /// [`Registry::remove`]'s own idempotent posture — there's no entry to attach a
+    /// name to, and silently creating one here would be a surprising side effect for a
+    /// "set the name" call to have. Routed through the same [`Self::with_locked_state`]
+    /// read-modify-write pattern every other mutation of `entries` uses — a smaller
+    /// mutation than `register`/`remove` doesn't make it exempt from the same
+    /// lost-update race those exist to close. Callers are expected to have already
+    /// normalized a blank/whitespace-only name to `None` — this method itself doesn't
+    /// inspect the string, the same division of responsibility [`PackSource::resolve`]
+    /// already has for path validation ahead of `register`.
     pub fn set_display_name(&mut self, source: &PackSource, name: Option<String>) -> Result<(), RegistryError> {
         self.with_locked_state(|entries| {
             if let Some(entry) = entries.iter_mut().find(|e| &e.source == source) {
@@ -250,13 +236,12 @@ impl Registry {
         })
     }
 
-    /// Delete a registry entry outright (FR-012) — distinct from [`Registry::reload_all`]'s
+    /// Delete a registry entry outright — distinct from [`Registry::reload_all`]'s
     /// automatic `Unavailable` marking. A no-op (not an error) if `source` isn't
     /// registered, matching `register`'s idempotent posture. If the removed entry was
     /// `Package`-origin, also records the removal in the separate removed-starter-packs
-    /// store (spec 7 FR-010, [`Registry::is_removed_starter_pack`]) so a later
-    /// re-registration attempt (`wallpaperd`'s own first-run check) doesn't silently
-    /// undo it.
+    /// store (see [`Registry::is_removed_starter_pack`]) so a later re-registration
+    /// attempt (`wallpaperd`'s own first-run check) doesn't silently undo it.
     pub fn remove(&mut self, source: &PackSource) -> Result<(), RegistryError> {
         let removed_origin = self.with_locked_state(|entries| {
             let removed_origin = entries.iter().find(|e| &e.source == source).map(|e| e.origin);
@@ -265,13 +250,11 @@ impl Registry {
         })?;
 
         if removed_origin == Some(PackOrigin::Package) {
-            // Spec 011 adversarial re-review finding 3: this write used to go straight
-            // through `self.removed_state` (an in-memory snapshot, potentially stale
-            // relative to another process's concurrent write) with no lock at all —
-            // the exact lost-update race `with_locked_state` above exists to close for
-            // the main `entries` list, just left open for this second store. Routed
-            // through the same fd-lock/fresh-read pattern now, via
-            // `with_locked_removed_state`.
+            // Routed through `with_locked_removed_state` rather than writing straight
+            // to `self.removed_state` (an in-memory snapshot, potentially stale
+            // relative to another process's concurrent write) — the same lost-update
+            // race `with_locked_state` above exists to close for the main `entries`
+            // list applies here too.
             self.with_locked_removed_state(|removed| {
                 if !removed.contains(source) {
                     removed.push(source.clone());
@@ -283,8 +266,7 @@ impl Registry {
 
     /// [`Self::with_locked_state`], applied to the separate removed-starter-packs
     /// store instead of the main entries list — see that method's doc comment for the
-    /// full rationale (spec 011 US6 FR-022, research.md R17; extended to this second
-    /// store by adversarial re-review finding 3).
+    /// full rationale.
     fn with_locked_removed_state<T>(&mut self, mutate: impl FnOnce(&mut Vec<PackSource>) -> T) -> Result<T, RegistryError> {
         let lock_file = self.open_lock_file()?;
         let mut file_lock = fd_lock::RwLock::new(lock_file);
@@ -301,13 +283,13 @@ impl Registry {
     /// advisory-lock file guarding a read-modify-write cycle against either of this
     /// crate's two `cosmic-config` stores. Split out of
     /// [`Self::with_locked_state`]/[`Self::with_locked_removed_state`] purely to avoid
-    /// duplicating this open-the-file boilerplate between them (adversarial re-review
-    /// finding 3). Returns the plain `File`, not an already-locked guard — `fd_lock`'s
-    /// `RwLock`/`RwLockWriteGuard` are tied together by a borrow, so the `RwLock`
-    /// itself has to be constructed in each caller's own stack frame for the guard to
-    /// have somewhere to live; each caller still does that (two lines: `let mut
-    /// file_lock = fd_lock::RwLock::new(...); let _guard = file_lock.write()?;`)
-    /// immediately after calling this.
+    /// duplicating this open-the-file boilerplate between them. Returns the plain
+    /// `File`, not an already-locked guard — `fd_lock`'s `RwLock`/`RwLockWriteGuard`
+    /// are tied together by a borrow, so the `RwLock` itself has to be constructed in
+    /// each caller's own stack frame for the guard to have somewhere to live; each
+    /// caller still does that (two lines: `let mut file_lock =
+    /// fd_lock::RwLock::new(...); let _guard = file_lock.write()?;`) immediately
+    /// after calling this.
     fn open_lock_file(&self) -> Result<std::fs::File, RegistryError> {
         if let Some(parent) = self.lock_path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| RegistryError::LockFailed { message: e.to_string() })?;
@@ -322,27 +304,26 @@ impl Registry {
 
     /// Acquire the cross-process lock, then run `mutate` against a *freshly re-read*
     /// snapshot of `entries` — not `self.state.entries`, which may already be stale
-    /// relative to another process's concurrent write (spec 011 US6 FR-022,
-    /// research.md R17). This is the actual fix for the race the audit reproduced:
-    /// `wallpaperctl register` (a fresh process) and `wallpaperd`'s own long-lived
-    /// in-process `Registry` each previously loaded a snapshot once and
-    /// unconditionally overwrote the whole entries list on `persist()` — whichever
-    /// wrote last silently discarded the other's change. Re-reading fresh *under the
-    /// lock*, immediately before mutating and writing back, closes that lost-update
-    /// window: by the time `mutate` runs, no other process can be mid-write, and this
-    /// call sees whatever the last writer (this process or another) actually
-    /// committed. `self.state` is updated to match what was written, so this
-    /// instance's own subsequent reads (e.g. `known_packs`) stay consistent too.
+    /// relative to another process's concurrent write. This is what actually closes
+    /// the lost-update race: `wallpaperctl register` (a fresh process) and
+    /// `wallpaperd`'s own long-lived in-process `Registry` would otherwise each load a
+    /// snapshot once and unconditionally overwrite the whole entries list on
+    /// `persist()` — whichever wrote last would silently discard the other's change.
+    /// Re-reading fresh *under the lock*, immediately before mutating and writing
+    /// back, closes that lost-update window: by the time `mutate` runs, no other
+    /// process can be mid-write, and this call sees whatever the last writer (this
+    /// process or another) actually committed. `self.state` is updated to match what
+    /// was written, so this instance's own subsequent reads (e.g. `known_packs`) stay
+    /// consistent too.
     ///
     /// Guards the main `entries` list specifically — `register_with_origin`'s
     /// mutation, and the `entries`-retaining half of `remove`'s. `remove`'s *other*
     /// mutation, of the separate removed-starter-packs store, is guarded the same way
-    /// but through [`Self::with_locked_removed_state`] instead (adversarial re-review
-    /// finding 3 — that store used to be written unlocked). [`Registry::reload_all`]'s
-    /// own `persist()` call remains unlocked/best-effort (its own doc comment already
-    /// frames it that way): the `status` field it refreshes is cheaply re-derivable on
-    /// the very next reload, so a lost update there is much lower stakes than losing a
-    /// `register`/`remove` outright.
+    /// but through [`Self::with_locked_removed_state`] instead.
+    /// [`Registry::reload_all`]'s own `persist()` call remains unlocked/best-effort
+    /// (its own doc comment already frames it that way): the `status` field it
+    /// refreshes is cheaply re-derivable on the very next reload, so a lost update
+    /// there is much lower stakes than losing a `register`/`remove` outright.
     fn with_locked_state<T>(&mut self, mutate: impl FnOnce(&mut Vec<PackRegistryEntry>) -> T) -> Result<T, RegistryError> {
         let lock_file = self.open_lock_file()?;
         let mut file_lock = fd_lock::RwLock::new(lock_file);
@@ -356,21 +337,21 @@ impl Registry {
     }
 
     /// Whether `source` was previously registered as a starter pack and explicitly
-    /// removed (spec 7 FR-010) — the check `wallpaperd`'s own first-run
-    /// self-registration makes before re-adding the bundled starter pack, so an
-    /// upgrade never silently undoes a user's deliberate removal.
+    /// removed — the check `wallpaperd`'s own first-run self-registration makes
+    /// before re-adding the bundled starter pack, so an upgrade never silently undoes
+    /// a user's deliberate removal.
     pub fn is_removed_starter_pack(&self, source: &PackSource) -> bool {
         self.removed_state.removed.contains(source)
     }
 
-    /// Every currently known pack (FR-003), in registration order.
+    /// Every currently known pack, in registration order.
     pub fn known_packs(&self) -> Vec<PackRegistryEntry> {
         self.state.entries.clone()
     }
 
-    /// Attempt to reload every known pack independently (FR-011) — one failing pack is
-    /// marked [`RegistryStatus::Unavailable`] without preventing the others from
-    /// loading. Returns each source's fresh load result alongside the updated status.
+    /// Attempt to reload every known pack independently — one failing pack is marked
+    /// [`RegistryStatus::Unavailable`] without preventing the others from loading.
+    /// Returns each source's fresh load result alongside the updated status.
     pub fn reload_all(&mut self) -> Vec<(PackSource, Result<LoadedPack, ManifestError>)> {
         let mut results = Vec::with_capacity(self.state.entries.len());
         for entry in &mut self.state.entries {
@@ -379,8 +360,8 @@ impl Registry {
             results.push((entry.source.clone(), outcome));
         }
         // Best-effort persist of the refreshed statuses; a failure here doesn't change
-        // what's returned to the caller (constitution Principle VIII: don't let a
-        // secondary write failure mask the primary reload result).
+        // what's returned to the caller — a secondary write failure shouldn't mask
+        // the primary reload result.
         let _ = self.persist();
         results
     }
@@ -392,9 +373,8 @@ impl Registry {
     }
 }
 
-/// [`Registry::open`]'s production entry point for [`RegistryConfig`]'s migration
-/// (spec 009-project-rename, FR-004a) — see [`migrate_registry_config_core`] for the
-/// actual logic and `contracts/config-migration.md` for the full behavior contract.
+/// [`Registry::open`]'s production entry point for [`RegistryConfig`]'s migration —
+/// see [`migrate_registry_config_core`] for the actual logic.
 fn migrate_registry_config(new_config: &Config) -> RegistryConfig {
     migrate_registry_config_core(new_config, Config::new(OLD_REGISTRY_CONFIG_ID, RegistryConfig::VERSION))
 }
@@ -421,8 +401,8 @@ fn migrate_registry_config_core(new_config: &Config, old_config: Result<Config, 
 }
 
 /// [`Registry::open`]'s production entry point for [`RemovedStarterPacksConfig`]'s
-/// migration (spec 009-project-rename, FR-004a) — see
-/// [`migrate_removed_starter_packs_config_core`] for the actual logic.
+/// migration — see [`migrate_removed_starter_packs_config_core`] for the actual
+/// logic.
 fn migrate_removed_starter_packs_config(new_config: &Config) -> RemovedStarterPacksConfig {
     migrate_removed_starter_packs_config_core(
         new_config,
@@ -504,19 +484,19 @@ mod tests {
         registry.register(src.clone()).unwrap();
         assert_eq!(registry.known_packs().len(), 1);
 
-        // Reopen fresh, same custom path — simulates a daemon restart (US4 scenario 1).
+        // Reopen fresh, same custom path — simulates a daemon restart.
         let reopened = Registry::open_at(dir.path()).unwrap();
         assert!(reopened.known_packs().iter().any(|e| e.source == src));
     }
 
-    /// Spec 011 US6 FR-022 (research.md R17) — the audit's own reproduction shape:
     /// `wallpaperctl register` (a fresh process) and `wallpaperd`'s own long-lived
-    /// registry, both opened from the same on-disk store *before* either writes,
-    /// then each registering a different pack. Before this fix, whichever `persist()`
-    /// landed last would silently discard the other's entry (both loaded their
-    /// snapshot once, at `open_at` time, and wrote it back unconditionally). After
-    /// the fix, `register`'s locked read-modify-write re-reads fresh from disk under
-    /// the lock, so the second write can't clobber the first.
+    /// registry, both opened from the same on-disk store *before* either writes, then
+    /// each registering a different pack. Without the locked read-modify-write in
+    /// `with_locked_state`, whichever `persist()` landed last would silently discard
+    /// the other's entry (both loaded their snapshot once, at `open_at` time, and
+    /// wrote it back unconditionally). `register`'s locked read-modify-write instead
+    /// re-reads fresh from disk under the lock, so the second write can't clobber the
+    /// first.
     #[test]
     fn concurrent_persist_serializes() {
         let dir = tempfile::tempdir().unwrap();
@@ -602,8 +582,8 @@ mod tests {
         assert_eq!(present_entry.status, RegistryStatus::Known);
     }
 
-    /// T037: `PackRegistryEntry.origin` defaults to `User` for a freshly-registered
-    /// pack (the only path `wallpaperctl register`/the GUI can take).
+    /// `PackRegistryEntry.origin` defaults to `User` for a freshly-registered pack
+    /// (the only path `wallpaperctl register`/the GUI can take).
     #[test]
     fn register_defaults_to_user_origin() {
         let (mut registry, dir) = temp_registry();
@@ -614,7 +594,7 @@ mod tests {
         assert_eq!(registry.known_packs()[0].origin, PackOrigin::User);
     }
 
-    /// T037: a pre-existing (pre-spec-7) registry entry — hand-written in the exact
+    /// A pre-existing (pre-spec-7) registry entry — hand-written in the exact
     /// 2-field RON shape this crate wrote before `origin` existed — loads unchanged,
     /// defaulting `origin` to `User` via serde's own field-level default (not
     /// `cosmic-config`'s version-chain mechanism, since this field lives inside a `Vec`
@@ -633,8 +613,8 @@ mod tests {
         assert_eq!(packs[0].status, RegistryStatus::Known);
     }
 
-    /// T038: removing a `Package`-origin entry appends its source to the removed-
-    /// starter-packs store; removing a `User`-origin entry does not (spec.md FR-010).
+    /// Removing a `Package`-origin entry appends its source to the removed-
+    /// starter-packs store; removing a `User`-origin entry does not.
     #[test]
     fn removing_a_package_origin_entry_records_it_removed() {
         let (mut registry, dir) = temp_registry();
@@ -661,9 +641,9 @@ mod tests {
         assert!(!registry.is_removed_starter_pack(&src));
     }
 
-    /// T039: a simulated `postinst`/`wallpaperd` first-run re-registration attempt
-    /// skips a starter pack already listed as removed (spec.md US2 Scenario 2) — this
-    /// crate's `register_with_origin` doesn't itself consult the removed list (that
+    /// A simulated `postinst`/`wallpaperd` first-run re-registration attempt
+    /// skips a starter pack already listed as removed — this crate's
+    /// `register_with_origin` doesn't itself consult the removed list (that
     /// check is the caller's job, `is_removed_starter_pack`, exercised here the same
     /// way `wallpaperd`'s startup logic actually uses it).
     #[test]
@@ -703,8 +683,9 @@ mod tests {
         assert!(registry.is_removed_starter_pack(&starter_src));
     }
 
-    /// contracts/config-migration.md's 4 required test cases, applied to both of this
-    /// crate's `cosmic-config` entries.
+    /// Migration test cases (idempotent real-content migration, failed-open no-op,
+    /// never-configured-old-store no-op, already-populated-new-store no-op), applied
+    /// to both of this crate's `cosmic-config` entries.
     mod migration {
         use super::*;
 
@@ -828,10 +809,10 @@ mod tests {
         }
     }
 
-    /// Real bug regression (spec 009-project-rename): a registry entry migrated
-    /// verbatim from the old application id still points at the pre-rename
-    /// starter-pack system path, which no longer exists once the old package is
-    /// removed — `Registry::open`'s repair pass must fix this up.
+    /// Regression: a registry entry migrated verbatim from the old application id
+    /// still points at the pre-rename starter-pack system path, which no longer
+    /// exists once the old package is removed — `Registry::open`'s repair pass must
+    /// fix this up.
     mod starter_pack_relocation {
         use super::*;
 
@@ -883,7 +864,7 @@ mod tests {
         }
     }
 
-    // --- Spec 012 T013: PackRegistryEntry.display_name / Registry::set_display_name ---
+    // --- Spec 012: PackRegistryEntry.display_name / Registry::set_display_name ---
 
     #[test]
     fn set_display_name_round_trips_through_save_and_reload() {
@@ -926,10 +907,9 @@ mod tests {
         assert!(registry.known_packs().is_empty(), "must not create an entry just to name it");
     }
 
-    /// FR-021 (spec 012 US1 Clarifications): a display name doesn't survive its pack
-    /// being deleted — `remove` discards the whole entry, and `register`ing the same
-    /// source again afterward starts fresh (`display_name: None`), never recovering
-    /// the previous value.
+    /// A display name doesn't survive its pack being deleted — `remove` discards the
+    /// whole entry, and `register`ing the same source again afterward starts fresh
+    /// (`display_name: None`), never recovering the previous value.
     #[test]
     fn a_removed_and_re_registered_source_starts_with_no_display_name() {
         let (mut registry, dir) = temp_registry();
@@ -949,11 +929,11 @@ mod tests {
     /// An entry written before this field existed has no `display_name` key in its
     /// on-disk RON at all — `#[serde(default)]` must still load it as `None` rather
     /// than failing to parse. Mirrors `pre_existing_entry_with_no_origin_field_loads_
-    /// as_user_origin` above exactly (research.md R2, the identical precedent):
-    /// hand-writes the pre-spec-012 3-field shape (`source`, `status`, `origin` — no
-    /// `display_name`) directly, rather than round-tripping through this crate's own
-    /// `Serialize` impl, which would always include the field and so could never
-    /// actually exercise serde's missing-field fallback.
+    /// as_user_origin` above exactly: hand-writes the pre-existing 3-field shape
+    /// (`source`, `status`, `origin` — no `display_name`) directly, rather than
+    /// round-tripping through this crate's own `Serialize` impl, which would always
+    /// include the field and so could never actually exercise serde's missing-field
+    /// fallback.
     #[test]
     fn pre_existing_entry_with_no_display_name_field_loads_as_none() {
         let dir = tempfile::tempdir().unwrap();
