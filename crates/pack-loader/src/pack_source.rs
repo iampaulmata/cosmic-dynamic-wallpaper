@@ -1,5 +1,5 @@
 //! [`PackSource`] — a pack's identity, keyed by source location rather than its
-//! declared display name (FR-009).
+//! declared display name.
 
 use std::path::{Path, PathBuf};
 
@@ -8,13 +8,13 @@ use serde::{Deserialize, Serialize};
 use crate::error::ManifestError;
 
 /// Where a pack's content lives on disk — the identity key for a loaded or registered
-/// pack (FR-009, data-model.md `PackSource`). `Serialize`/`Deserialize` so it can be
-/// persisted as-is in a [`crate::registry::PackRegistryEntry`] (FR-010).
+/// pack. `Serialize`/`Deserialize` so it can be persisted as-is in a
+/// [`crate::registry::PackRegistryEntry`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PackSource {
     /// A manifest-based pack: the canonicalized pack directory.
     Directory(PathBuf),
-    /// A static, manifest-free pack (FR-004): the canonicalized image file.
+    /// A static, manifest-free pack: the canonicalized image file.
     StaticFile(PathBuf),
 }
 
@@ -23,8 +23,8 @@ impl PackSource {
     /// [`PackSource::StaticFile`] depending on whether it's a directory or a file.
     ///
     /// Fails if `path` doesn't exist, can't be canonicalized (e.g. a permission
-    /// error), or isn't valid UTF-8 (spec.md Edge Cases: non-UTF-8 paths are rejected
-    /// with a clear error rather than risking silent mishandling).
+    /// error), or isn't valid UTF-8 — non-UTF-8 paths are rejected with a clear error
+    /// rather than risking silent mishandling.
     pub fn resolve(path: &Path) -> Result<Self, ManifestError> {
         let canonical = std::fs::canonicalize(path).map_err(|e| ManifestError::Io {
             path: path.to_path_buf(),
@@ -74,8 +74,8 @@ mod tests {
         assert!(PackSource::resolve(&missing).is_err());
     }
 
-    /// spec.md Edge Cases: non-UTF-8 file/directory names are rejected with a clear
-    /// error rather than silently mishandled.
+    /// Non-UTF-8 file/directory names are rejected with a clear error rather than
+    /// silently mishandled.
     #[test]
     #[cfg(unix)]
     fn rejects_non_utf8_path() {

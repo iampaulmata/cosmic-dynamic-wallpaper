@@ -1,6 +1,6 @@
-//! Path containment check (FR-006a, research.md R3): a manifest's image entries must
-//! resolve to somewhere inside the pack directory, never outside it via `..`
-//! traversal, an absolute path, or a symlink.
+//! Path containment check: a manifest's image entries must resolve to somewhere
+//! inside the pack directory, never outside it via `..` traversal, an absolute path,
+//! or a symlink.
 
 use std::path::{Path, PathBuf};
 
@@ -11,18 +11,17 @@ use crate::error::ManifestError;
 ///
 /// `canonicalize` resolves both `..` components and symlinks to their real target, so a
 /// symlink planted inside the pack directory that points outside it is caught too, not
-/// just a literal `../` in the manifest (research.md R3). Requires the target file to
-/// exist — callers get [`ManifestError::MissingImageFile`] for a nonexistent entry
-/// rather than this function's containment error.
+/// just a literal `../` in the manifest. Requires the target file to exist — callers
+/// get [`ManifestError::MissingImageFile`] for a nonexistent entry rather than this
+/// function's containment error.
 pub fn resolve_and_check(pack_dir: &Path, file: &str) -> Result<PathBuf, ManifestError> {
-    // Spec 011 US5 FR-020 (research.md R16): `pack_dir.join(file)` below silently
-    // discards `pack_dir` when `file` is absolute (`Path::join`'s documented
-    // behavior) — containment previously only held because the later
-    // `starts_with(&canonical_dir)` check happened to still catch it (for an
-    // absolute path that exists and resolves outside the pack dir). Rejecting
-    // explicitly here removes the reliance on that incidental ordering: an absolute
-    // path is never a valid manifest entry, regardless of where it happens to point
-    // or whether it happens to exist.
+    // `pack_dir.join(file)` below silently discards `pack_dir` when `file` is
+    // absolute (`Path::join`'s documented behavior) — containment would otherwise
+    // only hold because the later `starts_with(&canonical_dir)` check happens to
+    // still catch it (for an absolute path that exists and resolves outside the pack
+    // dir). Rejecting explicitly here removes the reliance on that incidental
+    // ordering: an absolute path is never a valid manifest entry, regardless of where
+    // it happens to point or whether it happens to exist.
     if Path::new(file).is_absolute() {
         return Err(ManifestError::PathEscapesPackDirectory { file: file.to_string() });
     }
@@ -81,14 +80,13 @@ mod tests {
         ));
     }
 
-    /// Spec 011 US5 FR-020/FR-021 (research.md R16) — the audit's own reproduction
-    /// shape: `/etc/passwd`, an absolute path that genuinely exists on any Unix host.
-    /// Previously this only happened to be rejected because `pack_dir.join(file)`
-    /// discards `pack_dir` for an absolute `file`, and the later containment check
-    /// caught the resulting `/etc/passwd` as outside `pack_dir` — an explicit check
-    /// must now reject it directly, closing the gap where a future change to how pack
-    /// directories are laid out (e.g. nesting them under a shared parent) could have
-    /// silently reopened an escape for an absolute path that happens to still resolve
+    /// `/etc/passwd`, an absolute path that genuinely exists on any Unix host. This
+    /// would otherwise only be rejected because `pack_dir.join(file)` discards
+    /// `pack_dir` for an absolute `file`, and the later containment check catches the
+    /// resulting `/etc/passwd` as outside `pack_dir` — an explicit check rejects it
+    /// directly instead, closing the gap where a future change to how pack
+    /// directories are laid out (e.g. nesting them under a shared parent) could
+    /// silently reopen an escape for an absolute path that happens to still resolve
     /// somewhere nominally "inside" that new layout.
     #[test]
     fn rejects_absolute_path() {

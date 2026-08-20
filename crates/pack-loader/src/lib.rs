@@ -1,9 +1,8 @@
 //! Pack manifest parsing and loading for the Cosmic Dynamic Wallpaper daemon.
 //!
 //! Turns a directory (manifest + images) or a single image file into a fully validated
-//! [`LoadedPack`] that spec 1's scheduling engine and spec 3's renderer can consume. See
-//! `README.md` for full scope and non-scope, and `contracts/pack-loader-api.md` for the
-//! committed public API shape and on-disk manifest schema.
+//! [`LoadedPack`] that the scheduling engine and renderer can consume. See `README.md`
+//! for full scope and non-scope.
 //!
 //! ```
 //! use pack_loader::{load_pack, Registry};
