@@ -1,12 +1,11 @@
 //! Re-exports of [`wallpaper_ipc`]'s shared `cosmic-config` schema types
 //! ([`RendererConfig`], [`LocationConfigEntry`], [`LocationMode`], [`ResolutionStatus`],
-//! [`effective_location`]) — this crate no longer independently defines them (spec 7
-//! research.md R2, contracts/wallpaper-ipc-crate.md): a prior mismatch between two
-//! independently-defined "identical" types across this crate and `wallpaperctl`
-//! silently produced an empty map at runtime, exactly the bug class extracting a single
-//! shared crate structurally prevents. This module now holds only what's genuinely
-//! renderer-specific: [`Coalescer`] (FR-014's debounce), which depends on no schema
-//! type beyond `OutputId`.
+//! [`effective_location`]) — this crate no longer independently defines them: a prior
+//! mismatch between two independently-defined "identical" types across this crate and
+//! `wallpaperctl` silently produced an empty map at runtime, exactly the bug class
+//! extracting a single shared crate structurally prevents. This module now holds only
+//! what's genuinely renderer-specific: [`Coalescer`] (a debounce), which depends on no
+//! schema type beyond `OutputId`.
 //!
 //! **Scope note**: the real daemon watches these entries for live changes via
 //! `cosmic-config`'s `notify`-backed watch mechanism (`cosmic_config::calloop::
@@ -21,12 +20,12 @@ pub use wallpaper_ipc::{effective_location, LocationConfigEntry, LocationMode, R
 
 use crate::output::OutputId;
 
-/// The re-evaluation deadline FR-007/FR-014 commit to.
+/// The re-evaluation deadline this crate commits to.
 pub const REEVALUATION_DEADLINE: Duration = Duration::from_secs(2);
 
-/// In-process debounce for FR-014: a repeated change to the same output before its
-/// pending re-evaluation runs replaces the earlier one wholesale — never queued,
-/// never processed twice.
+/// In-process debounce: a repeated change to the same output before its pending
+/// re-evaluation runs replaces the earlier one wholesale — never queued, never
+/// processed twice.
 #[derive(Debug, Default)]
 pub struct Coalescer {
     pending: HashMap<OutputId, Instant>,
@@ -75,8 +74,8 @@ impl Coalescer {
 mod tests {
     use super::*;
 
-    /// FR-014: rapid repeated changes to the same output collapse to a single pending
-    /// entry, never queued or individually processed.
+    /// Rapid repeated changes to the same output collapse to a single pending entry,
+    /// never queued or individually processed.
     #[test]
     fn repeated_changes_to_the_same_output_coalesce() {
         let mut coalescer = Coalescer::new();
@@ -100,7 +99,7 @@ mod tests {
     }
 
     /// A change affecting only one output leaves an unrelated output's pending state
-    /// untouched (spec.md US4 Scenario 3 / FR-007).
+    /// untouched.
     #[test]
     fn changes_to_different_outputs_are_independent() {
         let mut coalescer = Coalescer::new();

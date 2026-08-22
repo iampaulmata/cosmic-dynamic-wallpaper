@@ -1,8 +1,6 @@
-//! The live D-Bus service (T049/T053/T054, FR-016, User Story 7) — a `zbus` server
-//! implementing `specs/004-cli-control-surface/contracts/wallpaperd-dbus-interface.md`
-//! exactly, so `crates/wallpaperctl/src/dbus_client.rs` (already implemented and
-//! tested, zero changes needed there) gets real answers instead of "daemon
-//! unreachable".
+//! The live D-Bus service — a `zbus` server implementing the interface
+//! `crates/wallpaperctl/src/dbus_client.rs` expects, so it gets real answers instead
+//! of "daemon unreachable".
 //!
 //! **Integration shape**: this daemon is a single-threaded Wayland/GPU client driven
 //! by `calloop` (`src/bin/wallpaperd.rs`); `zbus`'s connection is built with
@@ -43,10 +41,9 @@ pub const OBJECT_PATH: &str = "/com/system76/CosmicDynamicWallpaper1";
 pub const INTERFACE: &str = "com.system76.CosmicDynamicWallpaper1.Daemon";
 
 /// The most `Reevaluate`/`ReevaluateAll` requests [`DbusState::pending`] holds before
-/// further calls are rejected/dropped (spec 011 US4 FR-014, research.md R10 —
-/// clarified value: 8). Comfortably above any realistic multi-monitor burst of
-/// legitimate calls, while bounding the redraw backlog an unauthorized local process
-/// spamming this method can force onto the daemon.
+/// further calls are rejected/dropped (8). Comfortably above any realistic
+/// multi-monitor burst of legitimate calls, while bounding the redraw backlog an
+/// unauthorized local process spamming this method can force onto the daemon.
 pub const MAX_PENDING_DBUS_REQUESTS: usize = 8;
 
 /// A pending `Reevaluate`/`ReevaluateAll` call — drained by the main loop, since only
@@ -100,30 +97,29 @@ pub struct DaemonInterface {
     pub state: Arc<Mutex<DbusState>>,
     /// Captured once at construction ([`Self::new`]) — this daemon's single `calloop`
     /// main thread, per module doc's "never contended" note. Every interface method
-    /// below `debug_assert!`s it's still running there (spec 011 US7 FR-037,
-    /// research.md R32): `zbus`'s `Interface` trait requires `Send + Sync` in general
-    /// (so a served interface *could* be dispatched from another thread), but this
-    /// daemon never actually does that — this makes the assumption a checked,
-    /// debug-build-only invariant rather than only a comment a future refactor could
-    /// silently invalidate.
+    /// below `debug_assert!`s it's still running there: `zbus`'s `Interface` trait
+    /// requires `Send + Sync` in general (so a served interface *could* be dispatched
+    /// from another thread), but this daemon never actually does that — this makes
+    /// the assumption a checked, debug-build-only invariant rather than only a
+    /// comment a future refactor could silently invalidate.
     main_thread_id: std::thread::ThreadId,
 }
 
 impl DaemonInterface {
     /// Construct a new interface object, capturing the calling thread's id as the
     /// "main thread" every subsequent call's [`Self::assert_main_thread`] checks
-    /// against (FR-037) — must be called from the daemon's one `calloop` main thread
-    /// (see module doc), same as every other daemon setup step.
+    /// against — must be called from the daemon's one `calloop` main thread (see
+    /// module doc), same as every other daemon setup step.
     pub fn new(state: Arc<Mutex<DbusState>>) -> Self {
         Self { state, main_thread_id: std::thread::current().id() }
     }
 
-    /// FR-037 (research.md R32): checked restatement of this module's "never
-    /// contended" assumption — see [`main_thread_id`](Self::main_thread_id)'s doc
-    /// comment. Debug builds only (constitution Principle VIII: never a release-build
-    /// panic surface); a violation here would mean `zbus` started dispatching served
-    /// calls off the main thread, which would also break `WallpaperDaemon`'s own
-    /// no-`Send`/`Sync`-needed assumption elsewhere in this daemon.
+    /// Checked restatement of this module's "never contended" assumption — see
+    /// [`main_thread_id`](Self::main_thread_id)'s doc comment. Debug builds only,
+    /// never a release-build panic surface; a violation here would mean `zbus`
+    /// started dispatching served calls off the main thread, which would also break
+    /// `WallpaperDaemon`'s own no-`Send`/`Sync`-needed assumption elsewhere in this
+    /// daemon.
     fn assert_main_thread(&self) {
         debug_assert_eq!(
             std::thread::current().id(),
@@ -135,12 +131,12 @@ impl DaemonInterface {
 
 #[zbus::interface(interface = "com.system76.CosmicDynamicWallpaper1.Daemon")]
 impl DaemonInterface {
-    /// `QueryOutput(output_id) -> (assigned, active_image, next_transition_at)` per
-    /// the contract — an unmanaged `output_id` is a D-Bus `InvalidArgs` error, which
-    /// `wallpaperctl`'s client maps to `CliError::OutputNotFound`.
+    /// `QueryOutput(output_id) -> (assigned, active_image, next_transition_at)` — an
+    /// unmanaged `output_id` is a D-Bus `InvalidArgs` error, which `wallpaperctl`'s
+    /// client maps to `CliError::OutputNotFound`.
     ///
-    /// Spec 011 US4 FR-017 (research.md R13): `output_id` validated the same way
-    /// [`Self::reevaluate`] does, before the snapshot lookup.
+    /// `output_id` validated the same way [`Self::reevaluate`] does, before the
+    /// snapshot lookup.
     fn query_output(&self, output_id: String) -> zbus::fdo::Result<(bool, String, String)> {
         self.assert_main_thread();
         let id = OutputId::validated(output_id).map_err(|e| zbus::fdo::Error::InvalidArgs(e.to_string()))?;
@@ -158,17 +154,15 @@ impl DaemonInterface {
     /// `QueryAll() -> Array<(output_id, assigned, active_image, next_transition_at)>`
     /// — also backs `wallpaperctl list outputs` (which displays only `output_id`).
     ///
-    /// Spec 011 US4 FR-016 (research.md R12): logged so this daemon's log stream
-    /// (`journalctl` under the shipped systemd unit) makes the access observable —
-    /// this method hands location-derived data (active images, upcoming solar-
-    /// transition timestamps) to any co-located same-uid process with no allow-list;
-    /// see `contracts/wallpaperd-dbus-hardening.md` for why a full consent/allow-list
-    /// mechanism is out of scope for this fix. Logged at `info!`, not `debug!` (spec
-    /// 011 adversarial re-review finding 4): `cosmic-wallpaperd`'s
-    /// `tracing_subscriber::fmt::init()` call installs no explicit filter, and that
-    /// default hides `debug!`-level events entirely — a `debug!` call here would never
-    /// actually reach `journalctl` unless a user already knew to set
-    /// `RUST_LOG=debug`, silently defeating this fix's own stated goal.
+    /// Logged so this daemon's log stream (`journalctl` under the shipped systemd
+    /// unit) makes the access observable — this method hands location-derived data
+    /// (active images, upcoming solar-transition timestamps) to any co-located
+    /// same-uid process with no allow-list. Logged at `info!`, not `debug!`:
+    /// `cosmic-wallpaperd`'s `tracing_subscriber::fmt::init()` call installs no
+    /// explicit filter, and that default hides `debug!`-level events entirely — a
+    /// `debug!` call here would never actually reach `journalctl` unless a user
+    /// already knew to set `RUST_LOG=debug`, silently defeating the point of logging
+    /// this at all.
     fn query_all(&self) -> Vec<(String, bool, String, String)> {
         self.assert_main_thread();
         tracing::info!("QueryAll invoked");
@@ -192,9 +186,9 @@ impl DaemonInterface {
     /// snapshot's known outputs, then enqueued; the actual re-evaluation happens on
     /// the next event-loop tick (fire-and-forget, matching `wallpaperctl`'s usage).
     ///
-    /// Spec 011 US4 FR-017 (research.md R13): `output_id` is validated (non-empty,
-    /// bounded length) via the same [`OutputId::validated`] the CLI's `--output` flag
-    /// uses, before the known-outputs lookup.
+    /// `output_id` is validated (non-empty, bounded length) via the same
+    /// [`OutputId::validated`] the CLI's `--output` flag uses, before the
+    /// known-outputs lookup.
     fn reevaluate(&self, output_id: String) -> zbus::fdo::Result<()> {
         self.assert_main_thread();
         let id = OutputId::validated(output_id).map_err(|e| zbus::fdo::Error::InvalidArgs(e.to_string()))?;
@@ -202,9 +196,9 @@ impl DaemonInterface {
         if !state.known_outputs.contains(&id) {
             return Err(zbus::fdo::Error::InvalidArgs(format!("unmanaged output: {id}")));
         }
-        // Spec 011 US4 FR-014 (research.md R10): bounded, same as `reevaluate_all`
-        // below — see that method's doc comment for the coalescing half of this fix,
-        // which doesn't apply to a specific-output request the way it does to `All`.
+        // Bounded, same as `reevaluate_all` below — see that method's doc comment
+        // for the coalescing half of this, which doesn't apply to a specific-output
+        // request the way it does to `All`.
         if state.pending.len() >= MAX_PENDING_DBUS_REQUESTS {
             return Err(zbus::fdo::Error::LimitsExceeded(
                 "too many pending re-evaluation requests — the daemon hasn't caught up yet".to_string(),
@@ -217,16 +211,16 @@ impl DaemonInterface {
     /// `ReevaluateAll() -> ()` — always succeeds (there's no output to be invalid
     /// about); enqueued the same way as [`Self::reevaluate`].
     ///
-    /// Spec 011 US4 FR-014 (research.md R10): this is the method the audit reproduced
-    /// an unauthenticated-local-process DoS through (a tight call loop growing the
-    /// pending queue without bound, each entry forcing a full re-evaluation/redraw of
-    /// every output). Two defenses, in order: (1) coalescing — a repeated call while an
-    /// `All` is already pending is a silent no-op, since a second full re-evaluation
-    /// adds nothing a first one didn't already cover; this alone turns an unbounded
-    /// spam loop into O(1) additional work after the first call. (2) a hard bound on
-    /// top, for the remaining case of many distinct `Reevaluate(id)` calls mixed in —
-    /// dropped and logged rather than queued once full, since this method's `()`
-    /// return gives the caller no way to observe a rejection anyway.
+    /// An unauthenticated local process could otherwise DoS this daemon through a
+    /// tight call loop growing the pending queue without bound, each entry forcing a
+    /// full re-evaluation/redraw of every output. Two defenses, in order: (1)
+    /// coalescing — a repeated call while an `All` is already pending is a silent
+    /// no-op, since a second full re-evaluation adds nothing a first one didn't
+    /// already cover; this alone turns an unbounded spam loop into O(1) additional
+    /// work after the first call. (2) a hard bound on top, for the remaining case of
+    /// many distinct `Reevaluate(id)` calls mixed in — dropped and logged rather than
+    /// queued once full, since this method's `()` return gives the caller no way to
+    /// observe a rejection anyway.
     fn reevaluate_all(&self) {
         self.assert_main_thread();
         let mut state = lock(&self.state);
@@ -303,11 +297,11 @@ mod tests {
         DaemonInterface::new(Arc::new(Mutex::new(DbusState::default())))
     }
 
-    /// Spec 011 US7 FR-037 (research.md R32): every interface method's
-    /// `assert_main_thread` call must not fire when called from the same thread that
-    /// constructed the interface — the ordinary, expected case every other test in
-    /// this module already exercises implicitly. This test just makes that assumption
-    /// explicit: if it ever panicked, every other test above would too.
+    /// Every interface method's `assert_main_thread` call must not fire when called
+    /// from the same thread that constructed the interface — the ordinary, expected
+    /// case every other test in this module already exercises implicitly. This test
+    /// just makes that assumption explicit: if it ever panicked, every other test
+    /// above would too.
     #[test]
     fn interface_methods_do_not_panic_when_called_from_the_constructing_thread() {
         let iface = interface();
@@ -316,8 +310,7 @@ mod tests {
         let _ = iface.query_all();
     }
 
-    /// Spec 011 US4 FR-014 (research.md R10) — the audit's exact reproduction shape: a
-    /// tight `ReevaluateAll` call loop. A repeated call while one `All` is already
+    /// A tight `ReevaluateAll` call loop: a repeated call while one `All` is already
     /// pending must be a no-op, not additional queue growth.
     #[test]
     fn reevaluate_all_coalesces() {
@@ -330,9 +323,8 @@ mod tests {
         assert!(matches!(state.pending.front(), Some(ReevaluateRequest::All)));
     }
 
-    /// Spec 011 US4 FR-014 (research.md R10) — the queue never grows past
-    /// `MAX_PENDING_DBUS_REQUESTS`, even when every call names a *different* output
-    /// (so coalescing alone can't bound it).
+    /// The queue never grows past `MAX_PENDING_DBUS_REQUESTS`, even when every call
+    /// names a *different* output (so coalescing alone can't bound it).
     #[test]
     fn pending_queue_bounded() {
         let iface = interface();
@@ -353,9 +345,8 @@ mod tests {
         assert_eq!(lock(&iface.state).pending.len(), MAX_PENDING_DBUS_REQUESTS);
     }
 
-    /// Spec 011 US4 FR-017 (research.md R13) — an empty or oversized `output_id` is
-    /// rejected before the known-outputs lookup, for both `reevaluate` and
-    /// `query_output`.
+    /// An empty or oversized `output_id` is rejected before the known-outputs lookup,
+    /// for both `reevaluate` and `query_output`.
     #[test]
     fn output_id_validated() {
         let iface = interface();

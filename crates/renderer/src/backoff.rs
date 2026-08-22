@@ -1,6 +1,5 @@
 //! Shared exponential-backoff constants/logic for retrying a failed location
-//! resolution attempt (spec 011 US8 FR-045, research.md R35's predecessor spec 6
-//! research.md R6). Both [`crate::portal_location`] (portal/GeoClue automatic
+//! resolution attempt. Both [`crate::portal_location`] (portal/GeoClue automatic
 //! location) and [`crate::ip_geolocation`] (IP-based location) independently needed
 //! the exact same shape — never a tight retry loop, self-recovering without the user
 //! needing to manually toggle the location mode off and on — so it lives here once
