@@ -1,19 +1,17 @@
-//! Starter-pack first-run self-registration (spec 7 US2, FR-008/FR-010/FR-011).
+//! Starter-pack first-run self-registration.
 //!
-//! **Design note, a real correction to tasks.md's literal wording**: research.md/
-//! tasks.md originally described `postinst` (spec 5) as the place a starter pack gets
-//! registered. This doesn't hold up mechanically: `postinst` runs once, as root, at
-//! package-install time, with no per-user context at all — but `cosmic-config` (and
-//! therefore this project's pack registry) is a per-user store under each user's own
-//! XDG config directory. `postinst` has no way to know which user(s) will ever run this
-//! software, let alone write into their individual config directories safely. This
-//! module implements the same observable requirement (FR-008: zero-config first run)
+//! `postinst` can't be the place a starter pack gets registered: it runs once, as
+//! root, at package-install time, with no per-user context at all — but
+//! `cosmic-config` (and therefore this project's pack registry) is a per-user store
+//! under each user's own XDG config directory. `postinst` has no way to know which
+//! user(s) will ever run this software, let alone write into their individual config
+//! directories safely. This module implements the zero-config first-run requirement
 //! the *correct* way instead: `wallpaperd`'s own startup, which already runs in the
-//! right per-user context (a `systemd --user` service, spec 5), checks once whether
-//! this looks like a fresh install and self-registers the bundled starter pack if so.
+//! right per-user context (a `systemd --user` service), checks once whether this
+//! looks like a fresh install and self-registers the bundled starter pack if so.
 //! `postinst`'s only remaining job for this feature is installing the static asset
-//! files to a well-known system path — a packaging concern handled by `cargo-deb`'s own
-//! `assets` list (`crates/renderer/Cargo.toml`), not a script change.
+//! files to a well-known system path — a packaging concern handled by `cargo-deb`'s
+//! own `assets` list (`crates/renderer/Cargo.toml`), not a script change.
 
 use std::path::Path;
 
@@ -27,9 +25,9 @@ use crate::output::RendererConfig;
 pub const STARTER_PACK_SYSTEM_PATH: &str = "/usr/share/cosmic-dynamic-wallpaper/starter-pack";
 
 /// Register and assign the bundled starter pack if this looks like a genuinely fresh
-/// install (FR-008) — never if the user has explicitly removed it before (FR-010,
-/// [`Registry::is_removed_starter_pack`]), and never overriding any assignment already
-/// made (FR-011: only touches `renderer_config.same_pack_everywhere` when it and
+/// install — never if the user has explicitly removed it before
+/// ([`Registry::is_removed_starter_pack`]), and never overriding any assignment
+/// already made (only touches `renderer_config.same_pack_everywhere` when it and
 /// `overrides` are both still completely untouched). Safe to call unconditionally on
 /// every `wallpaperd` startup — every branch below is a fast, idempotent no-op once a
 /// fresh install has already been handled.
@@ -44,7 +42,7 @@ pub fn maybe_register(starter_pack_path: &Path, pack_registry: &mut Registry, re
         return false; // Not installed via the .deb package — nothing to do.
     };
     if pack_registry.is_removed_starter_pack(&source) {
-        return false; // FR-010: a past explicit removal is permanent.
+        return false; // A past explicit removal is permanent.
     }
     if !pack_registry.known_packs().is_empty() {
         return false; // Not a fresh install — something is already registered.
@@ -53,9 +51,8 @@ pub fn maybe_register(starter_pack_path: &Path, pack_registry: &mut Registry, re
         return false;
     }
     if renderer_config.same_pack_everywhere.is_none() && renderer_config.overrides.is_empty() {
-        // FR-011: only ever sets the default when nothing else has been configured —
-        // never overrides a user's own explicit assignment made before or after
-        // install.
+        // Only ever sets the default when nothing else has been configured — never
+        // overrides a user's own explicit assignment made before or after install.
         renderer_config.same_pack_everywhere = Some(source);
     }
     true
@@ -74,9 +71,9 @@ mod tests {
         (Registry::open_at(dir.path()).unwrap(), dir)
     }
 
-    /// spec.md US2 Scenario 1: on a fresh install (empty registry, untouched
-    /// renderer config), the starter pack is registered as `Package`-origin and
-    /// assigned via the same-everywhere toggle.
+    /// On a fresh install (empty registry, untouched renderer config), the starter
+    /// pack is registered as `Package`-origin and assigned via the same-everywhere
+    /// toggle.
     #[test]
     fn fresh_install_registers_and_assigns_the_starter_pack() {
         let starter = starter_dir();
@@ -105,9 +102,9 @@ mod tests {
         assert!(registry.known_packs().is_empty());
     }
 
-    /// FR-010: a user's past explicit removal is permanent — a later "first run"
-    /// check (e.g. a package upgrade re-invoking this same startup path) must not
-    /// silently re-add it.
+    /// A user's past explicit removal is permanent — a later "first run" check (e.g.
+    /// a package upgrade re-invoking this same startup path) must not silently
+    /// re-add it.
     #[test]
     fn previously_removed_starter_pack_is_never_re_registered() {
         let starter = starter_dir();
@@ -124,8 +121,8 @@ mod tests {
         assert!(renderer_config.same_pack_everywhere.is_none());
     }
 
-    /// FR-011 (spec.md US2 Scenario 3): a user's existing explicit assignment, made
-    /// before this check ever runs, is never overridden.
+    /// A user's existing explicit assignment, made before this check ever runs, is
+    /// never overridden.
     #[test]
     fn existing_user_assignment_is_never_overridden() {
         let starter = starter_dir();
@@ -135,8 +132,8 @@ mod tests {
 
         let did_register = maybe_register(starter.path(), &mut registry, &mut renderer_config);
 
-        // The starter pack is still registered (FR-008 — it should be *available*,
-        // browsable via the GUI/`list packs`), just never force-assigned anywhere.
+        // The starter pack is still registered — it should be *available*, browsable
+        // via the GUI/`list packs` — just never force-assigned anywhere.
         assert!(did_register);
         assert!(registry.known_packs()[0].origin == PackOrigin::Package);
         assert!(renderer_config.same_pack_everywhere.is_none());
@@ -144,8 +141,8 @@ mod tests {
     }
 
     /// Not a fresh install — some other pack is already known (registered, even if
-    /// not assigned) — `known_packs().is_empty()` is the "fresh install" signal, per
-    /// quickstart.md's own framing ("no prior wallpaperctl commands ever run").
+    /// not assigned) — `known_packs().is_empty()` is the "fresh install" signal ("no
+    /// prior wallpaperctl commands ever run").
     #[test]
     fn a_registry_with_any_existing_entry_is_not_touched() {
         let starter = starter_dir();

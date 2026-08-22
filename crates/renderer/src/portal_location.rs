@@ -1,6 +1,6 @@
-//! Portal integration for automatic location (spec 6 US1–US3) — talks to
+//! Portal integration for automatic location — talks to
 //! `org.freedesktop.portal.Location` via [`ashpd`], driven inside `wallpaperd`'s
-//! existing single `calloop` event loop (research.md R5), not a dedicated OS thread.
+//! existing single `calloop` event loop, not a dedicated OS thread.
 //!
 //! **Write-back contract**: this module never touches [`cosmic_config::Config`] or
 //! [`crate::surface::WallpaperDaemon`] directly — [`run`] only ever sends a
@@ -16,12 +16,11 @@
 //! [`crate::config::effective_location`] ignores `automatic_location` entirely while
 //! `mode == Manual`, so a background resolution (or its backoff retries) has no
 //! observable effect until automatic mode is re-enabled — at which point the most
-//! recently resolved value is already there (spec.md FR-010). Full task cancellation on
-//! every mode toggle is not implemented — flagged here rather than silently absorbed,
-//! matching this project's established practice for documented gaps (spec 3/4's own
-//! READMEs). Full live verification of this module needs a machine with GeoClue2
-//! installed and location services enabled — not available in this project's own dev
-//! environment (research.md R2); see `README.md`.
+//! recently resolved value is already there. Full task cancellation on every mode
+//! toggle is not implemented — flagged here rather than silently absorbed. Full live
+//! verification of this module needs a machine with GeoClue2 installed and location
+//! services enabled — not available in this project's own dev environment; see
+//! `README.md`.
 
 use std::time::{Duration, Instant};
 
@@ -33,23 +32,23 @@ use schedule_engine::Location;
 use crate::backoff::{next_backoff, INITIAL_BACKOFF};
 use crate::config::{ResolutionStatus, LocationConfigEntry, REEVALUATION_DEADLINE};
 
-/// The resolution-attempt timeout (research.md R6) — distinct from spec 3 FR-007's
-/// 2-second *reaction* bound (how fast a config change is picked up). Generous enough
-/// for a real GeoClue lookup without leaving a solar-anchored pack in limbo
-/// indefinitely.
+/// The resolution-attempt timeout — distinct from [`crate::config::
+/// REEVALUATION_DEADLINE`]'s 2-second *reaction* bound (how fast a config change is
+/// picked up). Generous enough for a real GeoClue lookup without leaving a
+/// solar-anchored pack in limbo indefinitely.
 pub const RESOLUTION_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// The shape [`run`] receives from `ashpd` before it's validated into spec 1's
-/// [`Location`] — a plain, `ashpd`-free struct (data-model.md `PortalLocationReading`)
-/// so [`apply_reading`] stays a pure, no-D-Bus unit test (tasks.md T007).
+/// The shape [`run`] receives from `ashpd` before it's validated into the scheduling
+/// engine's [`Location`] — a plain, `ashpd`-free struct so [`apply_reading`] stays a
+/// pure, no-D-Bus unit test.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PortalReading {
     /// From `ashpd::desktop::location::Location::latitude()`.
     pub latitude: f64,
     /// From `ashpd::desktop::location::Location::longitude()`.
     pub longitude: f64,
-    /// Radius in meters — logged for diagnostics only; spec.md's persisted schema has
-    /// no accuracy field.
+    /// Radius in meters — logged for diagnostics only; the persisted schema has no
+    /// accuracy field.
     pub accuracy: f64,
 }
 
@@ -64,17 +63,17 @@ impl From<&PortalLocation> for PortalReading {
 #[derive(Debug, Clone)]
 pub enum PortalEvent {
     /// A successful resolution or a subsequent live update from an already-resolved
-    /// session (spec.md US1/US3).
+    /// session.
     Reading(PortalReading),
     /// Any resolution failure (portal absent, backend absent, permission declined,
-    /// timeout, or a mid-session error — spec.md FR-005), with the specific reason.
+    /// timeout, or a mid-session error), with the specific reason.
     Failure(String),
 }
 
-/// Validate `reading` through spec 1's [`Location::new`] and record a successful
-/// resolution (spec.md US1 Scenarios 1–2, data-model.md's validate-before-write rule).
-/// An out-of-range/non-finite reading from a misbehaving backend is treated as a
-/// resolution failure, never partially written — delegates to [`apply_failure`].
+/// Validate `reading` through the scheduling engine's [`Location::new`] and record a
+/// successful resolution. An out-of-range/non-finite reading from a misbehaving
+/// backend is treated as a resolution failure, never partially written — delegates to
+/// [`apply_failure`].
 pub fn apply_reading(entry: &mut LocationConfigEntry, reading: PortalReading) {
     match Location::new(reading.latitude, reading.longitude) {
         Ok(location) => {
@@ -86,23 +85,21 @@ pub fn apply_reading(entry: &mut LocationConfigEntry, reading: PortalReading) {
 }
 
 /// Record a resolution failure (portal absent, backend absent, permission declined,
-/// timeout, or a mid-session error — spec.md FR-005), written back immediately with no
-/// grace period. `automatic_location` is cleared, not left stale:
-/// [`crate::config::effective_location`]'s fallback to the manual `location` only
-/// triggers when `automatic_location` is `None` (contracts/location-config-schema-v2.md
-/// "freshly-degraded example"), so a prior successful resolution must not linger once
-/// it's known to be stale.
+/// timeout, or a mid-session error), written back immediately with no grace period.
+/// `automatic_location` is cleared, not left stale: [`crate::config::
+/// effective_location`]'s fallback to the manual `location` only triggers when
+/// `automatic_location` is `None`, so a prior successful resolution must not linger
+/// once it's known to be stale.
 pub fn apply_failure(entry: &mut LocationConfigEntry, reason: String) {
     entry.automatic_location = None;
     entry.automatic_status = ResolutionStatus::Unavailable { reason };
 }
 
-/// In-process debounce for FR-032 (spec 011 US7, research.md R27) — the audit's own
-/// framing: unlike every other config write in this daemon, a raw `PortalEvent` was
-/// applied and persisted synchronously as it arrived, one write per event, instead of
-/// coalescing a rapid burst (the portal settling through several intermediate readings)
-/// the way `crate::config::Coalescer` already does for FR-014's per-output
-/// re-evaluations. Mirrors that struct's exact "record replaces the pending deadline,
+/// In-process debounce: without it, a raw `PortalEvent` would be applied and
+/// persisted synchronously as it arrives, one write per event, instead of coalescing
+/// a rapid burst (the portal settling through several intermediate readings) the way
+/// `crate::config::Coalescer` already does for per-output re-evaluations. Mirrors
+/// that struct's exact "record replaces the pending deadline,
 /// drained exactly once when due" semantics and the same [`REEVALUATION_DEADLINE`]
 /// window, specialized to a single buffered [`PortalEvent`] slot instead of a
 /// per-`OutputId` map (there's only ever one location stream to debounce here).
@@ -145,13 +142,13 @@ impl PortalDebouncer {
     }
 }
 
-/// One resolution attempt: create a portal session requesting [`Accuracy::City`]
-/// (research.md R4), call `Start`, and await the session's first `LocationUpdated`
-/// value — wrapped in [`RESOLUTION_TIMEOUT`]. Returns the still-open stream alongside
-/// the first reading on success, so the caller can keep receiving further updates from
-/// the *same* session without re-creating it (spec.md US3, tasks.md T021) — recreating
-/// a session on every subsequent update would both waste portal/GeoClue resources and
-/// risk missing updates during the recreation window.
+/// One resolution attempt: create a portal session requesting [`Accuracy::City`],
+/// call `Start`, and await the session's first `LocationUpdated` value — wrapped in
+/// [`RESOLUTION_TIMEOUT`]. Returns the still-open stream alongside the first reading
+/// on success, so the caller can keep receiving further updates from the *same*
+/// session without re-creating it — recreating a session on every subsequent update
+/// would both waste portal/GeoClue resources and risk missing updates during the
+/// recreation window.
 async fn start_session() -> Result<(PortalReading, impl Stream<Item = PortalLocation> + Unpin), String> {
     let attempt = async {
         let proxy = LocationProxy::new().await.map_err(|e| e.to_string())?;
@@ -175,23 +172,22 @@ async fn start_session() -> Result<(PortalReading, impl Stream<Item = PortalLoca
 }
 
 /// Drive automatic location resolution for the remainder of this daemon's lifetime
-/// (module doc's Simplification note): repeatedly attempt a resolution, stay subscribed
-/// to its session's ongoing `LocationUpdated` stream for as long as it keeps producing
-/// updates (spec.md US3), and retry with exponential backoff on any failure or session
-/// end (research.md R6) — every outcome is sent to `events` for `wallpaperd.rs`'s event
-/// loop to apply. Returns only when `events` is disconnected (the daemon is shutting
+/// (module doc's Simplification note): repeatedly attempt a resolution, stay
+/// subscribed to its session's ongoing `LocationUpdated` stream for as long as it
+/// keeps producing updates, and retry with exponential backoff on any failure or
+/// session end — every outcome is sent to `events` for `wallpaperd.rs`'s event loop
+/// to apply. Returns only when `events` is disconnected (the daemon is shutting
 /// down).
 ///
 /// **Implementation note on the retry timer**: rather than a separate
-/// `calloop::timer::Timer` event source coordinating back into this task (tasks.md
-/// T017's literal wording), the backoff delay is an `async_io::Timer::after` awaited
-/// directly inside this same task — both this task and the resolution timeout
-/// ([`start_session`]) already run cooperatively inside `wallpaperd.rs`'s
-/// `calloop::futures::Executor`, and `async_io::Timer` is the identical primitive
-/// `zbus`'s own `async-io` backend already relies on elsewhere in this process (no
-/// second concurrency model introduced, research.md R5's actual requirement) — this
-/// achieves the same "never a tight loop, self-recovering" contract with one state
-/// machine instead of two coordinating ones.
+/// `calloop::timer::Timer` event source coordinating back into this task, the
+/// backoff delay is an `async_io::Timer::after` awaited directly inside this same
+/// task — both this task and the resolution timeout ([`start_session`]) already run
+/// cooperatively inside `wallpaperd.rs`'s `calloop::futures::Executor`, and
+/// `async_io::Timer` is the identical primitive `zbus`'s own `async-io` backend
+/// already relies on elsewhere in this process (no second concurrency model
+/// introduced) — this achieves the same "never a tight loop, self-recovering"
+/// contract with one state machine instead of two coordinating ones.
 pub async fn run(events: calloop::channel::Sender<PortalEvent>) {
     let mut backoff = INITIAL_BACKOFF;
     loop {
@@ -201,7 +197,7 @@ pub async fn run(events: calloop::channel::Sender<PortalEvent>) {
                 if events.send(PortalEvent::Reading(reading)).is_err() {
                     return;
                 }
-                // T021: stay subscribed to this same session for as long as it keeps
+                // Stay subscribed to this same session for as long as it keeps
                 // producing updates — no new session, no backoff wait, until it ends.
                 while let Some(update) = stream.next().await {
                     if events.send(PortalEvent::Reading(PortalReading::from(&update))).is_err() {
@@ -234,8 +230,8 @@ mod tests {
         PortalReading { latitude, longitude, accuracy: 1000.0 }
     }
 
-    /// T007: a successful resolved reading validates through `Location::new` and
-    /// produces `automatic_location: Some(..)`, `automatic_status: Resolved`.
+    /// A successful resolved reading validates through `Location::new` and produces
+    /// `automatic_location: Some(..)`, `automatic_status: Resolved`.
     #[test]
     fn apply_reading_with_a_valid_value_resolves() {
         let mut entry = LocationConfigEntry::default();
@@ -245,8 +241,8 @@ mod tests {
         assert_eq!((loc.latitude(), loc.longitude()), (45.5019, -73.5674));
     }
 
-    /// data-model.md: an out-of-range reading from a misbehaving backend is a
-    /// resolution failure, never partially written.
+    /// An out-of-range reading from a misbehaving backend is a resolution failure,
+    /// never partially written.
     #[test]
     fn apply_reading_with_an_out_of_range_value_is_treated_as_a_failure() {
         let mut entry = LocationConfigEntry::default();
@@ -255,10 +251,10 @@ mod tests {
         assert!(matches!(entry.automatic_status, ResolutionStatus::Unavailable { .. }));
     }
 
-    /// T013: a portal error/timeout/absence maps to `Unavailable { reason }` with the
+    /// A portal error/timeout/absence maps to `Unavailable { reason }` with the
     /// specific error string preserved verbatim — including this project's own
-    /// live-observed `"Location services disabled"` string (research.md R1) as a
-    /// literal test case, not a generic placeholder.
+    /// live-observed `"Location services disabled"` string as a literal test case,
+    /// not a generic placeholder.
     #[test]
     fn apply_failure_preserves_the_reason_verbatim() {
         let mut entry = LocationConfigEntry::default();
@@ -266,9 +262,9 @@ mod tests {
         assert_eq!(entry.automatic_status, ResolutionStatus::Unavailable { reason: "Location services disabled".to_string() });
     }
 
-    /// T013/data-model.md: a failure clears any previously-resolved `automatic_location`
-    /// rather than leaving it stale — `effective_location()`'s fallback to `location`
-    /// only triggers when `automatic_location` is `None`.
+    /// A failure clears any previously-resolved `automatic_location` rather than
+    /// leaving it stale — `effective_location()`'s fallback to `location` only
+    /// triggers when `automatic_location` is `None`.
     #[test]
     fn apply_failure_clears_a_previously_resolved_automatic_location() {
         let mut entry = LocationConfigEntry::default();
@@ -279,12 +275,11 @@ mod tests {
         assert_eq!(entry.automatic_location, None);
     }
 
-    // T015's `next_backoff` doubling/capping coverage now lives in `backoff.rs`
-    // (spec 011 US8 FR-045) — `next_backoff` itself moved there, deduplicated from
-    // this module and `ip_geolocation.rs`.
+    // `next_backoff` doubling/capping coverage now lives in `backoff.rs` —
+    // `next_backoff` itself moved there, deduplicated from this module and
+    // `ip_geolocation.rs`.
 
-    /// Spec 011 US7 FR-032 (research.md R27) — the audit's own reproduction: a rapid
-    /// burst of readings collapses to a single pending entry, never queued or
+    /// A rapid burst of readings collapses to a single pending entry, never queued or
     /// individually processed (mirrors `config::tests::repeated_changes_to_the_same_
     /// output_coalesce` for `Coalescer`).
     #[test]
@@ -321,11 +316,11 @@ mod tests {
         assert!(debouncer.due(deadline).is_none());
     }
 
-    /// T019: a `LocationUpdated` value distinct from the currently-stored
+    /// A `LocationUpdated` value distinct from the currently-stored
     /// `automatic_location` is applied and produces a genuinely different resolved
     /// value — the caller (`wallpaperd.rs`) is the one that diffs this against the
-    /// prior state to decide whether to coalesce a re-evaluation (spec.md US3
-    /// Scenario 1, FR-006); this asserts the write side of that path is correct.
+    /// prior state to decide whether to coalesce a re-evaluation; this asserts the
+    /// write side of that path is correct.
     #[test]
     fn apply_reading_with_a_new_value_replaces_the_old_one() {
         let mut entry = LocationConfigEntry::default();
