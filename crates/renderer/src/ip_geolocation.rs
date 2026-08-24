@@ -1,20 +1,19 @@
-//! IP-geolocation location resolution (spec 7 US3) — a bundled offline `.mmdb`
-//! database (research.md R3) plus STUN-based public-IP discovery (research.md R4, the
-//! one external touchpoint an offline database can't supply on its own — disclosed to
-//! the user before opt-in, FR-014; see `wallpaperctl`'s `IP_GEOLOCATION_DISCLOSURE`).
+//! IP-geolocation location resolution — a bundled offline `.mmdb` database plus
+//! STUN-based public-IP discovery (the one external touchpoint an offline database
+//! can't supply on its own — disclosed to the user before opt-in; see
+//! `wallpaperctl`'s `IP_GEOLOCATION_DISCLOSURE`).
 //!
-//! **Concurrency note, a real and deliberate exception to this project's own
-//! established posture**: every other async/blocking I/O in this daemon (the D-Bus
-//! service, the portal subscription, `portal_location.rs`) runs inside `wallpaperd`'s
-//! single `calloop` event loop via the `async-io`-backed `zbus`/`ashpd` stack — no
-//! second concurrency model. `stunclient`'s only usable API here is genuinely
-//! synchronous (`std::net::UdpSocket`-blocking); its `async` feature would require
-//! `tokio`, which this project has deliberately kept out of `wallpaperd` throughout
-//! (research.md R3/R5 of spec 6). Rather than force a blocking call onto the main loop
-//! (stalling every output's scheduling for up to [`STUN_TIMEOUT`]) or pull in a second
-//! async runtime, [`spawn`] runs on its own dedicated background OS thread — the one
-//! place in this daemon that does, called out explicitly rather than silently
-//! introduced.
+//! **Concurrency note, a deliberate exception to this project's own established
+//! posture**: every other async/blocking I/O in this daemon (the D-Bus service, the
+//! portal subscription, `portal_location.rs`) runs inside `wallpaperd`'s single
+//! `calloop` event loop via the `async-io`-backed `zbus`/`ashpd` stack — no second
+//! concurrency model. `stunclient`'s only usable API here is genuinely synchronous
+//! (`std::net::UdpSocket`-blocking); its `async` feature would require `tokio`, which
+//! this project has deliberately kept out of `wallpaperd` throughout. Rather than
+//! force a blocking call onto the main loop (stalling every output's scheduling for
+//! up to [`STUN_TIMEOUT`]) or pull in a second async runtime, [`spawn`] runs on its
+//! own dedicated background OS thread — the one place in this daemon that does,
+//! called out explicitly rather than silently introduced.
 
 use std::net::{IpAddr, ToSocketAddrs, UdpSocket};
 use std::path::{Path, PathBuf};
@@ -28,17 +27,17 @@ use schedule_engine::Location;
 use crate::backoff::{next_backoff, INITIAL_BACKOFF};
 use crate::config::{LocationConfigEntry, ResolutionStatus};
 
-/// Public STUN server used for public-IP discovery (research.md R4) — the same
-/// well-known Google STUN server `stunclient`'s own convenience helper defaults to.
+/// Public STUN server used for public-IP discovery — the same well-known Google
+/// STUN server `stunclient`'s own convenience helper defaults to.
 pub const STUN_SERVER: &str = "stun.l.google.com:19302";
 
-/// Public-IP discovery timeout — same posture as spec 6 research.md R6's portal
+/// Public-IP discovery timeout — same posture as `portal_location.rs`'s own
 /// resolution timeout: generous enough for a real round trip, bounded so an
 /// unreachable/blackholed STUN server can't stall resolution indefinitely.
 pub const STUN_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Public-IP cache TTL (research.md R4) — this external touchpoint happens at most a
-/// few times a day, not per solar-event resolution.
+/// Public-IP cache TTL — this external touchpoint happens at most a few times a
+/// day, not per solar-event resolution.
 pub const PUBLIC_IP_CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// The well-known system path the bundled `.mmdb` database is installed to — a
@@ -48,8 +47,8 @@ pub const PUBLIC_IP_CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 /// resolution failure, not a crash), same posture as `starter_pack.rs`'s system path.
 pub const MMDB_SYSTEM_PATH: &str = "/usr/share/cosmic-dynamic-wallpaper/geoip.mmdb";
 
-/// In-memory-only cache of the last STUN-discovered public IP (data-model.md) — never
-/// written to `cosmic-config`; only the subsequent database lookup's *result*
+/// In-memory-only cache of the last STUN-discovered public IP — never written to
+/// `cosmic-config`; only the subsequent database lookup's *result*
 /// (`ip_location`/`ip_status`) is persisted.
 #[derive(Debug, Clone, Copy)]
 pub struct PublicIpCache {
@@ -81,10 +80,10 @@ pub enum IpGeoEvent {
     Failure(String),
 }
 
-/// Discover this machine's own public IP address via STUN (research.md R4) —
-/// blocking. Callers on `wallpaperd`'s single `calloop` thread MUST run this on a
-/// dedicated background thread (see this module's doc comment and [`spawn`]), never
-/// call it directly from the event loop.
+/// Discover this machine's own public IP address via STUN — blocking. Callers on
+/// `wallpaperd`'s single `calloop` thread MUST run this on a dedicated background
+/// thread (see this module's doc comment and [`spawn`]), never call it directly
+/// from the event loop.
 pub fn discover_public_ip_blocking() -> Result<IpAddr, String> {
     let resolved: Vec<std::net::SocketAddr> = STUN_SERVER
         .to_socket_addrs()
@@ -108,18 +107,16 @@ pub fn discover_public_ip_blocking() -> Result<IpAddr, String> {
     client.set_timeout(STUN_TIMEOUT);
     // `stunclient::Error`'s `Display` is a fixed, generic phrase per variant (e.g.
     // "UDP socket error") — `{e:?}` (Debug) additionally surfaces the wrapped
-    // `std::io::Error`'s real message, so a failure reason is actually specific, not a
-    // generic catch-all (data-model.md's own requirement for every `ResolutionStatus::
-    // Unavailable` reason).
+    // `std::io::Error`'s real message, so a failure reason is actually specific, not
+    // a generic catch-all.
     let addr = client.query_external_address(&udp).map_err(|e| format!("public IP discovery failed: {e} ({e:?})"))?;
     Ok(addr.ip())
 }
 
 /// Look up `ip`'s approximate location in the `.mmdb` database at `mmdb_path` —
-/// fully local/offline, no network. Validates through spec 1's [`Location::new`]
-/// before ever returning `Ok` (data-model.md's validate-before-write rule) — a
-/// malformed or missing entry is a resolution failure, never a panic or a partial
-/// write.
+/// fully local/offline, no network. Validates through the scheduling engine's
+/// [`Location::new`] before ever returning `Ok` — a malformed or missing entry is a
+/// resolution failure, never a panic or a partial write.
 pub fn lookup_location(mmdb_path: &Path, ip: IpAddr) -> Result<Location, String> {
     let reader = maxminddb::Reader::open_readfile(mmdb_path).map_err(|e| format!("IP-geolocation database unavailable: {e}"))?;
     let record: geoip2::City = reader
@@ -134,12 +131,12 @@ pub fn lookup_location(mmdb_path: &Path, ip: IpAddr) -> Result<Location, String>
 }
 
 /// Sanity bound on a single IP-geolocation jump between consecutive successful
-/// resolutions (spec 011 US7 FR-031, research.md R26) — the audit's own suggested
-/// mitigation for a forged STUN reply: a lone implausible jump (say, two continents
-/// apart within one resolution interval) is rejected rather than applied, even though
-/// it would otherwise validate cleanly through [`Location::new`]. ~2000 km is generous
-/// relative to any real short-notice relocation (a flight, a move) while still catching
-/// the threat model described — a forged UDP reply pointing at an arbitrary location.
+/// resolutions — mitigates a forged STUN reply: a lone implausible jump (say, two
+/// continents apart within one resolution interval) is rejected rather than applied,
+/// even though it would otherwise validate cleanly through [`Location::new`]. ~2000 km
+/// is generous relative to any real short-notice relocation (a flight, a move) while
+/// still catching the threat model described — a forged UDP reply pointing at an
+/// arbitrary location.
 pub const MAX_PLAUSIBLE_LOCATION_JUMP_KM: f64 = 2000.0;
 
 /// Great-circle distance between two locations, in kilometers (haversine formula) —
@@ -157,19 +154,19 @@ fn haversine_km(a: Location, b: Location) -> f64 {
 
 /// Validate `location` and record a successful resolution — mirrors
 /// `portal_location::apply_reading`'s exact posture for the `ip_*` fields instead of
-/// `automatic_*`, plus [`MAX_PLAUSIBLE_LOCATION_JUMP_KM`]'s plausibility bound (FR-031,
-/// research.md R26): a new reading that implies an implausible jump from the most
-/// recent previously-trusted `ip_location` is logged and skipped — `entry` is left
+/// `automatic_*`, plus [`MAX_PLAUSIBLE_LOCATION_JUMP_KM`]'s plausibility bound: a new
+/// reading that implies an implausible jump from the most recent
+/// previously-trusted `ip_location` is logged and skipped — `entry` is left
 /// unchanged — rather than applied outright.
 ///
 /// The very first IP-geolocation resolution (`ip_location` still `None`) falls back to
 /// checking against `entry.location` — the user's own manually-entered value, if any —
-/// instead of applying unconditionally (spec 011 adversarial re-review finding 5): a
-/// forged reply timed for exactly that first resolution previously bypassed this check
-/// entirely and became the new permanently-trusted baseline. Only when *neither*
-/// `ip_location` nor a manual `location` exists at all (nothing this process has ever
-/// trusted to compare against) does a reading still apply unchecked — there is no
-/// baseline to validate it against in that case.
+/// instead of applying unconditionally: a forged reply timed for exactly that first
+/// resolution would otherwise bypass this check entirely and become the new
+/// permanently-trusted baseline. Only when *neither* `ip_location` nor a manual
+/// `location` exists at all (nothing this process has ever trusted to compare
+/// against) does a reading still apply unchecked — there is no baseline to validate
+/// it against in that case.
 pub fn apply_reading(entry: &mut LocationConfigEntry, location: Location) {
     if let Some(previous) = entry.ip_location.or(entry.location) {
         let jump_km = haversine_km(previous, location);
@@ -278,8 +275,8 @@ mod tests {
         (dir, path)
     }
 
-    /// T046: `maxminddb` lookup against a small fixture `.mmdb` resolves known test
-    /// IPs to expected coordinates, fully offline — no real STUN/network call.
+    /// `maxminddb` lookup against a small fixture `.mmdb` resolves known test IPs to
+    /// expected coordinates, fully offline — no real STUN/network call.
     #[test]
     fn lookup_resolves_known_test_ips_to_expected_coordinates() {
         let (_dir, path) =
@@ -310,7 +307,7 @@ mod tests {
         assert!(result.is_err());
     }
 
-    /// T047: a lookup failure maps to `ResolutionStatus::Unavailable` with a specific
+    /// A lookup failure maps to `ResolutionStatus::Unavailable` with a specific
     /// reason string, never panics — exercised through `apply_failure`, the same
     /// write-back path a real STUN timeout or database-missing error takes.
     #[test]
@@ -337,9 +334,8 @@ mod tests {
         assert_eq!(entry.ip_location, Some(location));
     }
 
-    /// Spec 011 US7 FR-031 (research.md R26) — the audit's own threat model: a single
-    /// forged STUN reply causing one implausible jump is rejected, keeping the
-    /// previous trusted location, rather than applied outright.
+    /// A single forged STUN reply causing one implausible jump is rejected, keeping
+    /// the previous trusted location, rather than applied outright.
     #[test]
     fn apply_reading_rejects_an_implausible_jump_from_a_forged_reply() {
         let mut entry = LocationConfigEntry::default();
@@ -383,9 +379,8 @@ mod tests {
         assert_eq!(entry.ip_location, Some(far));
     }
 
-    /// Spec 011 adversarial re-review finding 5 — the audit's own threat model
-    /// extended: a forged reply timed for the very first IP-geolocation resolution
-    /// (before any `ip_location` baseline exists) must still be checked against a
+    /// A forged reply timed for the very first IP-geolocation resolution (before any
+    /// `ip_location` baseline exists) must still be checked against a
     /// manually-entered `location`, if the user already has one, instead of bypassing
     /// the plausibility check entirely.
     #[test]
@@ -398,8 +393,8 @@ mod tests {
         assert_eq!(entry.ip_location, None, "an implausible first reading must be rejected when a manual location exists to check it against");
     }
 
-    /// T048: the public-IP cache respects its 24-hour TTL — fresh just under the
-    /// boundary, stale just at/over it.
+    /// The public-IP cache respects its 24-hour TTL — fresh just under the boundary,
+    /// stale just at/over it.
     #[test]
     fn public_ip_cache_respects_its_ttl() {
         let now = Instant::now();
@@ -411,6 +406,6 @@ mod tests {
         assert!(!cache.is_fresh(now + PUBLIC_IP_CACHE_TTL + Duration::from_secs(1)));
     }
 
-    // `next_backoff`'s doubling/capping coverage now lives in `backoff.rs` (spec 011
-    // US8 FR-045) — deduplicated from this module and `portal_location.rs`.
+    // `next_backoff`'s doubling/capping coverage now lives in `backoff.rs` —
+    // deduplicated from this module and `portal_location.rs`.
 }

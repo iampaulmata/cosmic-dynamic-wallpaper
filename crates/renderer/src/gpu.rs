@@ -1,13 +1,7 @@
-//! `wgpu` instance/device/adapter setup (T011, research.md R3). Automatic backend
-//! selection (Vulkan preferred, GL fallback) via `wgpu::Backends::PRIMARY |
-//! wgpu::Backends::GL`.
+//! `wgpu` instance/device/adapter setup. Automatic backend selection (Vulkan
+//! preferred, GL fallback) via `wgpu::Backends::PRIMARY | wgpu::Backends::GL`.
 //!
-//! **Verified against a real system** (2026-08-13): a throwaway probe confirmed this
-//! exact bridge — SCTK layer-shell surface → raw-window-handle → `wgpu::Surface` →
-//! device/adapter → render → present — works end to end against a live `cosmic-comp`
-//! session, producing a real `wgpu` adapter (`Intel(R) HD Graphics 630`, Vulkan
-//! backend) and successfully presenting frames the compositor accepted. See
-//! `README.md`'s "Building on a real system" section for the one system-dependency
+//! See `README.md`'s "Building on a real system" section for the one system-dependency
 //! gotcha found along the way (`libxkbcommon-dev`/`xkbcommon.pc` not present by
 //! default on this dev image, worked around with a `pkg-config` shim — a real
 //! deployment target would normally already have it as part of a full dev toolchain).
@@ -22,13 +16,11 @@ pub fn create_instance() -> wgpu::Instance {
     wgpu::Instance::new(wgpu::InstanceDescriptor { backends: wgpu::Backends::VULKAN | wgpu::Backends::GL, ..Default::default() })
 }
 
-/// Ceiling on how long a GPU adapter/device request may take (spec 011 US7 FR-033,
-/// research.md R28) — a hung/misbehaving driver previously could stall `wallpaperd`'s
-/// entire startup indefinitely, violating constitution Principle VIII's "no unbounded
-/// wait on an external resource" posture (the same one every other external touchpoint
-/// in this daemon — the portal, STUN, D-Bus queueing — already respects). 20s is
-/// generous for a real request (this module's own doc records a live request
-/// completing well under a second) while still bounding the worst case.
+/// Ceiling on how long a GPU adapter/device request may take — without it, a
+/// hung/misbehaving driver could stall `wallpaperd`'s entire startup indefinitely
+/// (the same "no unbounded wait on an external resource" posture every other
+/// external touchpoint in this daemon — the portal, STUN, D-Bus queueing — respects).
+/// 20s is generous for a real request while still bounding the worst case.
 pub const GPU_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Race `future` against `timeout`, returning [`RendererError::GpuRequestTimedOut`] if
@@ -52,9 +44,9 @@ async fn with_gpu_timeout<T>(future: impl std::future::Future<Output = Result<T,
     with_timeout(future, GPU_REQUEST_TIMEOUT).await
 }
 
-/// The adapter/device/queue, shared across every managed output (constitution
-/// Principle VII: outputs don't share *render state*, but the underlying device/queue
-/// is one instance per daemon, same as any other Wayland/GPU client).
+/// The adapter/device/queue, shared across every managed output — outputs don't
+/// share *render state*, but the underlying device/queue is one instance per daemon,
+/// same as any other Wayland/GPU client.
 pub struct GpuContext {
     /// The selected physical/logical GPU adapter (e.g. `Intel(R) HD Graphics 630`).
     pub adapter: wgpu::Adapter,
@@ -102,11 +94,10 @@ impl GpuContext {
 mod tests {
     use super::*;
 
-    /// Spec 011 US7 FR-033 (research.md R28) — the audit's own reproduction: a
-    /// GPU request that never resolves (a hung/misbehaving driver) previously stalled
-    /// `wallpaperd`'s entire startup forever. A future that never completes
-    /// (`std::future::pending`) proves the pre-fix code would have hung here too; the
-    /// timeout now bounds it deterministically instead.
+    /// A GPU request that never resolves (a hung/misbehaving driver) would otherwise
+    /// stall `wallpaperd`'s entire startup forever. A future that never completes
+    /// (`std::future::pending`) proves that; the timeout bounds it deterministically
+    /// instead.
     #[test]
     fn with_timeout_times_out_when_the_future_never_resolves() {
         let result: Result<(), RendererError> = pollster::block_on(with_timeout(std::future::pending(), Duration::from_millis(10)));

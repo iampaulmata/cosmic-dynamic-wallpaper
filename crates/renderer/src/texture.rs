@@ -1,17 +1,16 @@
-//! Full-resolution image decode (via `image`) and GPU texture upload (T014,
-//! research.md R5). Unlike spec 2's `pack-loader::image_check`, which only
-//! header-validates readability, this decodes complete pixel data — the cost spec 2's
-//! research.md explicitly deferred to this crate, and only for images actually being
+//! Full-resolution image decode (via `image`) and GPU texture upload. Unlike
+//! `pack_loader::image_check`, which only header-validates readability, this decodes
+//! complete pixel data — deferred to this crate, and only for images actually being
 //! displayed, not a whole pack up front.
 
 use std::path::Path;
 
 use crate::error::RendererError;
 
-/// The decoded-RGBA8 byte-count ceiling checked before a full decode runs (spec 011
-/// US3 FR-012, clarified value: 256 MB — comfortably covers even an 8K (7680x4320)
-/// wallpaper image, ~132 MB decoded, while still blocking a true decompression-bomb
-/// image whose *declared* dimensions are legal but whose decoded size would not be).
+/// The decoded-RGBA8 byte-count ceiling checked before a full decode runs (256 MB —
+/// comfortably covers even an 8K (7680x4320) wallpaper image, ~132 MB decoded, while
+/// still blocking a true decompression-bomb image whose *declared* dimensions are
+/// legal but whose decoded size would not be).
 pub const MAX_DECODED_IMAGE_BYTES: u64 = 256 * 1024 * 1024;
 
 /// A decoded image uploaded to the GPU as an RGBA8 texture, ready to bind into the
@@ -27,11 +26,11 @@ pub struct GpuTexture {
     pub height: u32,
 }
 
-/// Spec 011 US3 FR-012 (research.md R9): read `path`'s *declared* (header-only,
-/// undecoded) dimensions and reject before any full decode is attempted, if they
-/// exceed `max_dimension` (the GPU's own `max_texture_dimension_2d`) or would decode
-/// to more than `max_decoded_bytes`. Extracted as a standalone, GPU-independent
-/// function — takes the limits as parameters rather than reading them from a real
+/// Read `path`'s *declared* (header-only, undecoded) dimensions and reject before any
+/// full decode is attempted, if they exceed `max_dimension` (the GPU's own
+/// `max_texture_dimension_2d`) or would decode to more than `max_decoded_bytes`.
+/// Extracted as a standalone, GPU-independent function — takes the limits as
+/// parameters rather than reading them from a real
 /// `wgpu::Device` — so this specific gate is directly unit-testable with nothing but a
 /// file on disk, no GPU adapter required.
 fn check_declared_size(path: &Path, max_dimension: u32, max_decoded_bytes: u64) -> Result<(u32, u32), RendererError> {
@@ -49,16 +48,16 @@ fn check_declared_size(path: &Path, max_dimension: u32, max_decoded_bytes: u64) 
 
 impl GpuTexture {
     /// Decode `path` and upload it to the GPU. Fails with
-    /// [`RendererError::TextureUploadFailed`] rather than panicking — spec 2 already
-    /// header-validated this file is *a* readable image before assigning it, but full
-    /// decode can still fail (truncated file, decoder bug, out-of-memory) and this must
-    /// degrade only the affected output (FR-013), never the whole daemon.
+    /// [`RendererError::TextureUploadFailed`] rather than panicking — the pack loader
+    /// already header-validated this file is *a* readable image before assigning it,
+    /// but full decode can still fail (truncated file, decoder bug, out-of-memory) and
+    /// this must degrade only the affected output, never the whole daemon.
     pub fn load(device: &wgpu::Device, queue: &wgpu::Queue, path: &Path) -> Result<Self, RendererError> {
-        // Spec 011 US3 FR-012 (research.md R9): spec 2 (`pack-loader::image_check`)
-        // only header-validates that this file *is* a readable image — dimension/
-        // decode-bomb limits are explicitly this crate's responsibility (that crate's
-        // own doc comment). This is the only gate between untrusted pack image content
-        // and the GPU, so it has to run before the costly full decode below, not after.
+        // `pack_loader::image_check` only header-validates that this file *is* a
+        // readable image — dimension/decode-bomb limits are explicitly this crate's
+        // responsibility (that crate's own doc comment). This is the only gate
+        // between untrusted pack image content and the GPU, so it has to run before
+        // the costly full decode below, not after.
         check_declared_size(path, device.limits().max_texture_dimension_2d, MAX_DECODED_IMAGE_BYTES)?;
 
         let img = image::open(path)
@@ -102,10 +101,10 @@ mod tests {
         img.save(path).expect("failed to encode test fixture PNG");
     }
 
-    /// Spec 011 US3 FR-012 (research.md R9) — an image whose declared dimensions
-    /// exceed the (test-supplied, small) `max_dimension` is rejected via the
-    /// header-only read; a small `max_dimension` here stands in for
-    /// `device.limits().max_texture_dimension_2d` without needing a real GPU device.
+    /// An image whose declared dimensions exceed the (test-supplied, small)
+    /// `max_dimension` is rejected via the header-only read; a small `max_dimension`
+    /// here stands in for `device.limits().max_texture_dimension_2d` without needing
+    /// a real GPU device.
     #[test]
     fn oversized_image_rejected_before_decode() {
         let dir = tempfile::tempdir().unwrap();
@@ -138,12 +137,12 @@ mod tests {
         assert_eq!(result.unwrap(), (64, 64));
     }
 
-    /// Spec 011 US3 FR-013 — end-to-end: `pack_loader::load_pack` only header-validates
-    /// that an image is *readable* (`pack-loader::image_check`'s own doc comment
-    /// explicitly defers dimension/decode-bomb limits to this crate) — confirms a pack
-    /// containing a legitimately-oversized image loads successfully at the pack-loader
-    /// layer, and only this crate's `check_declared_size` actually stops it, proving
-    /// the documented boundary is enforced somewhere, not just described.
+    /// End-to-end: `pack_loader::load_pack` only header-validates that an image is
+    /// *readable* (`pack-loader::image_check`'s own doc comment explicitly defers
+    /// dimension/decode-bomb limits to this crate) — confirms a pack containing a
+    /// legitimately-oversized image loads successfully at the pack-loader layer, and
+    /// only this crate's `check_declared_size` actually stops it, proving the
+    /// documented boundary is enforced somewhere, not just described.
     #[test]
     fn pack_loader_to_renderer_size_boundary_is_actually_enforced() {
         let dir = tempfile::tempdir().unwrap();

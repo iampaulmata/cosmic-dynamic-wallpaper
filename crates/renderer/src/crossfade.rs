@@ -1,5 +1,4 @@
-//! [`CrossfadeTransition`] and its progress computation (data-model.md
-//! `CrossfadeTransition`, FR-001, FR-002, FR-004, FR-011), plus [`CrossfadePipeline`],
+//! [`CrossfadeTransition`] and its progress computation, plus [`CrossfadePipeline`],
 //! the actual two-texture WGSL GPU blend (`shaders/crossfade.wgsl`) that consumes it.
 //! The frame-callback draw loop that calls `CrossfadePipeline::render` once per tick is
 //! `surface.rs`'s job (see `README.md`).
@@ -10,10 +9,10 @@ use pack_loader::{Color, ScalingMode};
 
 use crate::texture::GpuTexture;
 
-/// The active-transition state for one output (data-model.md `CrossfadeTransition`).
-/// **Scope note**: `outgoing_texture`/`incoming_texture` in the full data model are GPU
-/// texture handles; here they're the image identifiers alone (`schedule_engine::ImageId`)
-/// — everything the pure logic needs to know *which* images are involved, without
+/// The active-transition state for one output.
+/// **Scope note**: `outgoing_texture`/`incoming_texture` conceptually are GPU texture
+/// handles; here they're the image identifiers alone (`schedule_engine::ImageId`) —
+/// everything the pure logic needs to know *which* images are involved, without
 /// depending on `wgpu`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CrossfadeTransition {
@@ -25,17 +24,15 @@ pub struct CrossfadeTransition {
     /// `DateTime<Local>`, since a system clock adjustment mid-transition must not
     /// perturb an already-running animation.
     pub started_at: Instant,
-    /// 45s default (FR-002), genuinely configurable as of spec 7 FR-006
-    /// (`RendererConfig.crossfade_duration_secs`, `surface.rs`'s `crossfade_duration()`)
-    /// — this doc comment previously claimed configurability that didn't actually
-    /// exist yet (plan.md Constitution Check finding 3); now true.
+    /// 45s default, genuinely configurable (`RendererConfig.crossfade_duration_secs`,
+    /// `surface.rs`'s `crossfade_duration()`).
     pub duration: Duration,
 }
 
 impl CrossfadeTransition {
     /// Recompute progress from `started_at`/`duration` at `now` — called once per
-    /// frame-callback tick in the real draw loop; deterministic given the same `now`
-    /// (FR-004, monotonic non-decreasing as `now` advances, always in `[0.0, 1.0]`).
+    /// frame-callback tick in the real draw loop; deterministic given the same `now`,
+    /// monotonic non-decreasing as `now` advances, always in `[0.0, 1.0]`.
     ///
     /// A zero-duration transition is immediately complete (`1.0`) rather than
     /// dividing by zero.
@@ -48,7 +45,7 @@ impl CrossfadeTransition {
     }
 
     /// `true` once `progress_at(now)` has reached `1.0` — the draw loop's cue to
-    /// unsubscribe from frame callbacks and return to `IdleWaitState` (FR-004).
+    /// unsubscribe from frame callbacks and return to `IdleWaitState`.
     pub fn is_complete_at(&self, now: Instant) -> bool {
         self.progress_at(now) >= 1.0
     }
@@ -81,7 +78,7 @@ fn color_to_f32(c: Color) -> [f32; 4] {
     [c.r as f32 / 255.0, c.g as f32 / 255.0, c.b as f32 / 255.0, c.a as f32 / 255.0]
 }
 
-/// "Fill" (cover) scaling (FR-005's default): scale/offset such that sampling
+/// "Fill" (cover) scaling — the default mode: scale/offset such that sampling
 /// `uv * scale + offset` maps the fullscreen UV range onto the correctly-cropped
 /// portion of a `(image_w, image_h)` image displayed on a `(output_w, output_h)`
 /// output, covering the whole output with no letterboxing.
@@ -125,14 +122,14 @@ fn stretch_uv_transform() -> ([f32; 2], [f32; 2]) {
 /// gives `scale < 1.0`, which crops instead — the same general formula handles both
 /// without a separate branch, this is not incidental.
 ///
-/// **Found by the offscreen GPU pixel test, not the pure-math unit tests below**: an
-/// earlier version of this function reused `fill_uv_transform`'s crop-direction
-/// formula verbatim for Fit/Center (just relabeling which axis is "letterboxed"),
-/// which is self-consistent enough that pure unit tests checking scale/offset against
-/// hand-derived-the-same-wrong-way expected values still passed — only
-/// `tests/gpu_render.rs`'s actual pixel readback (expecting `fallback_color` at a
-/// letterboxed coordinate) caught that the transformed UV never actually left `[0,
-/// 1]`, because the crop-direction formula can't produce out-of-bounds values at all.
+/// **Gotcha**: pure unit tests checking scale/offset against hand-derived expected
+/// values can pass even when the underlying formula is wrong, if the values are
+/// derived the same (wrong) way as the implementation — reusing
+/// `fill_uv_transform`'s crop-direction formula verbatim for Fit/Center (just
+/// relabeling which axis is "letterboxed") is self-consistent enough to pass that
+/// way, but can never actually produce an out-of-bounds UV, silently defeating the
+/// letterboxing this function exists for. Only `tests/gpu_render.rs`'s actual pixel
+/// readback (expecting `fallback_color` at a letterboxed coordinate) catches that.
 fn letterbox_scale_offset(frac: f32) -> (f32, f32) {
     let offset_out = (1.0 - frac) / 2.0;
     (1.0 / frac, -offset_out / frac)
@@ -169,7 +166,7 @@ fn center_uv_transform(image_w: u32, image_h: u32, output_w: u32, output_h: u32)
     ([scale_x, scale_y], [offset_x, offset_y])
 }
 
-/// Dispatch to the transform matching `mode` (FR-005).
+/// Dispatch to the transform matching `mode`.
 fn uv_transform(mode: ScalingMode, image_w: u32, image_h: u32, output_w: u32, output_h: u32) -> ([f32; 2], [f32; 2]) {
     match mode {
         ScalingMode::Fill => fill_uv_transform(image_w, image_h, output_w, output_h),
@@ -188,7 +185,7 @@ pub struct ImageScaling {
     pub fallback_color: Color,
 }
 
-/// The GPU crossfade blend pipeline (T015) — one instance shared across every managed
+/// The GPU crossfade blend pipeline — one instance shared across every managed
 /// output (the pipeline/shader are output-independent; only the bind group, built
 /// fresh per `render` call, references a specific pair of textures).
 pub struct CrossfadePipeline {
@@ -272,8 +269,8 @@ impl CrossfadePipeline {
 
     /// Render one frame of the blend between `outgoing` and `incoming` at `progress`
     /// into `target`, sized `output_size` — each texture scaled per its own
-    /// `ImageScaling` (FR-005; independently, since the outgoing/incoming images can
-    /// belong to different packs with different scaling modes).
+    /// `ImageScaling`, independently, since the outgoing/incoming images can belong to
+    /// different packs with different scaling modes.
     #[allow(clippy::too_many_arguments)]
     pub fn render(
         &self,
@@ -373,8 +370,8 @@ mod tests {
         assert!(t.is_complete_at(t.started_at));
     }
 
-    /// FR-011: a new transition triggered while one is already mid-flight is simply a
-    /// *new* `CrossfadeTransition` value (fresh `started_at`) replacing the old one —
+    /// A new transition triggered while one is already mid-flight is simply a *new*
+    /// `CrossfadeTransition` value (fresh `started_at`) replacing the old one —
     /// there's no stacking representation possible in this data shape at all, which is
     /// exactly the "cleanly supersede, never stack" requirement.
     #[test]
@@ -440,10 +437,10 @@ mod tests {
 
         // The transformed UV must actually leave [0, 1] near the output's top/bottom
         // edges — that's the signal the shader's bounds check substitutes
-        // `fallback_color` on (this is the exact bug a prior, crop-direction version
-        // of this formula had: it was self-consistent with hand-derived-the-same-wrong-
-        // way expected values, but could never produce an out-of-bounds UV at all —
-        // only caught by `tests/gpu_render.rs`'s actual pixel readback).
+        // `fallback_color` on. A crop-direction formula reused verbatim for this axis
+        // would be self-consistent with hand-derived-the-same-wrong-way expected
+        // values but could never produce an out-of-bounds UV at all — only caught by
+        // `tests/gpu_render.rs`'s actual pixel readback.
         let top_edge_uv = 0.0 * scale[1] + offset[1];
         let bottom_edge_uv = 1.0 * scale[1] + offset[1];
         assert!(!(0.0..=1.0).contains(&top_edge_uv), "top edge uv {top_edge_uv} should be out of bounds");
@@ -535,8 +532,8 @@ mod tests {
     /// (`vec4<f32>` 16-byte aligned, `vec2<f32>` 8-byte aligned, total size a multiple
     /// of the largest member's alignment) — catches a silent GPU-side corruption bug
     /// (wrong bytes landing in the wrong shader field) at `cargo test` time rather
-    /// than only visually, the way the RON-parsing bug documented in `config.rs`/
-    /// `README.md` was originally missed.
+    /// than only visually, the same class of type-mismatch bug `config.rs`'s module
+    /// doc describes for the RON schema case.
     #[test]
     fn uniforms_layout_matches_wgsl_alignment() {
         assert_eq!(std::mem::offset_of!(Uniforms, progress), 0);
